@@ -1,0 +1,14 @@
+# 构建目录
+build-*/
+build
+
+# 静态分析报告
+scan-build-reports/
+
+temp/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+*.out

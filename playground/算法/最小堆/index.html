@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>最小堆 · 看懂每一次交换</title>
+<style>
+:root{--ink:#182c3d;--muted:#5c6d7b;--paper:#f5f7fa;--line:#e0e7ee;--green:#087e67;--green-bg:#e7f5ef;--blue:#345ce4;--blue-bg:#edf1ff;--orange:#ab5a09;--orange-bg:#fff2df;--red:#b8473f;--move:620ms}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif}
+button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.45}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #94a8ff;outline-offset:3px}button{touch-action:manipulation}
+.shell{max-width:1280px;margin:auto;padding:26px 34px 40px}
+.masthead{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:28px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:750;font-size:13px;letter-spacing:1px}
+.mark{width:27px;height:27px;display:grid;grid-template-columns:1fr 1fr;gap:3px;transform:rotate(-8deg)}
+.mark i{background:var(--green);border-radius:3px}.mark i:nth-child(2){opacity:.35}.mark i:nth-child(3){opacity:.65}
+.edition{font-size:12px;color:var(--muted)}
+.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:30px;margin-bottom:24px}
+.eyebrow{font-size:11px;font-weight:750;letter-spacing:2px;color:var(--green);margin-bottom:7px}
+h1{font-size:36px;line-height:1.35;letter-spacing:-1.5px;margin:0 0 10px;font-weight:800}
+h1 span{color:var(--green)}.lead{margin:0;max-width:740px;color:var(--muted);font-size:15px}
+.rule-chip{flex-shrink:0;background:white;border:1px solid var(--line);padding:15px 20px;border-radius:14px;margin-bottom:3px}
+.rule-chip strong{display:block;font-size:18px}.rule-chip small{color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:5px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow:auto;padding:0 0 10px}
+.tab{border:0;background:transparent;padding:9px 16px;border-radius:8px;white-space:nowrap;font-weight:650;color:var(--muted)}
+.tab small{font:11px ui-monospace,monospace;opacity:.6;margin-right:8px}
+.tab.active{background:var(--ink);color:white}.tab:hover:not(.active){background:#e7edf3}
+.workspace{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px;align-items:start}
+.main-column{min-width:0}
+.panel{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.panel-top{display:flex;align-items:center;justify-content:space-between;padding:17px 21px;gap:12px;border-bottom:1px solid var(--line)}
+.panel-top h2{font-size:15px;margin:0}.panel-top .sub{font-size:12px;color:var(--muted);font-weight:400;margin-left:10px}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:20px;background:var(--green-bg);color:var(--green);white-space:nowrap}
+.status.work{color:var(--orange);background:var(--orange-bg)}.status:before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.tree-wrap{overflow-x:auto;background-image:radial-gradient(#dfe6ec .8px,transparent .8px);background-size:18px 18px;position:relative}
+.tree{height:354px;min-width:540px;position:relative;margin:0 12px}
+.links{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.links line{stroke:#cbd5e0;stroke-width:1.8;transition:stroke 200ms}.links line.active{stroke:#dca054;stroke-width:2.8}.links line.broken{stroke:#c77970;stroke-dasharray:5 4}
+.node{position:absolute;width:65px;height:65px;transform:translate(-50%,-50%);transition:left var(--move) cubic-bezier(.3,.05,.15,1),top var(--move) cubic-bezier(.3,.05,.15,1),opacity 220ms;z-index:2}
+.node button{position:relative;width:65px;height:65px;border-radius:50%;border:2px solid #d6e0e9;background:#fff;color:var(--ink);box-shadow:0 3px 8px #17354b08;transition:background 220ms,border-color 220ms,box-shadow 220ms;padding:0}
+.node button:hover{box-shadow:0 0 0 5px #345ce410}.node.root button{border-color:#58b19b;background:#f2fbf7}.node.focus button{border-color:#dba050;background:var(--orange-bg);box-shadow:0 0 0 5px #fff2df99}
+.node.selected button{outline:2px solid var(--blue);outline-offset:4px}
+.node .value{font-size:24px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}.node .unit{font-size:10px;font-weight:500;color:var(--muted)}
+.node .node-id{position:absolute;left:50%;top:-11px;transform:translateX(-50%);border:1px solid var(--line);border-radius:5px;background:white;padding:0 5px;color:var(--muted);font:10px/17px ui-monospace,monospace}
+.node .node-index{text-align:center;font:10px ui-monospace,monospace;color:#74818d;position:absolute;top:73px;width:100%}
+.node.enter{animation:arrive 380ms ease both}.node.leaving{opacity:0;pointer-events:none;transform:translate(-50%,-65%);transition:opacity 200ms,transform 200ms}
+@keyframes arrive{from{opacity:0;scale:.65}to{opacity:1;scale:1}}
+.empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;color:var(--muted)}.empty strong{font-size:22px;color:var(--ink)}
+.legend{display:flex;flex-wrap:wrap;gap:18px;padding:10px 21px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:6px}.dot{width:8px;height:8px;border-radius:50%;background:#69b5a1}.dot.orange{background:#dba050}.dot.blue{background:var(--blue)}
+.array-section{padding:15px 21px 5px}.array-heading{display:flex;justify-content:space-between;gap:15px;font-size:12px}.array-heading strong{font-weight:650}.array-heading span{color:var(--muted)}
+.array-scroll{overflow-x:auto;padding-bottom:5px}.array{position:relative;height:92px;min-width:0}
+.cell{position:absolute;top:15px;width:48px;height:44px;border:1px solid #d6e0e9;border-radius:7px;background:#f9fbfd;text-align:center;line-height:43px;font:700 18px/43px ui-monospace,monospace;color:var(--ink);transition:left var(--move) cubic-bezier(.3,.05,.15,1),background 220ms}
+.cell.focus{background:var(--orange-bg);border-color:#dba050}.cell.selected{outline:2px solid var(--blue);outline-offset:2px}
+.cell small{position:absolute;top:45px;left:0;width:100%;font:10px/20px ui-monospace,monospace;color:var(--muted)}
+.transport{padding:15px 21px 17px;border-top:1px solid var(--line);background:#fbfcfe}
+.timeline{display:flex;align-items:center;gap:13px;margin-bottom:13px}
+.timeline input{width:100%;accent-color:var(--green);cursor:pointer}.timeline span{font:11px ui-monospace,monospace;white-space:nowrap;color:var(--muted)}
+.buttons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid #d8e1e9;border-radius:8px;padding:7px 12px;background:white;color:var(--ink);font-size:12px;font-weight:650;transition:background 150ms}
+.btn:hover:not(:disabled){background:#f0f4f8}.btn.primary{color:white;background:var(--green);border-color:var(--green)}.btn.primary:hover:not(:disabled){background:#096a59}.btn.blue{color:var(--blue);background:var(--blue-bg);border-color:#cfd8fc}
+.btn.text{border-color:transparent;background:transparent;color:var(--muted)}.speed{margin-left:auto;font-size:11px;color:var(--muted)}.speed select{font-size:11px;padding:5px 2px;border:0;background:transparent;color:var(--ink)}
+.shortcuts{font-size:10px;color:#6d7d8a;margin:9px 0 0}
+.sidebar{display:flex;flex-direction:column;gap:14px}
+.narrative{padding:20px 21px;min-height:237px}
+.phase{font:700 10px/1.5 ui-monospace,monospace;letter-spacing:1px;color:var(--green);text-transform:uppercase}
+.narrative h2{font-size:20px;line-height:1.45;margin:9px 0}.narrative p{font-size:13px;color:var(--muted);margin:0;min-height:67px}
+.metrics{display:flex;gap:24px;border-top:1px solid var(--line);margin-top:17px;padding-top:12px}.metrics span{font-size:11px;color:var(--muted)}.metrics b{font:700 20px ui-monospace,monospace;color:var(--ink);margin-left:6px}
+.code-panel{padding:17px 0}.side-heading{padding:0 20px;font-size:12px;font-weight:700;margin:0 0 9px}
+.code-list{margin:0;padding:0 0 0 44px;list-style:decimal-leading-zero;color:#94a1ae;font:11px/2.15 ui-monospace,SFMono-Regular,Consolas,monospace}
+.code-list li{padding:3px 13px 3px 5px;white-space:pre-wrap}.code-list li span{color:var(--muted)}.code-list li.current{background:var(--orange-bg);border-right:3px solid #dba050}.code-list li.current span{color:#8d4a04;font-weight:700}
+.inspect{padding:17px 20px}.inspect h3{font-size:12px;margin:0 0 10px}.inspect .task{display:flex;align-items:center;gap:9px;margin:0 0 10px}.task-badge{background:var(--blue-bg);color:var(--blue);border-radius:6px;font:700 14px/30px ui-monospace,monospace;width:30px;text-align:center}
+.inspect dl{display:grid;grid-template-columns:62px 1fr;gap:5px;font-size:11px;margin:0}.inspect dt{color:var(--muted)}.inspect dd{margin:0;overflow-wrap:anywhere}.inspect code{font-size:10px;background:#f2f5f9;border-radius:4px;padding:2px 4px}
+.sandbox{margin-top:17px;padding:19px 21px}.sandbox-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:13px}.sandbox h2{font-size:14px;margin:0}.sandbox-head p{font-size:11px;color:var(--muted);margin:0}
+.operation-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}.field{display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:4px}.field input,.field select{height:34px;max-width:140px;border:1px solid #d5dfe8;border-radius:7px;padding:4px 9px;background:white;color:var(--ink);font-size:12px}
+.field input{width:112px}.message{font-size:11px;color:var(--muted);min-height:19px;margin:10px 0 0}.message.error{color:var(--red)}
+.lesson{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:26px}
+.lesson article{padding:0 0 0 15px;border-left:2px solid #c8d8d4}.lesson .num{font:10px ui-monospace,monospace;color:var(--green)}.lesson h3{font-size:14px;margin:5px 0}.lesson p{font-size:12px;color:var(--muted);margin:0}
+.formula{font:11px/1.9 ui-monospace,monospace;background:#edf1f5;display:inline-block;border-radius:5px;padding:2px 6px;margin-top:7px}
+.footer{margin-top:24px;padding-top:15px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;font-size:11px;color:var(--muted)}
+[hidden]{display:none!important}
+@media(min-width:1180px){.tree{height:375px}}
+@media(max-width:1000px){.shell{padding:22px}.workspace{grid-template-columns:minmax(0,1fr) 280px}.hero{display:block}.rule-chip{display:none}h1{font-size:31px}.panel-top .sub{display:none}}
+@media(max-width:760px){.shell{padding:18px 14px}.masthead{margin-bottom:20px}.edition{font-size:10px}h1{font-size:28px}.workspace{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}.narrative{grid-column:1/-1;min-height:0}.narrative p{min-height:0}.lesson{grid-template-columns:1fr;gap:19px}.tab{padding:8px 12px}.sandbox-head{display:block}.sandbox-head p{margin-top:4px}.footer{display:block}.tree{height:350px}.shortcuts{display:none}.panel-top{padding:14px 17px}.array-section,.transport,.sandbox{padding-left:17px;padding-right:17px}}
+@media(max-width:390px){.sidebar{grid-template-columns:1fr}.hero h1{font-size:25px}.panel-top h2{font-size:13px}}
+@media(prefers-reduced-motion:reduce){:root{--move:0ms}.node.enter{animation:none}*{scroll-behavior:auto!important;transition-duration:0ms!important}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>DOMINO <span style="font-weight:400;color:var(--muted);letter-spacing:0">/ 算法观察室</span></div>
+    <span class="edition">交互讲解 01 · MIN HEAP</span>
+  </header>
+  <section class="hero">
+    <div><div class="eyebrow">让数据结构动起来</div><h1>最小堆：<span>最早的，总在最上面。</span></h1>
+    <p class="lead">把定时任务排成一棵树。每个父节点都不晚于自己的孩子，沿着树向上看，最早的任务就在堆顶。</p></div>
+    <div class="rule-chip"><strong>父节点 ≤ 子节点</strong><small>只约束上下关系 · 兄弟无需排序</small></div>
+  </section>
+  <nav class="tabs" aria-label="演示场景">
+    <button class="tab active" data-scene="intro" aria-pressed="true"><small>01</small>认识最小堆</button>
+    <button class="tab" data-scene="insert" aria-pressed="false"><small>02</small>插入 · 上浮</button>
+    <button class="tab" data-scene="pop" aria-pressed="false"><small>03</small>取出 · 下沉</button>
+    <button class="tab" data-scene="update" aria-pressed="false"><small>04</small>修改时间</button>
+    <button class="tab" data-scene="cancel" aria-pressed="false"><small>05</small>取消任务</button>
+    <button class="tab" data-scene="build" aria-pressed="false"><small>06</small>从数组建堆</button>
+  </nav>
+  <main class="workspace">
+    <div class="main-column">
+      <section class="panel">
+        <div class="panel-top"><h2>任务的逻辑关系<span class="sub">数字 = 到期时刻 t，单位：秒</span></h2><span class="status" id="heap-status">满足堆规则</span></div>
+        <div class="tree-wrap"><div class="tree" id="tree" aria-label="最小堆树形图"><svg class="links" id="links" viewBox="0 0 1000 375" preserveAspectRatio="none" aria-hidden="true"></svg><div class="empty" id="empty" hidden><strong>这里暂时没有任务</strong><span>在下方插入一个，重新开始。</span></div></div></div>
+        <div class="legend"><span><i class="dot"></i>堆顶 / 最早任务</span><span><i class="dot orange"></i>正在比较或移动</span><span><i class="dot blue"></i>你选中的任务</span></div>
+        <div class="array-section">
+          <div class="array-heading"><strong>同一批任务，在内存里是一个数组</strong><span id="array-count">7 个任务</span></div>
+          <div class="array-scroll"><div class="array" id="array" aria-label="堆的数组表示"></div></div>
+        </div>
+        <div class="transport">
+          <div class="timeline"><input type="range" id="timeline" min="0" max="1" value="0" aria-label="回看操作步骤"><span id="step-label">01 / 04</span></div>
+          <div class="buttons">
+            <button class="btn primary" id="play">▶ 播放讲解</button>
+            <button class="btn" id="prev" aria-label="上一步">← 上一步</button>
+            <button class="btn" id="next" aria-label="下一步">下一步 →</button>
+            <button class="btn text" id="replay">↺ 重播</button>
+            <label class="speed">速度 <select id="speed" aria-label="播放速度"><option value="2400">慢速</option><option value="1500" selected>正常</option><option value="900">快速</option></select></label>
+          </div>
+          <p class="shortcuts">空格：播放 / 暂停　← →：逐步查看　·　点击树节点或数组格查看任务</p>
+        </div>
+      </section>
+      <section class="panel sandbox">
+        <div class="sandbox-head"><h2>自己试一试</h2><p id="sandbox-hint">讲解完成后，用当前堆继续操作。</p></div>
+        <div class="operation-controls">
+          <label class="field">操作<select id="operation"><option value="insert">插入任务</option><option value="pop">取出堆顶</option><option value="update">修改到期时间</option><option value="cancel">取消任务</option></select></label>
+          <label class="field" id="target-field" hidden>目标任务<select id="target" aria-label="目标任务"></select></label>
+          <label class="field" id="value-field">到期时刻 t（秒）<input id="deadline" type="number" min="0" max="999" step="1" value="2" inputmode="numeric"></label>
+          <button class="btn blue" id="run">演示这个操作 →</button>
+          <button class="btn text" id="finish">跳到结果</button>
+          <button class="btn text" id="reset">恢复示例</button>
+        </div>
+        <p class="message" id="message" role="status">所有时间都相对同一个起点 t=0；回看时，树和数组一起恢复到对应步骤。</p>
+      </section>
+    </div>
+    <aside class="sidebar" aria-label="逐步解释">
+      <section class="panel narrative" aria-live="polite" aria-atomic="true">
+        <div class="phase" id="phase">认识最小堆</div>
+        <h2 id="explain-title">只看堆顶，就知道谁最早</h2>
+        <p id="explain-detail"></p>
+        <div class="metrics"><span>比较<b id="comparisons">0</b></span><span>交换<b id="swaps">0</b></span></div>
+      </section>
+      <section class="panel code-panel"><h3 class="side-heading" id="code-heading">把过程写成几行规则</h3><ol class="code-list" id="code-list"></ol></section>
+      <section class="panel inspect"><h3>选中任务 · 数据跟着节点走</h3><div id="inspector"></div></section>
+    </aside>
+  </main>
+  <section class="lesson" aria-label="三个关键知识点">
+    <article><span class="num">01 / 形状</span><h3>一层层填满，从左往右放</h3><p>这叫完全二叉树。只有最后一层可以没填满，且中间不能留空，所以用连续数组就能存下它。</p></article>
+    <article><span class="num">02 / 定位</span><h3>用下标，就能找到父子</h3><p>下标从 0 开始。点击一个节点，看它对应的数组位置；不必为每个节点保存左右指针。</p><span class="formula">父：(i−1)/2 向下取整<br>左：2i+1　右：2i+2</span></article>
+    <article><span class="num">03 / 效率</span><h3>只沿一条路径调整</h3><p>查看最小值 O(1)，插入、取出最小值 O(log n)。5 万个节点只有 16 层，单次调整最多跨 15 层；批量建堆则为 O(n)。</p></article>
+  </section>
+  <footer class="footer"><span>定时器实际保存「到期时刻 + 回调 + 参数」。堆负责选出最早任务，时钟负责判断它是否到期。</span><span>同一时刻按注册先后排序 · 演示最多 15 个节点</span></footer>
+</div>
+<script id="heap-core">
+
+// A pure, snapshot-producing heap model. Deadlines are absolute scene seconds.
+const HeapDemo = (() => {
+    const copy = items => items.map(item => ({ ...item }));
+    const less = (a, b) => a.deadline < b.deadline ||
+        (a.deadline === b.deadline && a.order < b.order);
+    const valid = items => items.every((item, i) =>
+        i === 0 || !less(item, items[Math.floor((i - 1) / 2)]));
+    function sample() {
+        return [4, 9, 7, 16, 12, 10, 15].map((deadline, i) => ({
+            id: String.fromCharCode(65 + i), deadline, order: i,
+            callback: ["恢复体力", "作物成熟", "商人到达", "天气更新", "物品刷新", "巡逻开始", "订单完成"][i],
+            arg: "entity_id=" + (101 + i)
+        }));
+    }
+    function trace(input, mode, options = {}) {
+        const heap = copy(input);
+        const frames = [];
+        let comparisons = 0, swaps = 0, removed = null;
+        const focus = ids => ids.filter(Boolean);
+        function record(phase, title, detail, indices = [], line = -1, extra = {}) {
+            frames.push({
+                heap: copy(heap), phase, title, detail, line,
+                focus: focus(indices.map(i => heap[i]?.id)),
+                comparisons, swaps, valid: valid(heap),
+                removed: removed ? { ...removed } : null,
+                ...extra
+            });
+        }
+        function swap(a, b, direction, line) {
+            const first = heap[a], second = heap[b];
+            [heap[a], heap[b]] = [heap[b], heap[a]];
+            swaps++;
+            record("swap", "交换位置，" + direction,
+                first.id + "（" + first.deadline + "s）与 " + second.id + "（" + second.deadline +
+                "s）交换；回调和参数也跟着任务一起移动。",
+                [a, b], line);
+        }
+        function up(index, compareLine, swapLine) {
+            while (index > 0) {
+                const parent = Math.floor((index - 1) / 2);
+                comparisons++;
+                const move = less(heap[index], heap[parent]);
+                record("compare", move ? "比父节点更早，需要上浮" : "已经不早于父节点，可以停下",
+                    "比较 " + heap[index].id + "（" + heap[index].deadline + "s）与父节点 " +
+                    heap[parent].id + "（" + heap[parent].deadline + "s）。" +
+                    (move ? "更早的任务应该靠上。" : "这条向上的路径已满足堆规则。"),
+                    [index, parent], compareLine);
+                if (!move) break;
+                swap(index, parent, "向上走一层", swapLine);
+                index = parent;
+            }
+            return index;
+        }
+        function down(index, childLine, compareLine, swapLine) {
+            while (2 * index + 1 < heap.length) {
+                const left = 2 * index + 1, right = left + 1;
+                let child = left;
+                if (right < heap.length) {
+                    comparisons++;
+                    if (less(heap[right], heap[left])) child = right;
+                    record("compare", "先找两个孩子中更早的那个",
+                        "比较 " + heap[left].id + "（" + heap[left].deadline + "s）和 " +
+                        heap[right].id + "（" + heap[right].deadline + "s），选 " + heap[child].id +
+                        "。换上更小的孩子，才能同时照顾两条分支。",
+                        [left, right], childLine);
+                } else {
+                    record("compare", "只有左孩子，直接选择它",
+                        "下标 " + index + " 的节点只有一个孩子 " + heap[left].id + "。",
+                        [left], childLine);
+                }
+                comparisons++;
+                const move = less(heap[child], heap[index]);
+                record("compare", move ? "孩子更早，需要下沉" : "父节点已经更早，可以停下",
+                    "比较父节点 " + heap[index].id + "（" + heap[index].deadline + "s）与 " +
+                    heap[child].id + "（" + heap[child].deadline + "s）。" +
+                    (move ? "把更早的孩子换上来。" : "两个孩子都不会比它更早。"),
+                    [index, child], compareLine);
+                if (!move) break;
+                swap(index, child, "向下走一层", swapLine);
+                index = child;
+            }
+            return index;
+        }
+        const names = { insert: "插入新任务", pop: "取出最早任务", update: "修改到期时间", cancel: "取消指定任务", build: "从无序数组建堆" };
+        record("ready", "准备：" + names[mode],
+            mode === "build" ? "这里是无序数组。树形状已经完整，但父节点还不一定更早。" :
+            "当前堆满足规则。接下来只调整必要的路径，其他任务保持原位。");
+        if (mode === "insert") {
+            if (!options.item || !Number.isFinite(options.item.deadline)) throw new Error("Invalid item");
+            heap.push({ ...options.item });
+            record("change", "先放到数组末尾", "新任务 " + options.item.id +
+                " 到达。先占用树上从左到右的下一个空位，保持完全二叉树的形状。",
+                [heap.length - 1], 0);
+            up(heap.length - 1, 1, 2);
+        } else if (mode === "pop" || mode === "cancel") {
+            const index = mode === "pop" ? 0 : heap.findIndex(item => item.id === options.id);
+            if (index < 0 || heap.length === 0) {
+                record("done", "没有可移除的任务", "空堆或指定任务不存在，堆保持不变。");
+                return frames;
+            }
+            removed = { ...heap[index] };
+            record("select", mode === "pop" ? "堆顶就是最早的任务" : "通过句柄找到目标任务",
+                mode === "pop" ? "直接读取数组第 0 项即可得到 " + removed.id + "（" + removed.deadline +
+                    "s）。取出之后，还要修复堆。" :
+                    "找到任务 " + removed.id + "，当前数组下标是 " + index +
+                    "。实际系统用句柄到下标的映射来定位。",
+                [index], 0);
+            const tail = heap.pop();
+            if (index < heap.length) {
+                heap[index] = tail;
+                record("change", "用最后一个任务补上空位",
+                    tail.id + " 从数组末尾移动到下标 " + index +
+                    "，随后缩短数组。树的形状完整了，再修复大小关系。",
+                    [index], 1);
+                if (mode === "pop") {
+                    down(index, 2, 3, 4);
+                } else {
+                    let goUp = false;
+                    if (index > 0) {
+                        const parent = Math.floor((index - 1) / 2);
+                        comparisons++;
+                        goUp = less(heap[index], heap[parent]);
+                        record("compare", "判断补位任务应该往哪里走",
+                            goUp ? "它比父节点更早，所以沿父链上浮。" :
+                                "它不早于父节点，再检查孩子，必要时下沉。",
+                            [index, parent], 2);
+                    }
+                    if (goUp) up(index, 3, 4);
+                    else down(index, 3, 3, 4);
+                }
+            } else {
+                record("change", "目标就在末尾，直接移除",
+                    "没有其他任务需要补位，也就无需上浮或下沉。", [], 1);
+            }
+        } else if (mode === "update") {
+            const index = heap.findIndex(item => item.id === options.id);
+            if (index < 0 || !Number.isFinite(options.deadline)) throw new Error("Invalid update");
+            const old = heap[index].deadline;
+            heap[index].deadline = options.deadline;
+            record("change", "只修改任务的到期时间",
+                options.id + " 从 " + old + "s 改为 " + options.deadline +
+                "s。回调和参数不变；接下来恢复堆规则。",
+                [index], 0);
+            if (options.deadline < old) up(index, 1, 2);
+            else if (options.deadline > old) down(index, 3, 3, 4);
+        } else if (mode === "build") {
+            for (let i = Math.floor(heap.length / 2) - 1; i >= 0; i--) {
+                record("select", "修复下标 " + i + " 的子树",
+                    "从最后一个非叶子节点往前处理。它下面的子树已经是堆，让这个节点下沉即可。",
+                    [i], 1);
+                down(i, 2, 2, 3);
+            }
+        } else {
+            throw new Error("Unknown operation");
+        }
+        record("done", "完成，最小堆恢复有序",
+            mode === "build" && heap.length ? "最早的任务是 " + heap[0].id + "（" + heap[0].deadline +
+            "s）。批量建堆是 O(n)：多数节点都在底部，无需下沉或只下沉一两层，所有节点的调整工作加起来与 n 成正比。" :
+            heap.length ? "最早的任务是 " + heap[0].id + "（" + heap[0].deadline +
+            "s）。每个父节点都不晚于孩子；左右兄弟之间无需排序。" : "堆已清空，可以继续插入新任务。",
+            heap.length ? [0] : [], mode === "pop" ? 5 : -1);
+        return frames;
+    }
+    return { copy, less, valid, sample, trace };
+})();
+
+</script>
+<script id="heap-ui">
+(() => {
+    "use strict";
+    const $ = id => document.getElementById(id);
+    const tree = $("tree"), array = $("array");
+    const nodeElements = new Map(), cellElements = new Map();
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const definitions = {
+        intro: {
+            label: "认识最小堆",
+            code: ["形状：逐层填满，从左到右", "规则：父节点 ≤ 每个孩子", "堆顶：数组 heap[0]", "兄弟之间不要求有序"]
+        },
+        insert: {
+            label: "插入 · 上浮",
+            code: ["把新任务追加到数组末尾", "比较当前节点与父节点", "若当前更早，交换并继续上浮", "到达根，或不再更早：停止"]
+        },
+        pop: {
+            label: "取出 · 下沉",
+            code: ["保存堆顶任务", "末尾任务补到根；数组缩短", "选择两个孩子中更早的", "比较当前节点与选中的孩子", "若孩子更早，交换并继续下沉", "返回先前保存的堆顶任务"]
+        },
+        update: {
+            label: "修改到期时间",
+            code: ["定位任务，修改到期时刻", "若提前：与父节点比较", "比父节点更早则交换、上浮", "若推迟：选较早孩子并比较", "孩子更早则交换、下沉"]
+        },
+        cancel: {
+            label: "取消指定任务",
+            code: ["用句柄定位目标下标", "末尾补位；数组缩短", "判断应向上还是向下调整", "与父节点 / 较早孩子比较", "必要时交换，沿该方向继续"]
+        },
+        build: {
+            label: "从无序数组建堆",
+            code: ["从最后一个非叶子节点开始", "按下标递减，逐个处理", "与较早的孩子比较", "必要时交换并继续下沉", "直到根节点处理完毕"]
+        }
+    };
+    const phaseNames = {
+        lesson: "原理", ready: "准备", change: "改变结构",
+        compare: "比较", swap: "交换", select: "定位", done: "完成"
+    };
+    let frames = [], cursor = 0, mode = "intro", selectedId = "A";
+    let playback = null, playing = false, nextOrder = 7, runTitle = "";
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, character =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+    const current = () => frames[cursor];
+    const finished = () => cursor === frames.length - 1;
+    function position(index) {
+        const depth = Math.floor(Math.log2(index + 1));
+        const rowIndex = index - (2 ** depth - 1);
+        return { x: (rowIndex + .5) * 100 / 2 ** depth, y: 14 + depth * 23 };
+    }
+    function stop() {
+        clearTimeout(playback);
+        playback = null;
+        playing = false;
+        $("play").textContent = finished() ? "↺ 再看一遍" : "▶ 播放讲解";
+    }
+    function queueNext() {
+        clearTimeout(playback);
+        if (!playing) return;
+        playback = setTimeout(() => {
+            if (cursor < frames.length - 1) {
+                cursor++;
+                render();
+            }
+            if (finished()) stop();
+            else queueNext();
+        }, Number($("speed").value));
+    }
+    function play() {
+        if (playing) { stop(); return; }
+        if (finished()) cursor = 0;
+        playing = true;
+        render();
+        queueNext();
+    }
+    function selectTask(id) {
+        selectedId = id;
+        $("target").value = id;
+        render();
+    }
+    function renderNodes(frame) {
+        const present = new Set(frame.heap.map(item => item.id));
+        frame.heap.forEach((item, index) => {
+            let node = nodeElements.get(item.id);
+            if (!node) {
+                node = document.createElement("div");
+                node.className = "node enter";
+                node.dataset.id = item.id;
+                const button = document.createElement("button");
+                button.type = "button";
+                button.addEventListener("click", () => selectTask(item.id));
+                button.innerHTML = '<span class="node-id"></span><span class="value"></span><span class="unit"> s</span>';
+                const indexLabel = document.createElement("div");
+                indexLabel.className = "node-index";
+                node.append(button, indexLabel);
+                nodeElements.set(item.id, node);
+                tree.append(node);
+            }
+            clearTimeout(node.exitTimer);
+            node.classList.remove("leaving");
+            node.classList.toggle("root", index === 0 && frame.valid);
+            node.classList.toggle("focus", frame.focus.includes(item.id));
+            node.classList.toggle("selected", item.id === selectedId);
+            const coords = position(index);
+            node.style.left = coords.x + "%";
+            node.style.top = coords.y + "%";
+            node.querySelector(".node-id").textContent = item.id;
+            node.querySelector(".value").textContent = item.deadline;
+            node.querySelector(".node-index").textContent = "[" + index + "]";
+            node.querySelector("button").setAttribute("aria-label",
+                "任务 " + item.id + "，到期时刻 " + item.deadline + " 秒，数组下标 " + index);
+            node.querySelector("button").setAttribute("aria-pressed", String(item.id === selectedId));
+            let cell = cellElements.get(item.id);
+            if (!cell) {
+                cell = document.createElement("button");
+                cell.type = "button";
+                cell.className = "cell";
+                cell.dataset.id = item.id;
+                cell.addEventListener("click", () => selectTask(item.id));
+                cellElements.set(item.id, cell);
+                array.append(cell);
+            }
+            cell.style.left = index * 57 + "px";
+            cell.classList.toggle("focus", frame.focus.includes(item.id));
+            cell.classList.toggle("selected", item.id === selectedId);
+            cell.innerHTML = escapeHtml(item.deadline) + "<small>[" + index + "] · " + escapeHtml(item.id) + "</small>";
+            cell.setAttribute("aria-label", "数组下标 " + index + "：任务 " + item.id + "，" + item.deadline + " 秒");
+            cell.setAttribute("aria-pressed", String(item.id === selectedId));
+        });
+        nodeElements.forEach((node, id) => {
+            if (!present.has(id) && !node.classList.contains("leaving")) {
+                node.classList.add("leaving");
+                node.exitTimer = setTimeout(() => {
+                    if (node.classList.contains("leaving")) {
+                        node.remove();
+                        nodeElements.delete(id);
+                    }
+                }, reducedMotion ? 0 : 220);
+            }
+        });
+        cellElements.forEach((cell, id) => {
+            if (!present.has(id)) { cell.remove(); cellElements.delete(id); }
+        });
+        array.style.width = Math.max(frame.heap.length * 57, 10) + "px";
+        $("array-count").textContent = frame.heap.length + " 个任务";
+        $("empty").hidden = frame.heap.length > 0;
+        let links = "";
+        for (let i = 1; i < frame.heap.length; i++) {
+            const parent = Math.floor((i - 1) / 2);
+            const from = position(parent), to = position(i);
+            const broken = HeapDemo.less(frame.heap[i], frame.heap[parent]);
+            const active = frame.focus.includes(frame.heap[i].id) && frame.focus.includes(frame.heap[parent].id);
+            links += '<line x1="' + from.x * 10 + '" y1="' + from.y * 3.75 +
+                '" x2="' + to.x * 10 + '" y2="' + to.y * 3.75 +
+                '" class="' + (broken ? "broken" : active ? "active" : "") + '"/>';
+        }
+        $("links").innerHTML = links;
+    }
+    function renderInspector(frame) {
+        const index = frame.heap.findIndex(item => item.id === selectedId);
+        const item = frame.heap[index];
+        if (!item) {
+            $("inspector").innerHTML = '<p style="font-size:12px;color:var(--muted)">堆为空。插入任务后，可以点击查看它的参数。</p>';
+            return;
+        }
+        const parent = index ? frame.heap[Math.floor((index - 1) / 2)].id : "无（根节点）";
+        const children = [frame.heap[index * 2 + 1]?.id, frame.heap[index * 2 + 2]?.id].filter(Boolean).join("、") || "无（叶子）";
+        $("inspector").innerHTML =
+            '<div class="task"><span class="task-badge">' + escapeHtml(item.id) + '</span><strong>' +
+            escapeHtml(item.deadline) + ' 秒时到期</strong></div><dl>' +
+            '<dt>数组下标</dt><dd>' + index + '</dd><dt>父 / 子</dt><dd>' +
+            escapeHtml(parent) + ' / ' + escapeHtml(children) + '</dd><dt>回调</dt><dd>' +
+            escapeHtml(item.callback) + '</dd><dt>原有参数</dt><dd><code>' + escapeHtml(item.arg) +
+            '</code></dd></dl>';
+    }
+    function renderControls(frame) {
+        const previousTarget = $("target").value;
+        $("target").innerHTML = frame.heap.map(item =>
+            '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.id) + " · " + item.deadline + "s</option>"
+        ).join("");
+        if (frame.heap.some(item => item.id === previousTarget)) $("target").value = previousTarget;
+        else if (frame.heap.some(item => item.id === selectedId)) $("target").value = selectedId;
+        const operation = $("operation").value;
+        $("target-field").hidden = operation !== "update" && operation !== "cancel";
+        $("value-field").hidden = operation !== "insert" && operation !== "update";
+        const ready = finished();
+        $("run").disabled = !ready || (operation === "insert" ? frame.heap.length >= 15 : frame.heap.length === 0);
+        $("finish").hidden = ready;
+        $("sandbox-hint").textContent = ready ? "试试插入 1 秒的任务，或把堆顶推迟到 30 秒。" : "先看完过程，或点「跳到结果」继续实验。";
+        $("operation").disabled = !ready;
+        $("target").disabled = !ready;
+        $("deadline").disabled = !ready;
+        $("prev").disabled = cursor === 0;
+        $("next").disabled = finished();
+    }
+    function render() {
+        const frame = current();
+        if (!frame.heap.some(item => item.id === selectedId)) selectedId = frame.focus[0] || frame.heap[0]?.id || null;
+        renderNodes(frame);
+        renderInspector(frame);
+        $("heap-status").textContent = frame.valid ? "满足堆规则" : "正在修复大小关系";
+        $("heap-status").classList.toggle("work", !frame.valid);
+        $("phase").textContent = definitions[mode].label + " / " + phaseNames[frame.phase];
+        $("explain-title").textContent = frame.title;
+        $("explain-detail").textContent = frame.detail;
+        $("comparisons").textContent = frame.comparisons;
+        $("swaps").textContent = frame.swaps;
+        $("code-list").innerHTML = definitions[mode].code.map((line, index) =>
+            '<li class="' + (index === frame.line ? "current" : "") + '"><span>' + escapeHtml(line) + '</span></li>'
+        ).join("");
+        $("timeline").max = frames.length - 1;
+        $("timeline").value = cursor;
+        $("step-label").textContent = String(cursor + 1).padStart(2, "0") + " / " + String(frames.length).padStart(2, "0");
+        $("play").textContent = playing ? "Ⅱ 暂停" : finished() ? "↺ 再看一遍" : "▶ 播放讲解";
+        document.querySelectorAll("[data-scene]").forEach(button => {
+            const active = button.dataset.scene === mode;
+            button.classList.toggle("active", active);
+            button.setAttribute("aria-pressed", String(active));
+        });
+        document.documentElement.style.setProperty("--move",
+            reducedMotion ? "0ms" : Math.min(650, Number($("speed").value) * .5) + "ms");
+        renderControls(frame);
+        if (finished() && mode !== "intro") {
+            $("message").classList.remove("error");
+            $("message").textContent = runTitle + "已完成。" +
+                (frame.removed ? "移出的是 " + frame.removed.id + "（" + frame.removed.deadline + "s，" + frame.removed.arg +
+                    "）；" + (mode === "cancel" ? "取消时不会执行回调。" : "真正的定时器还需确认时钟已到期，再执行回调。") :
+                    "可以接着操作，也可以拖动进度条回看。");
+        }
+    }
+    function introFrames() {
+        const heap = HeapDemo.sample();
+        const make = (title, detail, focus, line) => ({
+            heap: HeapDemo.copy(heap), phase: "lesson", title, detail, focus, line,
+            comparisons: 0, swaps: 0, valid: true, removed: null
+        });
+        return [
+            make("只看堆顶，就知道谁最早",
+                "A 在 4 秒时到期，站在最上面。因为每个父节点都不晚于孩子，沿任何分支往下走，都不会遇到更早的任务。",
+                ["A"], 2),
+            make("9 在 7 左边，也完全没问题",
+                "B 是 9 秒，C 是 7 秒。它们是兄弟，彼此无需排序。最小堆只保证父节点不晚于孩子，所以数组也不是从小到大排好的。",
+                ["B", "C"], 3),
+            make("树是关系，数组是存储",
+                "B 在数组下标 1，父节点在 0；两个孩子在 3 和 4。用下标公式就能找到它们。点击节点试试，右侧会显示随任务保存的参数。",
+                ["B", "D", "E"], 0),
+            make("时钟决定到期，堆决定先后",
+                "时钟到 3 秒时，A 还不能执行；到 4 秒时，才取出 A。其他任务的到期时刻无需每秒修改。接着点「插入」或「取出」，看堆如何调整。",
+                ["A"], 2)
+        ];
+    }
+    function loadScene(scene, autoplay = true) {
+        stop();
+        mode = scene;
+        cursor = 0;
+        selectedId = "A";
+        nextOrder = 7;
+        const heap = HeapDemo.sample();
+        if (scene === "intro") frames = introFrames();
+        else if (scene === "insert") {
+            nextOrder = 8;
+            frames = HeapDemo.trace(heap, scene, { item: { id: "H", deadline: 2, order: 7, callback: "触发新事件", arg: "entity_id=108" } });
+        } else if (scene === "pop") frames = HeapDemo.trace(heap, scene);
+        else if (scene === "update") frames = HeapDemo.trace(heap, scene, { id: "E", deadline: 1 });
+        else if (scene === "cancel") frames = HeapDemo.trace(heap, scene, { id: "B" });
+        else if (scene === "build") {
+            [16, 12, 15, 4, 9, 10, 7].forEach((deadline, i) => { heap[i].deadline = deadline; });
+            frames = HeapDemo.trace(heap, scene);
+        }
+        runTitle = definitions[scene].label;
+        $("message").classList.remove("error");
+        $("message").textContent = scene === "intro" ?
+            "所有时间都相对同一个起点 t=0；点击节点查看任务，点击播放开始讲解。" :
+            "橙色表示正在比较或移动；虚线表示该父子关系暂时违反堆规则。可随时暂停、单步或回看。";
+        if (scene !== "intro" && scene !== "build") $("operation").value = scene;
+        render();
+        if (autoplay && !reducedMotion) play();
+    }
+    function runOperation() {
+        if (!finished()) return;
+        const heap = current().heap;
+        const operation = $("operation").value;
+        const raw = $("deadline").value.trim();
+        const deadline = Number(raw);
+        $("message").classList.remove("error");
+        if ((operation === "insert" || operation === "update") &&
+            (!raw || !Number.isInteger(deadline) || deadline < 0 || deadline > 999)) {
+            $("message").textContent = "请输入 0～999 之间的整数秒。";
+            $("message").classList.add("error");
+            $("deadline").focus();
+            return;
+        }
+        if (operation === "insert" && heap.length >= 15) return;
+        if (operation !== "insert" && !heap.length) return;
+        const options = { id: $("target").value, deadline };
+        if (operation === "insert") {
+            const order = nextOrder++;
+            options.item = {
+                id: order < 26 ? String.fromCharCode(65 + order) : "T" + (order + 1),
+                deadline, order, callback: "触发新事件", arg: "entity_id=" + (101 + order)
+            };
+        }
+        stop();
+        mode = operation;
+        frames = HeapDemo.trace(heap, operation, options);
+        cursor = 0;
+        runTitle = definitions[mode].label;
+        $("message").textContent = "从当前堆继续操作。相同到期时刻按注册先后排序，参数随任务保留。";
+        render();
+        if (!reducedMotion) play();
+    }
+    document.querySelectorAll("[data-scene]").forEach(button => button.addEventListener("click", () => loadScene(button.dataset.scene)));
+    $("play").addEventListener("click", play);
+    $("prev").addEventListener("click", () => { stop(); cursor = Math.max(0, cursor - 1); render(); });
+    $("next").addEventListener("click", () => { stop(); cursor = Math.min(frames.length - 1, cursor + 1); render(); });
+    $("timeline").addEventListener("input", () => { stop(); cursor = Number($("timeline").value); render(); });
+    $("replay").addEventListener("click", () => { stop(); cursor = 0; render(); if (!reducedMotion) play(); });
+    $("speed").addEventListener("change", () => { render(); if (playing) queueNext(); });
+    $("operation").addEventListener("change", () => renderControls(current()));
+    $("run").addEventListener("click", runOperation);
+    $("deadline").addEventListener("keydown", event => {
+        if (event.key === "Enter" && !$("run").disabled) runOperation();
+    });
+    $("finish").addEventListener("click", () => { stop(); cursor = frames.length - 1; render(); });
+    $("reset").addEventListener("click", () => loadScene("intro", false));
+    document.addEventListener("keydown", event => {
+        if (event.altKey || event.ctrlKey || event.metaKey || /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(event.target.tagName)) return;
+        if (event.code === "Space") { event.preventDefault(); play(); }
+        if (event.key === "ArrowLeft") { event.preventDefault(); $("prev").click(); }
+        if (event.key === "ArrowRight") { event.preventDefault(); $("next").click(); }
+    });
+    loadScene("intro", false);
+})();
+</script>
+</body>
+</html>

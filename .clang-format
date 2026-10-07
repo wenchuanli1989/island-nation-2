@@ -1,0 +1,54 @@
+# Clang格式化配置文件
+# 基于Google代码风格，针对C语言优化
+# 与 CODING_STANDARDS.md 保持一致
+
+# Language 注释掉以支持 C 和 C++ 头文件
+# Language: C
+BasedOnStyle: Google
+
+# 缩进配置
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: true
+
+# 换行配置
+ColumnLimit: 150
+AllowShortFunctionsOnASingleLine: Empty
+# 注意：clang-format 不会自动添加大括号，只能格式化已有代码
+# 使用 clang-tidy 的 readability-braces-around-statements 检查缺失的大括号
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+# 括号配置
+BreakBeforeBraces: Attach
+BraceWrapping:
+  AfterFunction: false
+  AfterClass: false
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeElse: false
+  BeforeCatch: false
+  BeforeWhile: false
+
+# 空格配置
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesBeforeTrailingComments: 2
+# 注意：clang-format 默认会删除行尾空格（符合规范1.1）
+
+# 指针和引用
+PointerAlignment: Left
+
+# 排序
+SortIncludes: true
+IncludeBlocks: Regroup
+
+# 文件末尾换行符
+InsertNewlineAtEOF: false
+
+# 注意：文件末尾空行需要手动维护或使用其他工具（规范1.1）
+
+

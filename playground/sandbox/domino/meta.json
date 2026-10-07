@@ -1,0 +1,41 @@
+{
+  "version": 4,
+  "integrity_verify": false,
+  "info": {
+    "account_id": "sandbox-account"
+  },
+  "runtime_option": {
+    "run_mode": "local"
+  },
+  "runtime_data": {
+    "game_date_time_ns": 0,
+    "global_increment_id": {
+      "human": 2,
+      "org": 0,
+      "country": 0,
+      "city": 0,
+      "island": 0,
+      "building": 0,
+      "fork_road": 0,
+      "road_line": 0,
+      "asset": 0,
+      "movable_object": 0,
+      "name": 0,
+      "description": 0
+    }
+  },
+  "sub_module": {
+    "regions": {
+      "meta_file": "regions.meta.json",
+      "shard_prefix": "regions",
+      "crc32c": 0,
+      "size": 0
+    },
+    "human": {
+      "meta_file": "human.meta.json",
+      "shard_prefix": "human",
+      "crc32c": 0,
+      "size": 0
+    }
+  }
+}

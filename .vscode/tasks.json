@@ -1,0 +1,112 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Playground",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build.sh",
+      "args": [
+        "${input:playgroundAction}",
+        "${file}",
+        "${input:playgroundBuildType}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false
+      }
+    },
+    {
+      "label": "Playground (Debug Build)",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build.sh",
+      "args": [
+        "playground-build",
+        "${file}",
+        "debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false
+      }
+    },
+    {
+      "label": "清理构建",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build.sh",
+      "args": [
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "运行clang-format",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build.sh",
+      "args": [
+        "format"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "运行clang-tidy",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build.sh",
+      "args": [
+        "clang-tidy"
+      ],
+      "problemMatcher": [],
+      "dependsOn": "配置CMake（调试）"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "playgroundAction",
+      "type": "pickString",
+      "description": "选择对当前C文件执行的操作",
+      "options": [
+        {
+          "label": "仅构建（不运行）",
+          "value": "playground-build"
+        },
+        {
+          "label": "构建并运行",
+          "value": "playground-run"
+        }
+      ]
+    },
+    {
+      "id": "playgroundBuildType",
+      "type": "pickString",
+      "description": "选择构建类型",
+      "options": [
+        {
+          "label": "调试",
+          "value": "debug"
+        },
+        {
+          "label": "发布",
+          "value": "release"
+        }
+      ],
+      "default": "debug"
+    }
+  ]
+}

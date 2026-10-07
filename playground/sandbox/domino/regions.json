@@ -1,0 +1,17 @@
+{
+  "region_count": 1,
+  "regions": [
+    {
+      "human_count": 1,
+      "org_count": 0,
+      "country_count": 0,
+      "city_count": 0,
+      "island_count": 0,
+      "building_count": 0,
+      "asset_count": 0,
+      "fork_road_count": 0,
+      "type": 0,
+      "status": 0
+    }
+  ]
+}

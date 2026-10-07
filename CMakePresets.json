@@ -1,0 +1,119 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 1
+  },
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "调试配置",
+      "description": "使用Clang编译器的Debug配置，包含调试信息",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "发布配置",
+      "description": "使用Clang编译器的Release配置，优化性能（可移植版本，适用于容器化部署和跨平台分发）",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "DOMINO_ENABLE_NATIVE_ARCH": "OFF",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    },
+    {
+      "name": "release-native",
+      "displayName": "发布配置（本机极致优化）",
+      "description": "使用Clang编译器的Release配置，启用 -march=native/-mtune=native 极致优化。警告：生成的二进制文件只能在构建它的机器或相同架构的 CPU 上运行，不适用于容器化部署或跨平台分发",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-release-native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "DOMINO_ENABLE_NATIVE_ARCH": "ON",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Sanitizer配置",
+      "description": "启用AddressSanitizer, UBSan, LeakSanitizer进行内存安全检查（使用Debug配置，包含调试信息）",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined,leak -fno-omit-frame-pointer -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined,leak",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined,leak",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer配置",
+      "description": "启用ThreadSanitizer进行线程安全检查（使用Debug配置，包含调试信息）",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    },
+    {
+      "name": "profile",
+      "displayName": "性能分析配置",
+      "description": "启用gprof性能分析支持（使用Release配置，优化性能）",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-profile",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-pg -fno-omit-frame-pointer -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-pg",
+        "CMAKE_SHARED_LINKER_FLAGS": "-pg",
+        "DOMINO_PLAYGROUND_MODE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "release-native",
+      "configurePreset": "release-native"
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "profile",
+      "configurePreset": "profile"
+    }
+  ]
+}

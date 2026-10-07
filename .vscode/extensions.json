@@ -1,0 +1,10 @@
+{
+  // VSCode推荐扩展列表
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd", // clangd语言服务器（智能提示、代码补全）
+    "vadimcn.vscode-lldb", // CodeLLDB调试器（替代Microsoft C/C++扩展）
+    "xaver.clang-format", // clang-format代码格式化
+    "eamodio.gitlens", // GitLens（代码版本控制）
+    "ms-vscode.hexeditor", // Hex编辑器（查看二进制文件）
+  ]
+}

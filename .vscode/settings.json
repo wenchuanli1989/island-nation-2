@@ -1,0 +1,46 @@
+{
+  // VSCode远程开发配置
+  "files.associations": {
+    "*.h": "c"
+  },
+  // 禁用Microsoft C/C++扩展的IntelliSense（使用clangd替代）
+  "C_Cpp.intelliSenseEngine": "Disabled",
+  // clangd配置（替代Microsoft C/C++扩展的智能提示）
+  "clangd.path": "/usr/bin/clangd",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build-debug",
+    "--background-index",
+    "--header-insertion=never",
+    "--completion-style=detailed",
+    "--function-arg-placeholders=false",
+    "--query-driver=/usr/bin/clang,/usr/bin/clang-*"
+  ],
+  "clangd.fallbackFlags": [
+    "-std=c23",
+    "-Wall",
+    "-Wextra",
+    "-Wpedantic",
+    "-Wformat-security",
+    "-Wnull-dereference",
+    "-Wuninitialized",
+    "-Wconversion",
+    "-Wsign-conversion",
+    "-Wunused",
+    "-Wformat=2"
+  ],
+  // 代码格式化配置（使用clang-format）
+  "editor.formatOnSave": true,
+  // clang-format扩展配置
+  "clang-format.style": "file",
+  "clang-format.executable": "/usr/bin/clang-format",
+  // 文件编码
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  // 过滤文件
+  "files.watcherExclude": {
+    "**/build-*/**": true
+  },
+  "search.exclude": {
+    "**/build-*/**": true
+  }
+}

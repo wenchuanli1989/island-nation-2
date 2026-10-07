@@ -1,0 +1,22 @@
+# Docker Compose配置文件
+
+services:
+  dev-env:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: domino-dev
+    ports:
+      # SSH端口（用于VSCode远程连接）
+      - "10022:22"
+      # 游戏服务器端口（可选）
+      - "6666:6666"
+    volumes:
+      # 挂载项目目录到容器
+      - .:/root/domino
+    stdin_open: true
+    tty: true
+    # 保持容器运行
+    command: /usr/sbin/sshd -D
+
+

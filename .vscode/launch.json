@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试当前Playground文件",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-debug/bin/domino-playground",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false,
+      "preLaunchTask": "Playground (Debug Build)",
+      "initCommands": [
+        "settings set frame-format \"frame #${frame.index}: ${frame.pc}{ ${module.file.basename}{${function.name-with-args}}}{ at ${line.file.basename}:${line.number}}\\n\"",
+        "settings set thread-format \"thread #${thread.index}: tid = ${thread.id}{, ${thread.name}}{, ${thread.queue}}{, stop reason = ${thread.stop-reason}}\\n\"",
+        "settings set stop-disassembly-count 20",
+        "settings set stop-line-count-before 5",
+        "settings set stop-line-count-after 5"
+      ]
+    }
+  ]
+}

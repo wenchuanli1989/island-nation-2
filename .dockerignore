@@ -1,0 +1,16 @@
+# Docker忽略文件
+build/
+build-debug/
+build-release/
+*.o
+*.so
+*.a
+.vscode/
+.git/
+.gitignore
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+

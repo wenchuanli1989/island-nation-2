@@ -1,0 +1,11 @@
+{
+  "type": "human",
+  "total_count": 1,
+  "shard_count": 1,
+  "shard": [
+    {
+      "crc32c": 0,
+      "size": 0
+    }
+  ]
+}
