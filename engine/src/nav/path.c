@@ -262,6 +262,11 @@ DOMINO_CODE dominoNavPathPlanning(uint8_t region_index, uint8_t road_network_typ
     }
     const domino_nav_vertex_index_t vertex_count = (domino_nav_vertex_index_t)vertex_count_u32;
 
+    DominoNavPathCache* cache = navStatePreparePathCache(region_index, road_network_type);
+    if (!cache) {
+        return ERR_MEMORY_ALLOC;
+    }
+
     DominoForkRoad** fork_road_list = (DominoForkRoad**)calloc((size_t)vertex_count, sizeof(*fork_road_list));
     if (!fork_road_list) {
         return ERR_MEMORY_ALLOC;
@@ -313,12 +318,7 @@ DOMINO_CODE dominoNavPathPlanning(uint8_t region_index, uint8_t road_network_typ
     FloydPathPlanningResult stat = floydPathPlanning(vertex_count, vertices, (PathInfo(*)[vertex_count])path_matrix);
     free(vertices);
 
-    result = navStateCommitPathCache(region_index, road_network_type, path_matrix, fork_road_list, vertex_count);
-    if (result != CODE_OK) {
-        free(path_matrix);
-        free(fork_road_list);
-        return result;
-    }
+    navStateCommitPathCache(cache, path_matrix, fork_road_list, vertex_count);
 
     if (out_stat) {
         *out_stat = stat;
