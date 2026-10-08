@@ -1,14 +1,14 @@
 {
-  // VSCode远程开发配置
+  // VSCode 本地及远程开发配置
   "files.associations": {
     "*.h": "c"
   },
   // 禁用Microsoft C/C++扩展的IntelliSense（使用clangd替代）
   "C_Cpp.intelliSenseEngine": "Disabled",
   // clangd配置（替代Microsoft C/C++扩展的智能提示）
-  "clangd.path": "/usr/bin/clangd",
+  "clangd.path": "${workspaceFolder}/scripts/clangd.sh",
+  "clangd.useScriptAsExecutable": true,
   "clangd.arguments": [
-    "--compile-commands-dir=${workspaceFolder}/build-debug",
     "--background-index",
     "--header-insertion=never",
     "--completion-style=detailed",

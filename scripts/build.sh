@@ -19,6 +19,7 @@ show_usage() {
 
 可用命令:
   debug  [target]        构建项目（调试模式）
+  macos-debug           在当前 Intel Mac 上构建默认引擎 Playground（Debug）
   release [target]        构建项目（发布模式）
   release-native [target]        构建项目（发布模式，本机极致优化）
   sanitize [target]              构建项目（Sanitizer模式）
@@ -178,6 +179,13 @@ main() {
     shift
 
     case "$COMMAND" in
+        macos-debug)
+            cmake_build "debug" "build-macos-debug" "playground" \
+                -S "$WORKSPACE_DIR" -B "$WORKSPACE_DIR/build-macos-debug" \
+                -DPLAYGROUND_SOURCE_DIR="$WORKSPACE_DIR/playground/src" \
+                -DDOMINO_PLAYGROUND_MODE=ON -DBUILD_TESTING=OFF
+            ;;
+
         debug)
             echo "构建项目（调试模式）"
             cmake_build "debug" "build-debug" "${1:-}"

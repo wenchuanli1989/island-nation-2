@@ -28,6 +28,9 @@
       "label": "Playground (Debug Build)",
       "type": "shell",
       "command": "${workspaceFolder}/scripts/build.sh",
+      "osx": {
+        "args": ["macos-debug"]
+      },
       "args": [
         "playground-build",
         "${file}",

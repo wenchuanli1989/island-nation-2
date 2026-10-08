@@ -68,6 +68,20 @@ logger -> common -> host -> nav(before) -> social -> human -> storage(load) -> t
 
 ---
 
+### macOS 本地调试（当前 Intel Mac）
+
+本地适配范围为默认引擎 Playground 的 Debug；其他构建和分析模式仍使用 Linux/Docker。
+使用系统 Clang、CMake 4.2.1+，在仓库根目录执行：
+
+```bash
+./scripts/build.sh macos-debug
+```
+
+产物和编译数据库位于 `build-macos-debug/`，与 Docker 的 `build-debug/` 分开；该入口不构建测试目标。
+macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供，业务代码继续使用标准线程 API。
+VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击` 跳转函数定义。
+选择 **「调试Playground」** 按 `F5`，会自动构建并调试固定入口 `playground/src/main.c`。
+
 ### 构建
 
 **命令行构建**（推荐使用 `scripts/build.sh`）：
@@ -144,7 +158,7 @@ command -v clang clangd clang-format clang-tidy lldb scan-build
 
 - 设置断点
 - 按 `F5` 或使用调试面板
-- 选择配置 **「调试当前Playground文件」**（会先执行 Playground 构建任务）
+- 选择配置 **「调试Playground」**（会先执行 Playground 构建任务；macOS 使用上述固定入口）
 
 ---
 
