@@ -274,9 +274,14 @@ main() {
             # 确定要格式化的目录（默认为工作区根目录）
             local target_dir="${1:-$WORKSPACE_DIR}"
             [[ ! -d "$target_dir" ]] && { echo "错误: '$target_dir' 不是一个目录" >&2; exit 1; }
+
+            local clang_format="clang-format"
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                clang_format="$(xcrun --find clang-format)"
+            fi
             
             # 查找所有 C 和 H 文件，排除构建目录
-            find "$target_dir" \( -name '*.c' -o -name '*.h' \) -not -path '*/build-*/*' -exec clang-format -i {} + || true
+            find "$target_dir" \( -name '*.c' -o -name '*.h' \) -not -path '*/build-*/*' -exec "$clang_format" --style=file -i {} +
             
             echo "格式化完成"
             ;;

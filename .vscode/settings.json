@@ -28,11 +28,11 @@
     "-Wunused",
     "-Wformat=2"
   ],
-  // 代码格式化配置（使用clang-format）
+  // C 文件通过 clangd 内置的 clang-format 读取项目 .clang-format 配置。
   "editor.formatOnSave": true,
-  // clang-format扩展配置
-  "clang-format.style": "file",
-  "clang-format.executable": "/usr/bin/clang-format",
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
   // 文件编码
   "files.encoding": "utf8",
   "files.eol": "\n",
