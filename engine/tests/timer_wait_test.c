@@ -24,21 +24,25 @@ typedef struct TimerDispatchState {
     thrd_t dispatch_thread;
     domino_timer_id_t timer_id;
     uint64_t event_id;
-    uint64_t dispatch_ms;
-    uint32_t due_ms;
-    uint32_t delay_ms;
+    domino_runtime_ms_t dispatch_ms;
+    domino_runtime_ms_t due_ms;
+    domino_runtime_ms_t delay_ms;
     uint32_t dispatch_count;
     bool correct_thread;
 } TimerDispatchState;
 
-static void recordTimerEvent(const DominoTimer* event_ptr, TimerDispatchState* state_ptr) {
+static DOMINO_CODE recordTimerEvent(const DominoTimer* event_ptr, TimerDispatchState* state_ptr) {
+    DOMINO_CODE code = dominoTimeGetRuntimeMs(&state_ptr->dispatch_ms);
+    if (code != CODE_OK) {
+        return code;
+    }
     state_ptr->timer_id = event_ptr->timer_id;
     state_ptr->event_id = event_ptr->id;
-    state_ptr->dispatch_ms = dominoTimeGetRuntimeMs();
     state_ptr->due_ms = event_ptr->due_ms;
     state_ptr->delay_ms = event_ptr->delay_ms;
     state_ptr->dispatch_count++;
     state_ptr->correct_thread = thrd_equal(thrd_current(), state_ptr->dispatch_thread) != 0;
+    return CODE_OK;
 }
 
 /** @brief 业务消费者自行取出事件并过滤取消标志。 */
@@ -46,7 +50,7 @@ static DOMINO_CODE consumeTimerEvent(DominoThreadQueue* queue_ptr, TimerDispatch
     DominoTimer event;
     DOMINO_CODE code = dominoThreadQueueConsume(queue_ptr, &event, false);
     if (code == CODE_OK && !event.cancelled_flag) {
-        recordTimerEvent(&event, state_ptr);
+        return recordTimerEvent(&event, state_ptr);
     }
     return code;
 }
@@ -104,23 +108,29 @@ static bool testTimerWaits(void) {
 
     DominoTimer long_request = {.event_queue_ptr = &long_event_queue, .delay_ms = TEST_LONG_DELAY_MS};
     TEST_CHECK(dominoTimerSchedule(&long_request) == CODE_OK, "register long future timer");
-    uint64_t short_due_lower_bound = dominoTimeGetRuntimeMs() + TEST_SHORT_DELAY_MS;
+    domino_runtime_ms_t short_due_lower_bound_ms;
+    TEST_CHECK(dominoTimeGetRuntimeMs(&short_due_lower_bound_ms) == CODE_OK && short_due_lower_bound_ms <= UINT32_MAX - TEST_SHORT_DELAY_MS,
+               "read a 32-bit runtime that permits the short delay");
+    short_due_lower_bound_ms += TEST_SHORT_DELAY_MS;
     DominoTimer short_request = {.event_queue_ptr = &event_queue, .delay_ms = TEST_SHORT_DELAY_MS};
     TEST_CHECK(dominoTimerSchedule(&short_request) == CODE_OK, "register short future timer");
     TEST_CHECK(dispatchWithinDeadline(&event_queue, &state),
                "another queue's short timer replaces the global long wait without intervening commands");
-    TEST_CHECK(state.dispatch_count == 1U && state.timer_id == short_request.timer_id && state.due_ms >= short_due_lower_bound &&
+    TEST_CHECK(state.dispatch_count == 1U && state.timer_id == short_request.timer_id && state.due_ms >= short_due_lower_bound_ms &&
                    state.dispatch_ms >= state.due_ms && state.correct_thread,
                "short timer does not fire early and business handling runs on the consumer thread");
     TEST_CHECK(short_request.delay_ms == TEST_SHORT_DELAY_MS && state.delay_ms == TEST_SHORT_DELAY_MS,
                "scheduling and delivery preserve the original positive delay");
     TEST_CHECK(state.event_id == 1U && state.event_id != short_request.timer_id, "event queue ID does not overwrite the originating timer ID");
 
-    uint64_t earlier_due_lower_bound = dominoTimeGetRuntimeMs() + TEST_SHORT_DELAY_MS;
+    domino_runtime_ms_t earlier_due_lower_bound_ms;
+    TEST_CHECK(dominoTimeGetRuntimeMs(&earlier_due_lower_bound_ms) == CODE_OK && earlier_due_lower_bound_ms <= UINT32_MAX - TEST_SHORT_DELAY_MS,
+               "read a 32-bit runtime that permits the earlier delay");
+    earlier_due_lower_bound_ms += TEST_SHORT_DELAY_MS;
     DominoTimer earlier_request = {.event_queue_ptr = &event_queue, .delay_ms = TEST_SHORT_DELAY_MS};
     TEST_CHECK(dominoTimerSchedule(&earlier_request) == CODE_OK, "insert an earlier deadline while a long future timer remains");
     TEST_CHECK(dispatchWithinDeadline(&event_queue, &state), "new earlier deadline replaces the long future wait");
-    TEST_CHECK(state.dispatch_count == 2U && state.timer_id == earlier_request.timer_id && state.due_ms >= earlier_due_lower_bound &&
+    TEST_CHECK(state.dispatch_count == 2U && state.timer_id == earlier_request.timer_id && state.due_ms >= earlier_due_lower_bound_ms &&
                    state.dispatch_ms >= state.due_ms && state.correct_thread,
                "earlier timer is delivered on time and through the dispatch thread");
     TEST_CHECK(state.event_id == 2U, "event IDs increment independently of command IDs");

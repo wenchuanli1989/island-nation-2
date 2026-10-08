@@ -32,8 +32,8 @@ Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素
 | `id` | `uint64_t` | 首 8 字节的队列消息 ID，每次入队由队列重新分配 |
 | `timer_id` | `domino_timer_id_t`（`uint64_t`） | 稳定的计时器 ID，用于取消和业务校验 |
 | `event_queue_ptr` | `DominoThreadQueue*` | 业务方拥有的到期事件队列，登记、取消及投递使用同一队列地址 |
-| `due_ms` | `uint32_t` | Schedule 计算的累计未冻结现实毫秒下的绝对到期时间 |
-| `delay_ms` | `uint32_t` | 调用方提交的相对现实毫秒延迟 |
+| `due_ms` | `domino_runtime_ms_t`（`uint32_t`） | Schedule 计算的累计未冻结现实毫秒下的绝对到期时间 |
+| `delay_ms` | `domino_runtime_ms_t`（`uint32_t`） | 调用方提交的相对现实毫秒延迟 |
 | `event_type` | `uint8_t` | 业务事件类型 |
 | `cancelled_flag` | `bool` | 取消标记 |
 
@@ -41,7 +41,9 @@ Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素
 
 ## 登记、取消和消费
 
-`delay_ms` 是从 Schedule 调用时开始计算的现实毫秒延迟，冻结时间不计入，0 表示尽快异步投递。Schedule 通过 `dominoTimeGetRuntimeMs()` 读取 `uint64_t` 累计未冻结现实毫秒；该入口仅执行 `runtime_ns / 1000000` 的单位转换。Schedule 计算 `due_ms = now_ms + delay_ms`，命令排队时间计入延迟，游戏日历倍率只用于显示层。`due_ms` 和 `delay_ms` 保持 `uint32_t`；当前时间或计算后的到期时间超过 `UINT32_MAX` 时返回 `ERR_OUT_OF_RANGE`，不使用环绕时间比较。绝对到期时间范围约为从零开始的 49.7 个累计现实日；time 模块的时间类型仍为 `uint64_t`，存档加载后继续累计。
+`delay_ms` 是从 Schedule 调用时开始计算的现实毫秒延迟，冻结时间不计入，0 表示尽快异步投递。Schedule 通过 `dominoTimeGetRuntimeMs(&now_ms)` 读取 `domino_runtime_ms_t`（`uint32_t`）累计未冻结现实毫秒；该接口将底层现实纳秒除以 1000000，先校验范围，再写入 32 位输出，成功返回 `CODE_OK`，越界返回 `ERR_OUT_OF_RANGE` 且不改写输出。Schedule 继续检查 `delay_ms <= UINT32_MAX - now_ms` 后计算 `due_ms = now_ms + delay_ms`，超出范围直接返回错误。命令排队时间计入延迟，游戏日历倍率只用于显示层。
+
+`now_ms`、`due_ms`、`delay_ms` 及等待差值均固定使用 32 位现实毫秒，0 和 `UINT32_MAX` 都有效，不回绕、截断、饱和或归零。约 49.71 个累计未冻结现实日、约 248.55 个游戏年的范围是当前产品约定，不是待改为 64 位的缺陷。64 位只保留给底层纳秒、UTC 墙上时间戳和 ID 等各自用途，存档加载后继续累计。后台读取时间越界时记录错误并 `abort()`，不会继续用超出业务范围的时间判断到期。
 
 产品要求单次游戏会话最多持续 8 个现实小时，届时保存退出、再次加载继续；当前 timer 不实现自动保存退出。会话时长单独统计，不把跨存档累计时钟归零，也不把 8 小时当作累计到期时间的范围。
 

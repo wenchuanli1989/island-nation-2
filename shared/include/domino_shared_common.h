@@ -31,7 +31,10 @@ int dominoMkdir(const char* path);
  */
 DOMINO_CODE dominoMkdirRecursive(const char* path);
 
-/** @brief UTC 墙上时间毫秒；`timespec_get` 失败时退化为秒级精度。 */
+/**
+ * @brief 64 位 UTC 墙上时间戳毫秒，用于日志与文件命名；`timespec_get` 失败时退化为秒级精度。
+ * @note 不受引擎冻结控制，不是累计未冻结现实毫秒，不能用于任务、timer 或收益结算的业务计时。
+ */
 uint64_t dominoWallTimeMs(void);
 
 /** @brief 单调时间纳秒；只用于计算间隔，不可转换为 UTC 时间。 */

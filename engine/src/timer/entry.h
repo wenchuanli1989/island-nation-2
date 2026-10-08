@@ -6,7 +6,9 @@
 
 #include "../queue/thread_queue.h"
 #include "domino_shared_error_codes.h"
+#include "domino_shared_types.h"
 
+/** @brief 64 位登记 ID，不是时间值；业务毫秒统一使用 32 位 domino_runtime_ms_t。 */
 typedef uint64_t domino_timer_id_t;
 
 /** @brief 登记命令、堆项及到期事件共用的按值计时记录；业务对象关联由消费方维护。 */
@@ -14,8 +16,8 @@ typedef struct DominoTimer {
     uint64_t id;                         ///< 当前队列的消息 ID，每次入队由队列覆盖。
     domino_timer_id_t timer_id;          ///< 登记命令的消息 ID，在本次 Init 生命周期内作为稳定取消凭据。
     DominoThreadQueue* event_queue_ptr;  ///< 业务方拥有的到期事件队列，元素类型为 DominoTimer。
-    uint32_t due_ms;                     ///< Schedule 计算的累计现实毫秒截止点，用于内部排序和到期判断。
-    uint32_t delay_ms;                   ///< 从 Schedule 调用时起计算的现实毫秒延迟；0 表示尽快投递。
+    domino_runtime_ms_t due_ms;          ///< 32 位累计未冻结现实毫秒截止点，用于内部排序和到期判断。
+    domino_runtime_ms_t delay_ms;        ///< 32 位现实毫秒延迟，从 Schedule 调用时起计算；0 表示尽快投递。
     uint8_t event_type;
     bool cancelled_flag;  ///< 取消标志，正常登记时初始化为 false；Schedule 拒绝已标记取消的请求。
 } DominoTimer;
@@ -51,11 +53,12 @@ void dominoTimerNotifyTimeChanged(void);
  * @note 延迟为 0 仍经队列异步投递；消费和业务处理完全由队列所属业务方负责。
  * @note 请求已标记取消时直接返回 ERR_INVALID_PARAM，timer_id 为 0，不入队也不消耗消息 ID。
  * @return 请求实际入队时返回 CODE_OK 并写回 timer_id；请求或队列指针为空返回 ERR_NULL_POINTER；模块或队列未初始化返回 ERR_NOT_INITIALIZED；
- *         已取消请求或队列元素大小不匹配返回 ERR_INVALID_PARAM；绝对到期时间超过 UINT32_MAX 返回 ERR_OUT_OF_RANGE。
+ *         已取消请求或队列元素大小不匹配返回 ERR_INVALID_PARAM；当前时间或绝对到期时间超过 UINT32_MAX 毫秒返回 ERR_OUT_OF_RANGE。
  *         命令队列满或内存不足等提交错误直接返回；非空请求失败时 timer_id 为 0，不提交命令。
  * @note 入队成功后取得 request_mutex 记录唤醒通知，可能等待命令批次、堆操作或取消扫描；无需等待该请求入堆即可按 ID 取消。
  * @note 后台入堆或到期事件投递失败时，记录事件队列地址、timer ID 和错误码并调用 abort() 立即终止程序。
  *       目标队列达到最大容量、内存分配失败及消息 ID 耗尽等投递错误均不重试。
+ *       后台读取累计时间超出 32 位毫秒范围时同样记录错误并终止，不继续使用越界时间或回绕值。
  * @note time 冻结期间仍允许登记和取消；计时线程仅在每轮头部检查冻结，发现冻结后只等待，解冻并通知后恢复处理。
  *       已开始的一轮可能完成；处理时取消命令不入堆，取消堆顶直接回收。
  */

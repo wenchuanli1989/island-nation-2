@@ -11,7 +11,7 @@
 3. 任务拥有行为，行为不能脱离任务单独进入执行系统。
 4. 每种任务一个 C 文件，每种行为一个 C 文件。重复的生命周期和调度流程由公共函数实现。
 5. 从任务和行为结构中删除 `earliest_start_time`、`start_time`、`end_time`、`deadline_time`、`duration_time` 五个字段。
-6. 任务和行为都保存计划开始／结束时间及必要实际时间，统一使用从世界起点累计、排除冻结时段的 64 位现实毫秒；保留行为耗时估算、有效进度和计时器到期时间。显示日历不能参与业务时长计算。
+6. 任务和行为都保存计划开始／结束时间及必要实际时间，统一使用从世界起点累计、排除冻结时段的 32 位现实毫秒（`uint32_t`）；行为耗时估算、有效进度、需求结算、业务超时和计时器到期时间也使用 32 位现实毫秒。显示日历不能参与业务时长计算。
 7. 睡眠任务顺序为：可选晚餐 → 可选睡前洗漱 → 睡眠 → 可选起床洗漱 → 可选早餐；必要的移动插在相应行为之前。
 8. 不新增“生活照料任务”。工作、上学、运动、旅游等既有任务可以包含可选午餐。第一版不另建白天饮水、临时洗漱任务；食物需求的合法承载范围及首版未覆盖场景见第 8.3、8.4 节。
 9. 保留日程前后任务链，以及用于挂起／恢复的父子任务关系。
@@ -33,7 +33,7 @@
 | `engine/src/entry.c` | 主循环内部启动规划线程，Run 不等待内部线程就绪 | human 管理规划／执行线程，引擎管理通用计时线程，Run 成功前统一确认就绪 |
 | `engine/src/dispatch/entry.c` | 仅处理 `DOMINO_ENGINE_MSG_NONE` | 路由人物命令、计划结果所需的外部事件和导航修改命令 |
 | `engine/src/queue/thread_queue.c`、`thread_queue.h` | 带锁、可扩容 FIFO，单条／批量消费均已存在；首 8 字节由队列写入消息 ID；`Stop` 与 `WakeAll` 分离 | 复用值复制、批量消费和条件变量，按端点关停／唤醒，补充 AI 控制等待谓词 |
-| `engine/src/time/entry.c`、`entry.h` | 已提供累计未冻结现实纳秒和 `dominoTimeGetRuntimeMs()`；InitAfter 即解除冻结，Freeze 不等待工作线程确认，也不自动通知 timer | 直接复用现实毫秒入口，接入暂停确认、Run 启动协调和 timer 时间变更通知 |
+| `engine/src/time/entry.c`、`entry.h` | 底层以纳秒采样；`dominoTimeGetRuntimeMs(&now_ms)` 校验范围并输出 32 位累计未冻结现实毫秒；InitAfter 即解除冻结，Freeze 不等待工作线程确认，也不自动通知 timer | 复用现有 32 位现实毫秒业务入口，接入暂停确认、Run 启动协调和 timer 时间变更通知 |
 | `engine/src/timer/` | 已有独立线程、命令队列、共享最小堆、登记和标记取消；直接投递 `DominoTimer` 到业务队列，尚未接入引擎生命周期或 human | 保留 Schedule／Cancel 接口及 32 位现实毫秒字段，接入 human 关联映射、错误处理和生命周期 |
 | `engine/src/nav/graph.c`、`path.c`、`floyd.c`、`state.c` | graph 维护直接有向邻接；path 按需构建 Floyd 缓存；当前工作区已对齐准备缓存槽及无失败提交接口；`remaining_distance` 仍写入路径权重 | 明确运行期串行所有权，补充真实首末接驳、在途位置、距离数据和出行时间 |
 | `engine/src/social/entry.c`、`shared/include/domino_shared_social.h` | 已有组织、建筑、资产等容器和字段；尚无本方案的合同、地点服务、交易及共享活动闭环 | 随首个实际消费者增加最小领域记录与操作；明确余额、所有权、容量及数量单位 |
@@ -214,11 +214,13 @@ deadline_time
 duration_time
 ```
 
-同时删除任务的冗余 `start_date`；将已有 `start_date_time/end_date_time` 替换成 `planned_begin_ms/planned_end_ms`，行为也保存这对字段。拟使用 `uint64_t` 别名 `domino_runtime_ms_t` 表达累计未冻结的现实时刻，0 是世界起点；该别名尚不存在于代码。任务和行为是否曾经启动由各自的 `started_flag` 判断，是否已经终结由终态判断；时间 0 是合法值，不充当未启动标记。
+同时删除任务的冗余 `start_date`；将已有 `start_date_time/end_date_time` 替换成 `planned_begin_ms/planned_end_ms`，行为也保存这对字段。使用 `shared/include/domino_shared_types.h` 中已有的 `domino_runtime_ms_t`（`uint32_t`）表达累计未冻结的现实毫秒，0 是世界起点。任务、行为、需求、服务预约及业务超时的时刻和时长均按此类型表达，包括计划、实际、结算、有效进度和耗时估算；这些 AI 字段仍待接入。任务和行为是否曾经启动由各自的 `started_flag` 判断，是否已经终结由终态判断；时间 0 是合法值，不充当未启动标记。
 
 任务和行为使用同一个连续现实时间轴，不在午夜取模。计划区间采用 `[begin, end)`；日程插入时先计算行为区间，再汇总任务的首尾边界。绝对区间用于排程，有效时长用于效果结算，二者不能互相替代。
 
-`estimateBehaviorMs()` 根据行为参数、人物能力和路线返回现实毫秒耗时，规划时临时使用；持续工作、睡眠等仍需要类型参数中的目标工作量或目标有效时长。它不是重新加入一套旧的通用日内窗口或 `duration_time` 字段。
+构造计划结束或业务截止点时，先检查 `delta_ms <= UINT32_MAX - base_ms` 再相加；时间相减前先确认先后关系。越界返回 `ERR_OUT_OF_RANGE`，不回绕、截断或重置累计时钟；加载也须在写入业务字段前校验时间范围。
+
+`estimateBehaviorMs()` 根据行为参数、人物能力和路线返回 `domino_runtime_ms_t` 类型的现实毫秒耗时，规划时临时使用；持续工作、睡眠等仍需要类型参数中的目标工作量或目标有效时长。它不是重新加入一套旧的通用日内窗口或 `duration_time` 字段。
 
 任务与行为首次激活时写实际开始并置 `started_flag`，完成／失败／取消时写实际终结时刻。挂起后不重置首次开始；恢复时只推进剩余量并重算未完成部分的计划结束及后续行为区间。`ended_at_ms - started_at_ms` 包含可能的挂起／等待，不能直接算作有效工作、通话或睡眠时长。行为未激活即 `SKIPPED`，或任务／行为未激活即 `CANCELLED` 时，保持 `started_flag == false`，记录终结原因和时刻，但不伪造开始或有效进度。
 
@@ -350,7 +352,7 @@ typedef struct DominoTaskOps {
 } DominoTaskOps;
 
 typedef struct DominoBehaviorOps {
-    uint64_t (*estimate_ms)(const DominoPlanContext* context, const DominoBehavior* behavior);
+    domino_runtime_ms_t (*estimate_ms)(const DominoPlanContext* context, const DominoBehavior* behavior);
     DominoStepResult (*start)(DominoExecutionContext* context);
     DominoStepResult (*advance)(DominoExecutionContext* context);
     DominoStepResult (*request_stop)(DominoExecutionContext* context, DominoLeaveReason reason);
@@ -675,15 +677,15 @@ engine/src/storage/
 
 ### 13.1 累计未冻结现实时间与会话时长
 
-当前 time 模块提供两个同源量：`dominoTimeModuleGetDateTimeNow()` 返回累计现实纳秒，`dominoTimeGetRuntimeMs()` 返回累计现实毫秒。后者仅换算单位：
+当前 time 模块提供两个同源量：`dominoTimeModuleGetDateTimeNow()` 返回用于底层采样和诊断的累计现实纳秒，`dominoTimeGetRuntimeMs(&now_ms)` 返回状态码，成功时输出 `domino_runtime_ms_t`（`uint32_t`）累计现实毫秒。毫秒入口已检查换算结果不超过 `UINT32_MAX`，越界返回 `ERR_OUT_OF_RANGE` 且不改写输出；不会窄化截断、回绕或饱和。业务统一使用这一 32 位入口，底层 64 位纳秒及 UTC 墙上时间戳不能作为改用 64 位业务毫秒的依据。当前换算关系为：
 
 ```text
 runtime_ns = 存档中的累计基准 + 本轮未冻结的单调时钟经过量
-now_ms = floor(runtime_ns / 1000000)
-delta_ms = now_ms - accounted_at_ms
+now_ms = floor(runtime_ns / 1000000)  // 先校验 <= UINT32_MAX，再写入 32 位输出
+delta_ms = now_ms - accounted_at_ms  // 先确认 now_ms >= accounted_at_ms
 ```
 
-任务计划、行为进度、需求、服务预约、工资和业务计时器均使用这一轴。字段、参数和速率明确带 `_ns`、`_ms`、`_s` 等单位后缀；八个现实小时是 `28800000 ms`，一分钟是 `60000 ms`。累计时刻不在午夜取模，也不因新会话归零。游戏日期和日内时分的倍率只用于显示；当前代码尚无对应日历换算，不能据此放大业务时长或收益。
+任务计划、行为进度、需求、服务预约、工资和业务计时器均使用这一轴，并统一使用 32 位现实毫秒时刻和时长。字段、参数和速率明确带 `_ns`、`_ms`、`_s` 等单位后缀；八个现实小时是 `28800000 ms`，一分钟是 `60000 ms`。累计时刻不在午夜取模，也不因新会话归零。游戏日期和日内时分的倍率只用于显示；当前代码尚无对应日历换算，不能据此放大业务时长或收益。
 
 游戏日历采用以下产品规则：1 个现实分钟对应 1 个游戏小时，1 个游戏日包含 24 个游戏小时，1 个游戏年包含 12 个游戏日。因此，1 个游戏日对应 24 个现实分钟，1 个游戏年对应 288 个现实分钟，即 4.8 个现实小时。这些换算用于日历呈现和评估时间范围，底层计时仍累计未冻结的现实毫秒。
 
@@ -723,23 +725,23 @@ session_elapsed_ms >= 28800000 → 发起协调冻结、保存并退出
 - `uint64_t id`：当前所在队列的消息 ID，每次入队会被覆盖。
 - `domino_timer_id_t timer_id`：稳定登记 ID，64 位，仅在本次 timer Init 生命周期内有效。
 - `DominoThreadQueue* event_queue_ptr`：业务方拥有的目标队列，已初始化且仅存储 `DominoTimer`。
-- `uint32_t due_ms`、`delay_ms`：累计现实毫秒截止点和现实毫秒延迟。
+- `domino_runtime_ms_t due_ms`、`delay_ms`：32 位累计现实毫秒截止点和现实毫秒延迟。
 - `event_type`、`cancelled_flag`：业务事件类别及取消标记。
 
 记录没有关联实体 ID、调用方版本或回调。Schedule 输入的 `id`、`timer_id`、`due_ms` 不参与登记；调用方填写延迟、队列、事件类型和未取消标记，记录在调用期间由当前线程独占。每次调用先把 `timer_id` 清零，成功入队才写回非零登记 ID。排队时间计入延迟，零延迟也经队列异步投递，不在调用栈里执行业务。
 
-#### 保留 32 位计时范围
+#### 统一 32 位业务计时范围
 
-`due_ms` 和 `delay_ms` 继续使用 `uint32_t`。其最大值为 `4294967295 ms`，约合 49.71 个累计未冻结现实日。按第 13.1 节的日历规则换算：
+任务、行为、需求结算、服务预约和业务超时统一使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，timer 的 `due_ms` 和 `delay_ms` 已使用同一类型。其最大值为 `4294967295 ms`，约合 49.71 个累计未冻结现实日。按第 13.1 节的日历规则换算：
 
 ```text
 1 游戏年 = 12 × 24 × 60000 = 17280000 现实毫秒
 UINT32_MAX / 17280000 ≈ 248.55 游戏年
 ```
 
-约 248.6 个游戏年的累计范围满足当前产品尺度，human 接入不扩宽 timer 的字段。保留当前范围检查：若 `now_ms` 或 `now_ms + delay_ms` 超过 `UINT32_MAX`，Schedule 返回 `ERR_OUT_OF_RANGE`，不回绕或归零。八小时会话结束后，加载仍沿用存档累计时钟。
+约 248.6 个游戏年的累计范围满足当前产品尺度，这是已接受的 32 位约束，不能因跨存档累计或范围上限推断需要扩宽为 64 位。保留当前范围检查：毫秒入口拒绝越界的当前时刻；Schedule 在相加前检查 `delay_ms <= UINT32_MAX - now_ms`，失败返回 `ERR_OUT_OF_RANGE`，不回绕或归零。后台读取时间越界时记录错误并终止程序，不继续用越界时间处理计时项。八小时会话结束后，加载仍沿用存档累计时钟。
 
-任务、行为和业务超时仍按本文既定模型保存 64 位累计现实毫秒，通用 timer 不序列化。human 适配层先比较目标时刻与当前时刻，再用 64 位计算剩余量；目标已到则申请零延迟，尚未到则检查目标及延迟处于 timer 合法范围后传入参数，禁止直接窄化截断。
+任务、行为和业务超时按 32 位累计现实毫秒保存，通用 timer 不序列化。human 适配层取得已校验范围的业务当前时刻，先与目标时刻比较：目标已到则申请零延迟，尚未到则用 `target_ms - now_ms` 计算剩余延迟。Schedule 调用时会重新采样并校验截止点；越界按调度错误处理，不回绕、截断或归零。
 
 #### 堆、取消、投递和容量
 
@@ -851,7 +853,7 @@ timer 内部未投递项随 Exit 释放，加载后根据业务事实重建唤�
 
 消息记录保存稳定业务 ID、发送方、接收方、内容以及各接收方是否已经处理；“发送提交”和“接收效果已应用”分别有事实记录。队列只是通知手段：加载后仅把尚未处理的业务消息重新加入接收就绪工作，已经处理的消息不再次产生关系或任务效果。外部运行命令和未提交规划草案无需持久化；如果某项操作已经承诺以后必须执行，它的意图须在保存前成为上述业务记录。
 
-不保存操作系统线程、锁、队列内容、函数指针、timer ID、堆下标、规划 `request_id`、在途标志或真实单调时钟绝对值。任务和业务超时保留 64 位累计现实时刻；`accounted_at_ms` 可以持久化，time 保存唯一累计基准。通用计时器内部队列不序列化，人物就绪集合、关联表、规划原因及下一唤醒可从业务事实重建。
+不保存操作系统线程、锁、队列内容、函数指针、timer ID、堆下标、规划 `request_id`、在途标志或真实单调时钟绝对值。任务、行为和业务超时保存 32 位累计现实毫秒；`accounted_at_ms` 同样按 32 位现实毫秒持久化，time 保存唯一累计基准。通用计时器内部队列不序列化，人物就绪集合、关联表、规划原因及下一唤醒可从业务事实重建。
 
 ### 14.3 恢复顺序与各状态的首个动作
 
@@ -899,7 +901,7 @@ AI 保存行程实体 ID、交通方式、当前段必要的独占几何／长�
 修改共享类型，新增 `human/model.h`、`store.c`，定义任务／行为注册表，并接入最小 `serde_human_ai.c`。
 
 - 分离任务与行为枚举，删除指定五字段、冗余任务日期、内联任务及旧活动索引；任务拥有连续行为块，统一由任务 ID 查询。
-- 增加任务链、父子引用、行为游标、明确状态和独立 AI 记录；任务与行为的计划／实际时间均用 64 位累计未冻结现实毫秒。生日、寿命等无关字段保持原语义。
+- 增加任务链、父子引用、行为游标、明确状态和独立 AI 记录；任务与行为的计划／实际时间、结算时刻和有效时长均用 32 位累计未冻结现实毫秒。生日、寿命等无关字段保持原语义。
 - 持久化任务 ID 计数器、最小 AI 状态和任务／行为记录，接入加载、引用校验及绑定阶段；运行态和计时 ID 仍由恢复流程重建。
 - 新模型与存档语义切换时，同步提升版本、修改 serde 和开发样例，不让相同版本承载不同枚举含义，不保留旧格式迁移分支。
 - 注册表随具体类型实现补齐；未实现类型不参与自主候选，也不使用空成功回调假装已支持。

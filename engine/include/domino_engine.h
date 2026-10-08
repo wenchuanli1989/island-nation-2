@@ -39,7 +39,7 @@ typedef struct DominoEngineLaunchConfig {
 extern DOMINO_CODE dominoEngineInit(DominoEngineLaunchConfig launch_config);
 
 typedef struct DominoEngineClientData {
-    uint64_t game_date_time_ns;  ///< Run 写入的会话时间基准，单位纳秒；不会持续更新。
+    uint64_t game_date_time_ns;  ///< Run 写入的累计未冻结现实纳秒基准，不会持续更新；业务计时使用 32 位现实毫秒。
     /* 以下日历字段尚未由引擎计算或写入。 */
     uint32_t game_date_time_sec;
     uint32_t game_time;

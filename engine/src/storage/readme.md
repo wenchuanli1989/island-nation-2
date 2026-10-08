@@ -50,7 +50,7 @@
 2. `txnRecoverSave()` 在读取 meta 前收敛 active 与 `.prev` 的事务状态，避免提交中途崩溃被误判成新世界。
 3. `storageSubModuleReset()` 清空上一次加载/保存留下的模块记录。
 4. `metaLoad()` 读取根 `meta.json`。文件不存在时返回 `ERR_FILE_NOT_FOUND`，入口将其视为新存档并返回 `CODE_OK`。
-5. `metaLoad()` 校验根对象、`version`、`info`、`runtime_option`、`runtime_data.game_date_time_ns`、`runtime_data.global_increment_id` 与 `sub_module`，并恢复 `account_id`、`run_mode`、游戏日历时间与全局自增 ID。
+5. `metaLoad()` 校验根对象、`version`、`info`、`runtime_option`、`runtime_data.game_date_time_ns`、`runtime_data.global_increment_id` 与 `sub_module`，并恢复 `account_id`、`run_mode`、累计未冻结现实纳秒基准与全局自增 ID。
 6. 加载流程使用根 `meta.json.integrity_verify` 作为该存档的校验策略；运行时配置只决定下一次保存策略。
 7. `loadAllSubModule()` 先按 `g_storage_module_types[]` 加载所有模块 meta，建立内存中的模块 meta 表与分片摘要表。
 8. 按注册表顺序读取各模块数据；`regions` 是 required 模块，会先读取 `regions.json`，普通实体 `shard_count == 0` 时跳过。
@@ -141,7 +141,7 @@ root
     └── road_line
 ```
 
-`runtime_data.game_date_time_ns` 保存 time 模块内的 `game_date_time_ns`，单位纳秒。`global_increment_id` 当前保存：`human`、`org`、`country`、`city`、`island`、`building`、`fork_road`、`road_line`、`asset`、`movable_object`、`name`、`description`。
+`runtime_data.game_date_time_ns` 保存 time 模块的累计未冻结现实纳秒基准，以 `uint64_t` 纳秒保留精度，未应用游戏日历倍率。它不是业务毫秒字段；业务时刻和时长固定为 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，由 `dominoTimeGetRuntimeMs(&now_ms)` 校验范围后输出，超出范围报错。加载新会话不清零累计基准，纳秒存储位宽不能作为扩宽业务毫秒的依据。`global_increment_id` 当前保存：`human`、`org`、`country`、`city`、`island`、`building`、`fork_road`、`road_line`、`asset`、`movable_object`、`name`、`description`。
 
 `sub_module.{type}` 结构：
 

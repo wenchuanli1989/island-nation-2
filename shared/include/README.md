@@ -6,7 +6,7 @@
 
 | 文件 | 说明 |
 |------|------|
-| `domino_shared_types.h` | 基础 ID、名称/描述、坐标类型，以及核心世界设计约定。 |
+| `domino_shared_types.h` | 基础 ID、名称/描述、坐标类型，32 位现实毫秒类型 `domino_runtime_ms_t`，以及核心世界设计约定。 |
 | `domino_shared_error_codes.h` | 统一 `DOMINO_CODE` 错误码和错误码字符串转换。 |
 | `domino_shared_common.h` | Linux 当前实现下的时间、路径、文件读写、原子写入和递归删除工具。 |
 | `domino_shared_host.h` | 地域、岛屿、运动物体、全局自增 ID 结构。 |
@@ -18,6 +18,7 @@
 
 ## 公共数据约定
 
+- 业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）累计未冻结现实毫秒；0 和 `UINT32_MAX` 均合法，越界报错。底层 64 位纳秒、UTC 墙上时间戳和 ID 不是业务毫秒类型；不能由它们推断需要扩宽业务计时。
 - `0` ID 保留为无效值。engine 通过 `DOMINO_ALLOC_NON_ZERO_ID` 从 `DominoGlobalIncrementID` 的原子计数器分配非 0 ID，并在 storage 根 `meta.json` 中持久化这些计数器。
 - 实体数据以扁平数组保存，engine 内部再用 `khashl` 建立 `id -> array index` 映射；shared 只定义实体布局，不保存全局数组或映射。
 - 名称和描述使用 `domino_name_id_t`、`domino_description_id_t` 引用运行时字符串表。storage 落盘时保存字符串本身，加载后重新分配运行时 ID，因此名称/描述 ID 不保证跨 save/load 稳定。

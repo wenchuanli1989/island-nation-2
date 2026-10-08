@@ -107,10 +107,10 @@ DOMINO_CODE txnBuildStagingPath(const char* save_path, char* staging_out, size_t
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: base is empty");
         return ERR_INVALID_PARAM;
     }
-    uint64_t timestamp_ms = dominoWallTimeMs();
+    uint64_t wall_timestamp_ms = dominoWallTimeMs();  // UTC 时间戳仅用于事务目录命名，不是业务累计时钟。
     uint64_t pid = dominoGetPid();
     int written;
-    written = snprintf(staging_out, staging_cap, "%s/.%s.__txn__.%" PRIu64 "-%" PRIu64, parent, base, timestamp_ms, pid);
+    written = snprintf(staging_out, staging_cap, "%s/.%s.__txn__.%" PRIu64 "-%" PRIu64, parent, base, wall_timestamp_ms, pid);
     if (written < 0 || (size_t)written >= staging_cap) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: buffer overflow");
         return ERR_INVALID_PARAM;

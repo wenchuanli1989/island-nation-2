@@ -347,23 +347,30 @@ static bool testDelayBounds(void) {
     domino_timer_id_t timer_ids[3];
     TEST_CHECK(initializeFixture(), "initialize timer with frozen time");
     dominoSetRuntimeDateTimeBase(UINT64_C(2000000000));
-    uint64_t now_ms = dominoTimeGetRuntimeMs();
-    TEST_CHECK(now_ms == UINT64_C(2000), "a frozen two-second baseline equals 2000 accumulated runtime milliseconds");
-    uint32_t overflowing_delay_ms = UINT32_MAX - (uint32_t)now_ms + 1U;
+    domino_runtime_ms_t now_ms;
+    TEST_CHECK(dominoTimeGetRuntimeMs(&now_ms) == CODE_OK && now_ms == UINT32_C(2000),
+               "a frozen two-second baseline equals 2000 accumulated runtime milliseconds");
+    domino_runtime_ms_t overflowing_delay_ms = UINT32_MAX - now_ms + 1U;
     DominoTimer request = {
         .id = 77U, .timer_id = UINT64_MAX, .event_queue_ptr = &g_test_event_queues[0], .due_ms = 99U, .delay_ms = overflowing_delay_ms};
     TEST_CHECK(dominoTimerSchedule(&request) == ERR_OUT_OF_RANGE && request.timer_id == 0U && request.id == 77U && request.due_ms == 99U,
                "overflowing delay clears timer_id while preserving the caller's message ID and deadline");
     TEST_CHECK(request.delay_ms == overflowing_delay_ms, "rejection preserves the requested relative delay");
     uint64_t out_of_range_base_ns = ((uint64_t)UINT32_MAX + 1U) * UINT64_C(1000000);
+    domino_runtime_ms_t boundary_ms = 0U;
+    dominoSetRuntimeDateTimeBase(out_of_range_base_ns - 1U);
+    TEST_CHECK(dominoTimeGetRuntimeMs(&boundary_ms) == CODE_OK && boundary_ms == UINT32_MAX,
+               "the final representable millisecond includes its remaining submillisecond nanoseconds");
     dominoSetRuntimeDateTimeBase(out_of_range_base_ns);
-    TEST_CHECK(dominoTimeGetRuntimeMs() > UINT32_MAX, "frozen accumulated runtime exceeds the 32-bit deadline range");
+    TEST_CHECK(dominoTimeGetRuntimeMs(&boundary_ms) == ERR_OUT_OF_RANGE && boundary_ms == UINT32_MAX,
+               "out-of-range runtime reports failure and preserves the output instead of truncating or wrapping");
+    TEST_CHECK(dominoTimeGetRuntimeMs(nullptr) == ERR_NULL_POINTER, "runtime getter rejects a missing output pointer");
     request.delay_ms = 0U;
     request.timer_id = UINT64_MAX;
     TEST_CHECK(dominoTimerSchedule(&request) == ERR_OUT_OF_RANGE && request.timer_id == 0U && request.id == 77U && request.due_ms == 99U,
                "out-of-range current time rejects even a zero delay without changing the message ID or deadline");
     dominoSetRuntimeDateTimeBase(UINT64_C(2000000000));
-    const uint32_t delays_ms[] = {0U, 350U, UINT32_MAX - (uint32_t)now_ms};
+    const domino_runtime_ms_t delays_ms[] = {0U, 350U, UINT32_MAX - now_ms};
     for (uint32_t i = 0U; i < 3U; ++i) {
         request.delay_ms = delays_ms[i];
         TEST_CHECK(dominoTimerSchedule(&request) == CODE_OK && request.timer_id == i + 1U && request.id == request.timer_id &&
@@ -486,8 +493,9 @@ static bool testDeadlineIncludesQueueDelay(void) {
         .request = {.id = 77U, .timer_id = 88U, .event_queue_ptr = &g_test_event_queues[0], .due_ms = UINT32_MAX, .delay_ms = 75U, .event_type = 3U}};
     TEST_CHECK(initializeFixture(), "initialize timer with frozen time");
     dominoSetRuntimeDateTimeBase(UINT64_C(1000000000));
-    uint64_t original_ms = dominoTimeGetRuntimeMs();
-    TEST_CHECK(original_ms == UINT64_C(1000), "a frozen one-second baseline equals 1000 accumulated runtime milliseconds");
+    domino_runtime_ms_t original_ms;
+    TEST_CHECK(dominoTimeGetRuntimeMs(&original_ms) == CODE_OK && original_ms == UINT32_C(1000),
+               "a frozen one-second baseline equals 1000 accumulated runtime milliseconds");
     checkThreadResult(mtx_lock(&g_domino_timer.request_mutex));
     request_locked = true;
     TEST_CHECK(startScheduleCall(&call) && waitForCommandCount(1U), "request is queued before accumulated runtime advances");
@@ -502,7 +510,9 @@ static bool testDeadlineIncludesQueueDelay(void) {
     const DominoTimer* commands_ptr = g_domino_timer.command_queue.items_ptr;
     DominoTimer command = commands_ptr[g_domino_timer.command_queue.head];
     checkThreadResult(mtx_unlock(&g_domino_timer.command_queue.mutex));
-    TEST_CHECK(command.due_ms == original_ms + 75U && command.due_ms < dominoTimeGetRuntimeMs(),
+    domino_runtime_ms_t now_ms;
+    TEST_CHECK(dominoTimeGetRuntimeMs(&now_ms) == CODE_OK, "read the later 32-bit accumulated runtime");
+    TEST_CHECK(command.due_ms == original_ms + 75U && command.due_ms < now_ms,
                "queued deadline uses Schedule time rather than the later notification completion time");
     TEST_CHECK(call.request.id == call.request.timer_id && call.request.id != 77U && call.request.timer_id != 88U &&
                    call.request.event_queue_ptr == &g_test_event_queues[0] && call.request.due_ms == original_ms + 75U &&

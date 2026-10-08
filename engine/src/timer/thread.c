@@ -6,6 +6,17 @@
 
 #define DOMINO_TIMER_BATCH_SIZE 64U
 
+/** @brief 后台业务时钟越界时记录错误并终止；不能截断、回绕或扩宽业务时间后继续处理。 */
+static inline domino_runtime_ms_t readRuntimeMs(void) {
+    domino_runtime_ms_t now_ms;
+    DOMINO_CODE code = dominoTimeGetRuntimeMs(&now_ms);
+    if (code != CODE_OK) {
+        (void)fprintf(stderr, "domino timer: runtime exceeds the 32-bit millisecond range (%d)\n", code);
+        abort();
+    }
+    return now_ms;
+}
+
 /**
  * @brief 整批命令的出队与入堆共用一次请求锁，取消查找不会漏掉转移中的请求。
  * @return 实际出队的命令数量，包括取消项；最多 64 条。后台入堆失败时立即终止程序。
@@ -41,7 +52,7 @@ static uint32_t processCommandBatch(void) {
  */
 static bool processHeapBatch(void) {
     checkThreadResult(mtx_lock(&g_domino_timer.request_mutex));
-    uint64_t now_ms = dominoTimeGetRuntimeMs();
+    domino_runtime_ms_t now_ms = readRuntimeMs();
     uint32_t work_count = 0U;
     while (work_count < DOMINO_TIMER_BATCH_SIZE) {
         const DominoTimer* timer_ptr = dominoTimerHeapPeek(&g_domino_timer.heap);
@@ -73,18 +84,18 @@ static bool processHeapBatch(void) {
     return work_count == DOMINO_TIMER_BATCH_SIZE;
 }
 
-static inline struct timespec getWaitDeadline(uint64_t delta_ms) {
+static inline struct timespec getWaitDeadline(domino_runtime_ms_t delta_ms) {
     struct timespec deadline;
     // 标准 cnd_timedwait 使用 TIME_UTC；唤醒后仍按累计未冻结的现实时间判定到期。
     if (timespec_get(&deadline, TIME_UTC) != TIME_UTC) {
         (void)fprintf(stderr, "domino timer: failed to read UTC clock\n");
         abort();
     }
-    uint64_t seconds = delta_ms / UINT64_C(1000);
-    uint64_t nanoseconds = (delta_ms % UINT64_C(1000)) * UINT64_C(1000000);
-    nanoseconds += (uint64_t)deadline.tv_nsec;
-    deadline.tv_sec += (time_t)(seconds + nanoseconds / UINT64_C(1000000000));
-    deadline.tv_nsec = (long)(nanoseconds % UINT64_C(1000000000));
+    uint32_t wait_s = delta_ms / UINT32_C(1000);
+    uint32_t wait_ns = (delta_ms % UINT32_C(1000)) * UINT32_C(1000000);
+    wait_ns += (uint32_t)deadline.tv_nsec;
+    deadline.tv_sec += (time_t)(wait_s + wait_ns / UINT32_C(1000000000));
+    deadline.tv_nsec = (long)(wait_ns % UINT32_C(1000000000));
     return deadline;
 }
 
@@ -103,7 +114,7 @@ static void waitForWork(void) {
             checkThreadResult(mtx_unlock(&g_domino_timer.request_mutex));
             return;
         }
-        uint64_t now_ms = dominoTimeGetRuntimeMs();
+        domino_runtime_ms_t now_ms = readRuntimeMs();
         if (timer_ptr->due_ms <= now_ms) {
             checkThreadResult(mtx_unlock(&g_domino_timer.request_mutex));
             return;

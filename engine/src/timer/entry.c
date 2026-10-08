@@ -83,12 +83,16 @@ __attribute__((hot)) DOMINO_CODE dominoTimerSchedule(DominoTimer* timer_ptr) {
     if (timer_ptr->event_queue_ptr->item_size != sizeof(DominoTimer)) {
         return ERR_INVALID_PARAM;
     }
-    uint64_t now_ms = dominoTimeGetRuntimeMs();
-    if (now_ms > UINT32_MAX || timer_ptr->delay_ms > UINT32_MAX - now_ms) {
+    domino_runtime_ms_t now_ms;
+    DOMINO_CODE code = dominoTimeGetRuntimeMs(&now_ms);
+    if (code != CODE_OK) {
+        return code;
+    }
+    if (timer_ptr->delay_ms > UINT32_MAX - now_ms) {
         return ERR_OUT_OF_RANGE;
     }
-    timer_ptr->due_ms = (uint32_t)now_ms + timer_ptr->delay_ms;
-    DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_timer.command_queue, timer_ptr, false);
+    timer_ptr->due_ms = now_ms + timer_ptr->delay_ms;
+    code = dominoThreadQueueProduce(&g_domino_timer.command_queue, timer_ptr, false);
     if (code == CODE_OK) {
         timer_ptr->timer_id = timer_ptr->id;
         notifyTimerThread();

@@ -19,11 +19,18 @@ typedef uint32_t domino_description_id_t;
 typedef char domino_name_t[COMMON_NAME_LENGTH];
 typedef char domino_description_t[COMMON_DESCRIPTION_LENGTH];
 
+/**
+ * @brief 业务时刻和时长统一使用 32 位累计未冻结现实毫秒；0 和 UINT32_MAX 均为合法值。
+ * @note 固定使用 uint32_t，不扩宽为 64 位；加法先检查范围，减法先检查先后关系，不回绕或重置累计时钟。
+ *       time 内部的纳秒采样、UTC 墙上时间及消息 ID 的位宽不改变此业务约定。
+ */
+typedef uint32_t domino_runtime_ms_t;
+
 /** @brief 计划使用的游戏日内时间槽，范围 0-1439；当前尚未接入日历换算。 */
 typedef uint16_t domino_game_time_t;
 /** @brief 游戏日历日序号，预留。 */
 typedef uint16_t domino_game_date_t;
-/** @brief 计划使用的累积模拟秒，纪元为 0；当前 time 模块输出纳秒。 */
+/** @brief 旧模型预留的累计模拟秒；未接入 time，业务计时使用 domino_runtime_ms_t。 */
 typedef uint32_t domino_game_date_time_t;
 
 /* 实体 ID 在宿主世界内使用；哈希表将 ID 映射到扁平数组下标。 */

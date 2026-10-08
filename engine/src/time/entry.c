@@ -6,6 +6,7 @@
 #include "../entry.h"
 #include "domino_shared_common.h"
 
+/** @brief 底层以 64 位纳秒保留采样精度；业务时刻和时长始终使用 domino_runtime_ms_t。 */
 typedef struct DominoTimeSnapshot {
     uint64_t session_start_monotonic_ns;
     uint64_t runtime_datetime_base_ns;
@@ -162,6 +163,15 @@ __attribute__((hot)) uint64_t dominoTimeModuleGetDateTimeNow(void) {
     }
 }
 
-__attribute__((hot)) uint64_t dominoTimeGetRuntimeMs(void) {
-    return dominoTimeModuleGetDateTimeNow() / UINT64_C(1000000);
+__attribute__((hot)) DOMINO_CODE dominoTimeGetRuntimeMs(domino_runtime_ms_t* runtime_ms_ptr) {
+    if (runtime_ms_ptr == nullptr) {
+        return ERR_NULL_POINTER;
+    }
+    uint64_t runtime_ns = dominoTimeModuleGetDateTimeNow();
+    // 先在纳秒来源上检查完整毫秒范围，包含 UINT32_MAX 毫秒内的亚毫秒部分。
+    if (runtime_ns >= (UINT64_C(1) + UINT32_MAX) * UINT64_C(1000000)) {
+        return ERR_OUT_OF_RANGE;
+    }
+    *runtime_ms_ptr = (domino_runtime_ms_t)(runtime_ns / UINT64_C(1000000));
+    return CODE_OK;
 }

@@ -35,13 +35,13 @@ DOMINO_CODE dominoAtomicWriteFile(const char* path, const void* data, size_t len
         return ERR_INVALID_PARAM;
     }
     uint64_t pid = dominoGetPid();
-    uint64_t timestamp_ms = dominoWallTimeMs();
+    uint64_t wall_timestamp_ms = dominoWallTimeMs();  // UTC 时间戳仅用于文件命名，不是业务累计时钟。
 
     size_t path_len = strlen(path);
     size_t tmp_cap = path_len + 64U + 1U;
     char tmp_path[tmp_cap];
 
-    int written = snprintf(tmp_path, tmp_cap, "%s.tmp-%" PRIu64 "-%" PRIu64, path, timestamp_ms, pid);
+    int written = snprintf(tmp_path, tmp_cap, "%s.tmp-%" PRIu64 "-%" PRIu64, path, wall_timestamp_ms, pid);
     if (written < 0 || (size_t)written >= tmp_cap) {
         return ERR_UNKNOWN;
     }

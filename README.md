@@ -32,7 +32,7 @@ logger -> common -> host -> nav(before) -> social -> human -> storage(load) -> t
 - 每次 `dominoEngineInit()` 都先建立空世界基线，再从当前 `storage_path` 覆盖加载；同一进程切换存档路径时，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
-`dominoEngineRun()` 会启动消息消费主循环和 human 行为规划工作线程；time 模块基于单调时钟维护游戏时间。
+`dominoEngineRun()` 会启动消息消费主循环和 human 行为规划工作线程；time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围并返回错误码。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
 `dominoEngineExit()` 会停止工作线程、冻结并结算时间、准备 nav 派生状态，再事务式保存存档，最后按依赖逆序释放 human、social、nav、host、common、logger。任一退出阶段失败时引擎保持 `STOPPING`；保存失败不会释放内存世界，处理外部 IO 问题后再次调用 `dominoEngineExit()` 会从未完成阶段继续。`STOPPING` 期间不允许调用其他 public API。
 
