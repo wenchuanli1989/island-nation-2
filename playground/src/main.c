@@ -17,7 +17,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     char runtime_sandbox_path[1024] = {0};
-    (void)snprintf(runtime_sandbox_path, sizeof(runtime_sandbox_path), "%s/runtime/sandbox", cwd);
+    int path_len = snprintf(runtime_sandbox_path, sizeof(runtime_sandbox_path), "%s/runtime/sandbox", cwd);
+    if (path_len < 0 || (size_t)path_len >= sizeof(runtime_sandbox_path)) {
+        (void)fprintf(stderr, "沙盒目录路径过长\n");
+        return 1;
+    }
     printf("沙盒目录路径: %s\n", runtime_sandbox_path);
     DOMINO_CODE init_rc = dominoEngineInit((DominoEngineLaunchConfig){
         .storage_path = runtime_sandbox_path,

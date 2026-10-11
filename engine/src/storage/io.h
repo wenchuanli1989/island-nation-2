@@ -13,8 +13,9 @@
  * @brief 构建指定类型、指定分片的 JSON 文件路径。
  *
  * regions 是固定单文件 `regions.json`；其他模块使用稳定 type_name 作为文件名前缀。
+ * @return 成功返回 CODE_OK，路径超出缓冲区时返回 ERR_OUT_OF_RANGE。
  */
-void storageBuildShardPath(char* buffer, size_t buffer_size, const char* save_path, const char* type_name, uint32_t shard_id);
+DOMINO_CODE storageBuildShardPath(char* buffer, size_t buffer_size, const char* save_path, const char* type_name, uint32_t shard_id);
 
 /** @brief 计算 Castagnoli CRC32C，用于存档完整性校验。 */
 uint32_t storageCrc32c(const void* data, size_t len);

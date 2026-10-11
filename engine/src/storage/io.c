@@ -6,12 +6,17 @@
 #include "entry.h"
 #include "sub_module.h"
 
-void storageBuildShardPath(char* buffer, size_t buffer_size, const char* save_path, const char* type_name, uint32_t shard_id) {
+DOMINO_CODE storageBuildShardPath(char* buffer, size_t buffer_size, const char* save_path, const char* type_name, uint32_t shard_id) {
+    int written;
     if (strcmp(type_name, "regions") == 0) {
-        (void)snprintf(buffer, buffer_size, "%s/regions.json", save_path);
+        written = snprintf(buffer, buffer_size, "%s/regions.json", save_path);
     } else {
-        (void)snprintf(buffer, buffer_size, "%s/%s_%u.json", save_path, type_name, shard_id);
+        written = snprintf(buffer, buffer_size, "%s/%s_%u.json", save_path, type_name, shard_id);
     }
+    if (written < 0 || (size_t)written >= buffer_size) {
+        return ERR_OUT_OF_RANGE;
+    }
+    return CODE_OK;
 }
 
 uint32_t storageCrc32c(const void* data, size_t len) {
@@ -122,11 +127,14 @@ DOMINO_CODE storageWriteShardFile(const char* type_name, uint32_t shard_id, cons
         return ERR_INVALID_PARAM;
     }
     char path[DOMINO_STORAGE_PATH_MAX];
-    storageBuildShardPath(path, sizeof(path), save_path, type_name, shard_id);
+    DOMINO_CODE result = storageBuildShardPath(path, sizeof(path), save_path, type_name, shard_id);
+    if (result != CODE_OK) {
+        return result;
+    }
     uint32_t crc = 0;
     uint32_t size = 0;
     bool do_verify = storageSubModuleIntegrityVerify();
-    DOMINO_CODE result = storageWriteJsonFile(path, doc, do_verify, &crc, &size);
+    result = storageWriteJsonFile(path, doc, do_verify, &crc, &size);
     if (result != CODE_OK) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "write shard file failed: %s", dominoErrorCodeToString(result));
         return result;
@@ -152,9 +160,11 @@ yyjson_doc* storageReadShardFile(const char* type_name, uint32_t shard_id, const
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid type_name, save_path or result");
         return nullptr;
     }
-    *result = CODE_OK;
     char path[DOMINO_STORAGE_PATH_MAX];
-    storageBuildShardPath(path, sizeof(path), save_path, type_name, shard_id);
+    *result = storageBuildShardPath(path, sizeof(path), save_path, type_name, shard_id);
+    if (*result != CODE_OK) {
+        return nullptr;
+    }
 
     bool do_verify = storageSubModuleIntegrityVerify();
     uint32_t expect_crc32c = 0;

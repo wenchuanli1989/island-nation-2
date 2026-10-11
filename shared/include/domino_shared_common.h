@@ -71,7 +71,7 @@ uint8_t* dominoReadFileBytes(const char* path, size_t* length, DOMINO_CODE* resu
 int dominoAtomicWriteFile(const char* path, const void* data, size_t len);
 
 /**
- * @brief 将路径拆分为 parent/base 两部分（兼容 '/' 与 '\\'；会忽略末尾分隔符）。
+ * @brief 按 POSIX 分隔符 '/' 将路径拆分为 parent/base 两部分，忽略末尾分隔符。
  * @param path 输入路径。
  * @param parent 输出父目录缓冲区。
  * @param parent_cap parent 缓冲区容量（包含 '\0'）。

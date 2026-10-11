@@ -23,8 +23,12 @@
 
 #define STORAGE_META_FILE_NAME_MAX 64
 
-static void buildDefaultMetaFileName(char* out, size_t out_size, const char* type_name) {
-    (void)snprintf(out, out_size, "%s.meta.json", type_name);
+static DOMINO_CODE buildDefaultMetaFileName(char* out, size_t out_size, const char* type_name) {
+    int written = snprintf(out, out_size, "%s.meta.json", type_name);
+    if (written < 0 || (size_t)written >= out_size) {
+        return ERR_OUT_OF_RANGE;
+    }
+    return CODE_OK;
 }
 
 /** @brief 写模块 meta 并登记摘要，根 meta 通过 type_name 引用模块文件。 */
@@ -32,7 +36,10 @@ static DOMINO_CODE writeOneModuleMetaFile(const char* save_path, const StorageMo
                                           uint32_t total_count, uint32_t shard_count) {
     const char* type_name = module_type->type_name;
     char path[DOMINO_STORAGE_PATH_MAX];
-    (void)snprintf(path, sizeof(path), "%s/%s", save_path, meta_file_name);
+    int written = snprintf(path, sizeof(path), "%s/%s", save_path, meta_file_name);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        return ERR_OUT_OF_RANGE;
+    }
     bool do_verify = storageSubModuleIntegrityVerify();
 
     yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
@@ -153,7 +160,10 @@ DOMINO_CODE saveAllShards(const char* save_path) {
 
 DOMINO_CODE metaSave(const char* save_path) {
     char path[DOMINO_STORAGE_PATH_MAX];
-    (void)snprintf(path, sizeof(path), "%s/meta.json", save_path);
+    int written = snprintf(path, sizeof(path), "%s/meta.json", save_path);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        return ERR_OUT_OF_RANGE;
+    }
 
     bool do_verify = storageSubModuleIntegrityVerify();
     for (size_t i = 0; i < g_storage_module_type_count; i++) {
@@ -161,8 +171,11 @@ DOMINO_CODE metaSave(const char* save_path) {
         uint32_t total_count = (uint32_t)module_type->count_fn();
         uint32_t shard_count = storageModuleShardCount(module_type, total_count);
         char meta_file_name[STORAGE_META_FILE_NAME_MAX];
-        buildDefaultMetaFileName(meta_file_name, sizeof(meta_file_name), module_type->type_name);
-        DOMINO_CODE result = writeOneModuleMetaFile(save_path, module_type, meta_file_name, total_count, shard_count);
+        DOMINO_CODE result = buildDefaultMetaFileName(meta_file_name, sizeof(meta_file_name), module_type->type_name);
+        if (result != CODE_OK) {
+            return result;
+        }
+        result = writeOneModuleMetaFile(save_path, module_type, meta_file_name, total_count, shard_count);
         if (result != CODE_OK) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "write %s meta failed", module_type->type_name);
             return result;
@@ -237,9 +250,15 @@ static DOMINO_CODE loadSubModuleMeta(yyjson_val* sub_module, const StorageModule
         meta_size = (uint32_t)yyjson_get_uint(size_val);
     }
     char meta_file_name[STORAGE_META_FILE_NAME_MAX];
-    buildDefaultMetaFileName(meta_file_name, sizeof(meta_file_name), type_name);
+    result = buildDefaultMetaFileName(meta_file_name, sizeof(meta_file_name), type_name);
+    if (result != CODE_OK) {
+        return result;
+    }
     char module_meta_path[DOMINO_STORAGE_PATH_MAX];
-    (void)snprintf(module_meta_path, sizeof(module_meta_path), "%s/%s", g_domino_engine_launch_config.storage_path, meta_file_name);
+    int written = snprintf(module_meta_path, sizeof(module_meta_path), "%s/%s", g_domino_engine_launch_config.storage_path, meta_file_name);
+    if (written < 0 || (size_t)written >= sizeof(module_meta_path)) {
+        return ERR_OUT_OF_RANGE;
+    }
     yyjson_doc* doc = storageReadJsonFile(module_meta_path, do_verify, meta_crc32c, meta_size, &result);
     if (result != CODE_OK) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to read sub_module meta file: %s", module_meta_path);
@@ -403,7 +422,11 @@ yyjson_doc* metaLoad(DOMINO_CODE* result) {
 
     const char* save_path = g_domino_engine_launch_config.storage_path;
     char path[DOMINO_STORAGE_PATH_MAX];
-    (void)snprintf(path, sizeof(path), "%s/meta.json", save_path);
+    int written = snprintf(path, sizeof(path), "%s/meta.json", save_path);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        *result = ERR_OUT_OF_RANGE;
+        return nullptr;
+    }
 
     struct stat meta_stat;
     if (lstat(path, &meta_stat) != 0) {

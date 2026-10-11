@@ -80,7 +80,7 @@ DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t par
         return ERR_INVALID_PARAM;
     }
 
-    while (len > 0U && (path[len - 1U] == '/' || path[len - 1U] == '\\')) {
+    while (len > 0U && path[len - 1U] == '/') {
         len--;
     }
     if (len == 0U) {
@@ -90,7 +90,7 @@ DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t par
     size_t sep_index = len;
     for (size_t i = len; i > 0U; i--) {
         char chr = path[i - 1U];
-        if (chr == '/' || chr == '\\') {
+        if (chr == '/') {
             sep_index = i - 1U;
             break;
         }

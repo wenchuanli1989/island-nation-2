@@ -21,7 +21,10 @@ typedef struct DominoEngineMessage {
 static_assert(sizeof(DominoEngineMessage) == 64U, "engine message must be 64 bytes");
 
 typedef struct DominoEngineLaunchConfig {
-    /** @brief 必填存档目录；初始化时复制路径，缺少 meta.json 时创建空世界。 */
+    /**
+     * @brief 必填存档目录；初始化时复制路径并移除末尾 '/'，不接受根目录或末级目录名为 .、.. 的路径。
+     * 仅根 meta.json 不存在时创建空世界；查询、读取或解析失败均返回错误。
+     */
     const char* storage_path;
 
     /**

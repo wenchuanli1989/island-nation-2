@@ -65,9 +65,12 @@ static DOMINO_CODE txnFlushDirectory(const char* directory_path) {
 
 static DOMINO_CODE txnFlushSaveParent(const char* save_path) {
     char parent[DOMINO_STORAGE_PATH_MAX];
-    char base[512];
+    char base[DOMINO_STORAGE_PATH_MAX];
     DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
-    if (result != CODE_OK || base[0] == '\0') {
+    if (result != CODE_OK) {
+        return result;
+    }
+    if (base[0] == '\0') {
         return ERR_INVALID_PARAM;
     }
     return txnFlushDirectory(parent);
@@ -87,9 +90,12 @@ static DOMINO_CODE txnRollbackBackup(const char* backup_path, const char* save_p
 
 DOMINO_CODE txnPrepareSaveParent(const char* save_path) {
     char parent[DOMINO_STORAGE_PATH_MAX];
-    char base[512];
+    char base[DOMINO_STORAGE_PATH_MAX];
     DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
-    if (result != CODE_OK || base[0] == '\0') {
+    if (result != CODE_OK) {
+        return result;
+    }
+    if (base[0] == '\0') {
         return ERR_INVALID_PARAM;
     }
     return dominoMkdirRecursive(parent);
@@ -98,10 +104,11 @@ DOMINO_CODE txnPrepareSaveParent(const char* save_path) {
 /* staging 与正式目录位于同一父目录，提交依赖 rename 与父目录 fsync。 */
 DOMINO_CODE txnBuildStagingPath(const char* save_path, char* staging_out, size_t staging_cap) {
     char parent[DOMINO_STORAGE_PATH_MAX];
-    char base[512];
-    if (dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base)) != CODE_OK) {
+    char base[DOMINO_STORAGE_PATH_MAX];
+    DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
+    if (result != CODE_OK) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: ");
-        return ERR_INVALID_PARAM;
+        return result;
     }
     if (base[0] == '\0') {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: base is empty");
@@ -113,7 +120,7 @@ DOMINO_CODE txnBuildStagingPath(const char* save_path, char* staging_out, size_t
     written = snprintf(staging_out, staging_cap, "%s/.%s.__txn__.%" PRIu64 "-%" PRIu64, parent, base, wall_timestamp_ms, pid);
     if (written < 0 || (size_t)written >= staging_cap) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: buffer overflow");
-        return ERR_INVALID_PARAM;
+        return ERR_OUT_OF_RANGE;
     }
     return CODE_OK;
 }

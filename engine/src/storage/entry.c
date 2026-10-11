@@ -77,7 +77,6 @@ DOMINO_CODE dominoStorageModuleExit(void) {
     result = txnBuildStagingPath(save_path, staging_path, sizeof(staging_path));
     if (result != CODE_OK) {
         DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn staging path build failed");
-        result = ERR_INVALID_PARAM;
         goto cleanup;
     }
 

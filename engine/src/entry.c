@@ -147,12 +147,29 @@ DOMINO_CODE dominoEngineInit(DominoEngineLaunchConfig launch_config) {
         return ERR_INVALID_PARAM;
     }
     size_t storage_path_len = strlen(launch_config.storage_path);
+    while (storage_path_len > 0U && launch_config.storage_path[storage_path_len - 1U] == '/') {
+        storage_path_len--;
+    }
+    if (storage_path_len == 0U) {
+        return ERR_INVALID_PARAM;
+    }
     if (storage_path_len >= sizeof(g_domino_storage_path)) {
         return ERR_OUT_OF_RANGE;
     }
+    /* 事务保存会重命名整个目录，末级必须是具体目录名。 */
+    size_t base_index = storage_path_len;
+    while (base_index > 0U && launch_config.storage_path[base_index - 1U] != '/') {
+        base_index--;
+    }
+    size_t base_len = storage_path_len - base_index;
+    if ((base_len == 1U && launch_config.storage_path[base_index] == '.') ||
+        (base_len == 2U && launch_config.storage_path[base_index] == '.' && launch_config.storage_path[base_index + 1U] == '.')) {
+        return ERR_INVALID_PARAM;
+    }
 
     g_domino_engine_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_INITIALIZING;
-    memcpy(g_domino_storage_path, launch_config.storage_path, storage_path_len + 1U);
+    memcpy(g_domino_storage_path, launch_config.storage_path, storage_path_len);
+    g_domino_storage_path[storage_path_len] = '\0';
     g_domino_engine_launch_config = launch_config;
     g_domino_engine_launch_config.storage_path = g_domino_storage_path;
     memset(g_domino_storage_account_id, 0, sizeof(g_domino_storage_account_id));

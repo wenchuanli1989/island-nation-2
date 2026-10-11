@@ -52,7 +52,7 @@
 1. `storage_path` 为空时返回 `ERR_INVALID_PARAM`；当前 `dominoEngineExit()` 会先检查路径，空路径时直接跳过保存，不调用该入口。
 2. `txnRecoverSave()` 在读取 meta 前收敛 active 与 `.prev` 的事务状态，避免提交中途崩溃被误判成新世界。
 3. `storageSubModuleReset()` 清空上一次加载/保存留下的模块记录。
-4. `metaLoad()` 读取根 `meta.json`。仅目录项查询返回 `ENOENT` 时返回 `ERR_FILE_NOT_FOUND`，入口将其视为新存档并返回 `CODE_OK`；权限、IO 及实际读取失败均向上传播，悬空符号链接也不会按新世界启动。
+4. `metaLoad()` 读取根 `meta.json`。仅目录项查询返回 `ENOENT` 时返回 `ERR_FILE_NOT_FOUND`，入口将其视为新存档并返回 `CODE_OK`；权限、IO、路径过长及实际读取失败均向上传播，悬空符号链接也不会按新世界启动。
 5. `metaLoad()` 校验根对象、`version`、`info`、`runtime_option`、`runtime_data.game_date_time_ns`、`runtime_data.global_increment_id` 与 `sub_module`，并恢复 `account_id`、`run_mode`、累计未冻结现实纳秒基准与全局自增 ID。
 6. 加载流程使用根 `meta.json.integrity_verify` 作为该存档的校验策略；运行时配置只决定下一次保存策略。
 7. `loadAllSubModule()` 先按 `g_storage_module_types[]` 加载所有模块 meta，建立内存中的模块 meta 表与分片摘要表。
