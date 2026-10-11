@@ -1,10 +1,14 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "meta.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "../entry.h"
 #include "../host/entry.h"
@@ -401,9 +405,11 @@ yyjson_doc* metaLoad(DOMINO_CODE* result) {
     char path[DOMINO_STORAGE_PATH_MAX];
     (void)snprintf(path, sizeof(path), "%s/meta.json", save_path);
 
-    if (!dominoPathExists(path, false)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "meta.json not found: %s", path);
-        *result = ERR_FILE_NOT_FOUND;
+    struct stat meta_stat;
+    if (lstat(path, &meta_stat) != 0) {
+        *result = errno == ENOENT ? ERR_FILE_NOT_FOUND : ERR_FILE_READ;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to inspect meta.json: %s (result=%s)", path,
+                          dominoErrorCodeToString(*result));
         return nullptr;
     }
 
