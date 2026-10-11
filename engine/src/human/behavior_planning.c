@@ -29,7 +29,7 @@ int dominoHumanBehaviorPlanningThread(void* arg_ptr) {
 
         for (size_t i = 0; i < kv_size(domino_all_human_list); i++) {
             DominoHuman* human = &kv_A(domino_all_human_list, i);
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG, "human id=%u thinking...", human->id);
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG, "human id=%u thinking...", human->human_id);
         }
     }
 

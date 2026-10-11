@@ -132,6 +132,9 @@ DOMINO_CODE storageSubModuleShardAdd(StorageSubModuleShard shard) {
         return ERR_ALREADY_EXISTS;
     }
     if (g_storage_sub_module_shards_len == g_storage_sub_module_shards_cap) {
+        if (g_storage_sub_module_shards_cap > SIZE_MAX / 2U / sizeof(StorageSubModuleShard)) {
+            return ERR_OUT_OF_RANGE;
+        }
         size_t new_cap =
             g_storage_sub_module_shards_cap == 0 ? (size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT : g_storage_sub_module_shards_cap * 2;
         StorageSubModuleShard* new_ptr = (StorageSubModuleShard*)realloc(g_storage_sub_module_shards, new_cap * sizeof(StorageSubModuleShard));

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 12,
   "integrity_verify": false,
   "info": {
     "account_id": "sandbox-account"
@@ -11,11 +11,12 @@
     "game_date_time_ns": 0,
     "global_increment_id": {
       "human": 2,
+      "task": 0,
       "org": 0,
       "country": 0,
       "city": 0,
       "island": 0,
-      "building": 0,
+      "building": 1,
       "fork_road": 0,
       "road_line": 0,
       "asset": 0,
@@ -26,14 +27,18 @@
   },
   "sub_module": {
     "regions": {
-      "meta_file": "regions.meta.json",
-      "shard_prefix": "regions",
+      "crc32c": 0,
+      "size": 0
+    },
+    "building": {
       "crc32c": 0,
       "size": 0
     },
     "human": {
-      "meta_file": "human.meta.json",
-      "shard_prefix": "human",
+      "crc32c": 0,
+      "size": 0
+    },
+    "human_ai": {
       "crc32c": 0,
       "size": 0
     }

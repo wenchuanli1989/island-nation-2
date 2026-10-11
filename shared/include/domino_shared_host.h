@@ -27,8 +27,9 @@ typedef uint8_t domino_space_id_t;
 typedef uint8_t domino_space_area_id_t;
 
 typedef struct {
-    /* 计数器随根 meta 持久化，0 不作为实体 ID；独立对齐以减少不同计数器间的伪共享。 */
+    /* 计数器保存下一候选 ID，随根 meta 持久化；允许回绕，分配时跳过 0。独立对齐以减少伪共享。 */
     alignas(128) _Atomic domino_human_id_t human_increment_id;
+    alignas(128) _Atomic domino_task_id_t task_increment_id;
     alignas(128) _Atomic domino_org_id_t org_increment_id;
     alignas(128) _Atomic domino_country_id_t country_increment_id;
     alignas(128) _Atomic domino_city_id_t city_increment_id;

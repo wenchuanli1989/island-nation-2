@@ -47,8 +47,7 @@ static domino_road_id_t buildRoadIdForTest(domino_fork_road_id_t start_id, domin
     return ((domino_road_id_t)start_id << 32U) | (domino_road_id_t)target_id;
 }
 
-static const DominoNavDataSegment* findDataSegmentForTest(const DominoNavDataSegmentVec* segment_list, uint8_t region_index,
-                                                          uint8_t network_type) {
+static const DominoNavDataSegment* findDataSegmentForTest(const DominoNavDataSegmentVec* segment_list, uint8_t region_index, uint8_t network_type) {
     for (size_t segment_index = 0U; segment_index < kv_size(*segment_list); segment_index++) {
         const DominoNavDataSegment* segment = &kv_A(*segment_list, segment_index);
         if (segment->region_index == region_index && segment->road_network_type == network_type) {
@@ -137,8 +136,7 @@ int main(void) {
     TEST_CHECK(runtime_fork_segment != nullptr && runtime_fork_segment->init_index == 0U && runtime_fork_segment->init_count == 0U &&
                    runtime_fork_segment->increment_index == 0U && runtime_fork_segment->total_count == 1202U,
                "new world keeps fork roads in an increment tail until save");
-    const DominoNavDataSegment* runtime_road_segment =
-        findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 0U, ROAD_NETWORK_TYPE_ROAD);
+    const DominoNavDataSegment* runtime_road_segment = findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 0U, ROAD_NETWORK_TYPE_ROAD);
     TEST_CHECK(runtime_road_segment != nullptr && runtime_road_segment->init_index == 0U && runtime_road_segment->init_count == 0U &&
                    runtime_road_segment->increment_index == 0U && runtime_road_segment->total_count == 601U,
                "new world keeps roads in an increment tail until save");
@@ -150,7 +148,7 @@ int main(void) {
 
     static char meta_buffer[TEST_META_BUFFER_SIZE];
     TEST_CHECK(readTextFile(root_meta_path, meta_buffer, sizeof(meta_buffer)), "read generated root meta.json");
-    TEST_CHECK(strstr(meta_buffer, "\"version\":5") != nullptr, "write storage format version 5");
+    TEST_CHECK(strstr(meta_buffer, "\"version\":12") != nullptr, "write storage format version 12");
     TEST_CHECK(strstr(meta_buffer, "meta_file") == nullptr && strstr(meta_buffer, "shard_prefix") == nullptr,
                "manifest must not persist derived file names");
     TEST_CHECK(readTextFile(fork_road_meta_path, meta_buffer, sizeof(meta_buffer)), "read generated fork road meta");
@@ -193,8 +191,7 @@ int main(void) {
     TEST_CHECK(kv_size(domino_all_road_nav_data_segment_list) == 1U, "restore road data segment from module meta");
     const DominoNavDataSegment* road_segment = &kv_A(domino_all_road_nav_data_segment_list, 0U);
     TEST_CHECK(road_segment->init_index == 0U && road_segment->init_count == 601U && road_segment->increment_index == 601U &&
-                   road_segment->total_count == 601U && road_segment->region_index == 0U &&
-                   road_segment->road_network_type == ROAD_NETWORK_TYPE_ROAD,
+                   road_segment->total_count == 601U && road_segment->region_index == 0U && road_segment->road_network_type == ROAD_NETWORK_TYPE_ROAD,
                "restored road data segment must match persisted canonical layout");
     TEST_CHECK(loaded_start->to_fork_road_count == 1U && loaded_start->to_fork_road_id[0] == target.id,
                "rebuild adjacency from canonical road data after load");
@@ -210,8 +207,7 @@ int main(void) {
     DominoForkRoad tail_b2_target = {.position_x = 403, .position_y = 404};
     TEST_CHECK(dominoAddRoad(&tail_a1_start, &tail_a1_target, 5U, 0U, ROAD_NETWORK_TYPE_ROAD) == CODE_OK,
                "append first delta road to persisted group");
-    TEST_CHECK(dominoAddRoad(&tail_b1_start, &tail_b1_target, 5U, 1U, ROAD_NETWORK_TYPE_RAILWAY) == CODE_OK,
-               "append first runtime-only group");
+    TEST_CHECK(dominoAddRoad(&tail_b1_start, &tail_b1_target, 5U, 1U, ROAD_NETWORK_TYPE_RAILWAY) == CODE_OK, "append first runtime-only group");
     TEST_CHECK(dominoAddRoad(&tail_a2_start, &tail_a2_target, 5U, 0U, ROAD_NETWORK_TYPE_ROAD) == CODE_OK,
                "interleave persisted-group delta after runtime-only group");
     TEST_CHECK(dominoAddRoad(&tail_b2_start, &tail_b2_target, 5U, 1U, ROAD_NETWORK_TYPE_RAILWAY) == CODE_OK,
@@ -227,8 +223,7 @@ int main(void) {
                "persisted road base remains fixed while its delta count grows");
     const DominoNavDataSegment* railway_fork_segment =
         findDataSegmentForTest(&domino_all_fork_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
-    const DominoNavDataSegment* railway_road_segment =
-        findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
+    const DominoNavDataSegment* railway_road_segment = findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
     TEST_CHECK(railway_fork_segment != nullptr && railway_fork_segment->init_index == 0U && railway_fork_segment->init_count == 0U &&
                    railway_fork_segment->increment_index == 1204U && railway_fork_segment->total_count == 4U,
                "runtime-only fork group records its first tail index");
@@ -237,10 +232,8 @@ int main(void) {
                "runtime-only road group records its own first tail index");
     TEST_CHECK(dominoGetForkRoadByID(start.id) == &kv_A(domino_all_fork_road_list, loaded_start_index),
                "interleaved additions do not reorder the persisted base");
-    TEST_CHECK(kv_A(domino_all_fork_road_list, 1202U).id == tail_a1_start.id &&
-                   kv_A(domino_all_fork_road_list, 1204U).id == tail_b1_start.id &&
-                   kv_A(domino_all_fork_road_list, 1206U).id == tail_a2_start.id &&
-                   kv_A(domino_all_fork_road_list, 1208U).id == tail_b2_start.id,
+    TEST_CHECK(kv_A(domino_all_fork_road_list, 1202U).id == tail_a1_start.id && kv_A(domino_all_fork_road_list, 1204U).id == tail_b1_start.id &&
+                   kv_A(domino_all_fork_road_list, 1206U).id == tail_a2_start.id && kv_A(domino_all_fork_road_list, 1208U).id == tail_b2_start.id,
                "fork entities preserve interleaved append order");
 
     TEST_CHECK(dominoNavPathPlanning(1U, ROAD_NETWORK_TYPE_RAILWAY, nullptr) == CODE_OK,
@@ -263,16 +256,14 @@ int main(void) {
         .type = ROAD_NETWORK_TYPE_RAILWAY,
         .region_index = 1U,
     };
-    TEST_CHECK(dominoNavigation(&tail_b1_line) == CODE_OK && tail_b1_line.remaining_distance == 5U &&
-                   dominoNavigation(&tail_b2_line) == CODE_OK && tail_b2_line.remaining_distance == 5U,
+    TEST_CHECK(dominoNavigation(&tail_b1_line) == CODE_OK && tail_b1_line.remaining_distance == 5U && dominoNavigation(&tail_b2_line) == CODE_OK &&
+                   tail_b2_line.remaining_distance == 5U,
                "runtime-only cache routes both disjoint roads selected from the interleaved tail");
     TEST_CHECK(dominoGetForkRoadByID(start.id) == &kv_A(domino_all_fork_road_list, loaded_start_index),
                "path planning does not reorder the long-lived base and tail");
     TEST_CHECK(railway_road_segment != nullptr && railway_road_segment->init_count == 0U && railway_road_segment->increment_index == 602U &&
-                   kv_A(domino_all_fork_road_list, 1202U).id == tail_a1_start.id &&
-                   kv_A(domino_all_fork_road_list, 1204U).id == tail_b1_start.id &&
-                   kv_A(domino_all_fork_road_list, 1206U).id == tail_a2_start.id &&
-                   kv_A(domino_all_fork_road_list, 1208U).id == tail_b2_start.id &&
+                   kv_A(domino_all_fork_road_list, 1202U).id == tail_a1_start.id && kv_A(domino_all_fork_road_list, 1204U).id == tail_b1_start.id &&
+                   kv_A(domino_all_fork_road_list, 1206U).id == tail_a2_start.id && kv_A(domino_all_fork_road_list, 1208U).id == tail_b2_start.id &&
                    kv_A(domino_all_road_list, 601U).id == buildRoadIdForTest(tail_a1_start.id, tail_a1_target.id) &&
                    kv_A(domino_all_road_list, 602U).id == buildRoadIdForTest(tail_b1_start.id, tail_b1_target.id) &&
                    kv_A(domino_all_road_list, 603U).id == buildRoadIdForTest(tail_a2_start.id, tail_a2_target.id) &&
@@ -294,8 +285,7 @@ int main(void) {
 
     DominoForkRoad tail_b3_start = {.position_x = 501, .position_y = 502};
     DominoForkRoad tail_b3_target = {.position_x = 503, .position_y = 504};
-    TEST_CHECK(dominoAddRoad(&tail_b3_start, &tail_b3_target, 5U, 1U, ROAD_NETWORK_TYPE_RAILWAY) == CODE_OK,
-               "reuse a zero-count runtime group");
+    TEST_CHECK(dominoAddRoad(&tail_b3_start, &tail_b3_target, 5U, 1U, ROAD_NETWORK_TYPE_RAILWAY) == CODE_OK, "reuse a zero-count runtime group");
     railway_fork_segment = findDataSegmentForTest(&domino_all_fork_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
     railway_road_segment = findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
     TEST_CHECK(railway_fork_segment != nullptr && railway_fork_segment->init_count == 0U && railway_fork_segment->increment_index == 1204U &&
@@ -315,8 +305,7 @@ int main(void) {
         findDataSegmentForTest(&domino_all_fork_road_nav_data_segment_list, 0U, ROAD_NETWORK_TYPE_ROAD);
     const DominoNavDataSegment* compacted_railway_fork_segment =
         findDataSegmentForTest(&domino_all_fork_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
-    const DominoNavDataSegment* compacted_road_segment =
-        findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 0U, ROAD_NETWORK_TYPE_ROAD);
+    const DominoNavDataSegment* compacted_road_segment = findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 0U, ROAD_NETWORK_TYPE_ROAD);
     const DominoNavDataSegment* compacted_railway_road_segment =
         findDataSegmentForTest(&domino_all_road_nav_data_segment_list, 1U, ROAD_NETWORK_TYPE_RAILWAY);
     TEST_CHECK(compacted_road_fork_segment != nullptr && compacted_road_fork_segment->init_index == 0U &&
@@ -374,8 +363,7 @@ int main(void) {
     engine_active = true;
     DominoForkRoad retry_start = {.position_x = 50, .position_y = 60};
     DominoForkRoad retry_target = {.position_x = 70, .position_y = 80};
-    TEST_CHECK(dominoAddRoad(&retry_start, &retry_target, 9U, 0U, ROAD_NETWORK_TYPE_ROAD) == CODE_OK,
-               "add world data retained across save failure");
+    TEST_CHECK(dominoAddRoad(&retry_start, &retry_target, 9U, 0U, ROAD_NETWORK_TYPE_ROAD) == CODE_OK, "add world data retained across save failure");
     domino_road_id_t retry_road_id = buildRoadIdForTest(retry_start.id, retry_target.id);
     TEST_CHECK(writeTextFile(retry_save_path, "blocking regular file"), "create external save-path conflict");
     TEST_CHECK(dominoEngineExit() != CODE_OK, "save-path conflict must fail without destroying the in-memory world");
@@ -408,8 +396,7 @@ int main(void) {
     TEST_CHECK(dominoEngineInit(isolation_world_b_config) == CODE_OK, "initialize a different empty world in the same process");
     engine_active = true;
     TEST_CHECK(g_domino_region_count == 0U, "empty world must not inherit region count from previous world");
-    TEST_CHECK(atomic_load(&g_domino_region_list[0].human_count) == 0 && g_domino_region_list[0].type == 0U &&
-                   g_domino_region_list[0].status == 0U,
+    TEST_CHECK(atomic_load(&g_domino_region_list[0].human_count) == 0 && g_domino_region_list[0].type == 0U && g_domino_region_list[0].status == 0U,
                "empty world must not inherit fixed region data from previous world");
     TEST_CHECK(atomic_load(&g_domino_global_increment_id.human_increment_id) == 0U,
                "empty world must not inherit global increment ids from previous world");
@@ -420,8 +407,8 @@ int main(void) {
 
     TEST_CHECK(dominoEngineInit(isolation_world_a_config) == CODE_OK, "reload first world after switching storage paths");
     engine_active = true;
-    TEST_CHECK(g_domino_region_count == 1U && atomic_load(&g_domino_region_list[0].human_count) == 37 &&
-                   g_domino_region_list[0].type == 5U && g_domino_region_list[0].status == 2U,
+    TEST_CHECK(g_domino_region_count == 1U && atomic_load(&g_domino_region_list[0].human_count) == 37 && g_domino_region_list[0].type == 5U &&
+                   g_domino_region_list[0].status == 2U,
                "stored region state must override the empty initialization baseline");
     TEST_CHECK(atomic_load(&g_domino_global_increment_id.human_increment_id) == 701U,
                "stored global increment ids must override the empty initialization baseline");

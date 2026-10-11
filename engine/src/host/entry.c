@@ -20,6 +20,7 @@ static void dominoHostResetWorldState(void) {
     g_domino_region_count = 0;
 
     atomic_store_explicit(&g_domino_global_increment_id.human_increment_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_global_increment_id.task_increment_id, 0U, memory_order_relaxed);
     atomic_store_explicit(&g_domino_global_increment_id.org_increment_id, 0U, memory_order_relaxed);
     atomic_store_explicit(&g_domino_global_increment_id.country_increment_id, 0U, memory_order_relaxed);
     atomic_store_explicit(&g_domino_global_increment_id.city_increment_id, 0U, memory_order_relaxed);

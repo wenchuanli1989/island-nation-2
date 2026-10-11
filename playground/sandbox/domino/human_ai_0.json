@@ -1,0 +1,10 @@
+{
+  "type": "human_ai",
+  "shard_id": 0,
+  "entities": [
+    {
+      "human_id": 1,
+      "tasks": []
+    }
+  ]
+}

@@ -177,7 +177,10 @@ DOMINO_CODE dominoEngineInit(DominoEngineLaunchConfig launch_config) {
 
     dominoSocialModuleInit();
     stage = DOMINO_ENGINE_INIT_STAGE_SOCIAL;
-    dominoHumanModuleInit();
+    result = dominoHumanModuleInit();
+    if (result != CODE_OK) {
+        goto fail;
+    }
     stage = DOMINO_ENGINE_INIT_STAGE_HUMAN;
 
     dominoTimeModuleInitBefore();

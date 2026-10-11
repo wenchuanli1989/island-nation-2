@@ -142,7 +142,13 @@ yyjson_val* serdeValidateShardRoot(yyjson_val* root, const char* expected_type, 
     if (!shard_id_val) {
         return nullptr;
     }
-    uint32_t shard_id = (uint32_t)yyjson_get_uint(shard_id_val);
+    uint64_t parsed_shard_id = yyjson_get_uint(shard_id_val);
+    if (parsed_shard_id > UINT32_MAX) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: shard_id out of range",
+                          file_tag ? file_tag : "shard");
+        return nullptr;
+    }
+    uint32_t shard_id = (uint32_t)parsed_shard_id;
     if (expected_shard_id != UINT32_MAX && shard_id != expected_shard_id) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: shard_id mismatch (expect %u, got %u)",
                           file_tag ? file_tag : "shard", expected_shard_id, shard_id);

@@ -12,6 +12,7 @@
 
 #define DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA 8000
 #define DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA 100000
+#define DOMINO_STORAGE_SHARD_HUMAN_AI 128
 #define STORAGE_NO_EXTRA_LOAD_RESERVE ((void)0);
 #define STORAGE_KHASHL_MAX_BUCKETS ((size_t)1U << 31)
 #define STORAGE_KHASHL_MAX_LOAD_COUNT (STORAGE_KHASHL_MAX_BUCKETS - (STORAGE_KHASHL_MAX_BUCKETS >> 2))
@@ -87,7 +88,7 @@ static inline uint32_t storageEntityShardCount(uint32_t total_count, uint32_t ma
     if (total_count == 0) {
         return 0;
     }
-    return (total_count + max_per_shard - 1) / max_per_shard;
+    return total_count / max_per_shard + (total_count % max_per_shard != 0);
 }
 
 /** @brief 固定写出一个分片，用于 regions 这类单文件模块。 */

@@ -228,8 +228,15 @@ DOMINO_CODE serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type
 
 DOMINO_CODE serdeSaveHuman(const char* save_path);
 DOMINO_CODE serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count);
+/** @brief 加载与保存共用的人物/data 身份、容量和位置引用前置校验。 */
 DOMINO_CODE serdeValidateHumanReferences(void);
 void serdeBindHumanReferences(void);
+
+DOMINO_CODE serdeSaveHumanAI(const char* save_path);
+DOMINO_CODE serdeLoadHumanAI(const char* save_path, uint32_t total_count, uint32_t shard_count);
+/** @brief 先校验人物前置，再校验任务恢复数据；供统一加载及 AI 保存入口调用。 */
+DOMINO_CODE serdeValidateHumanAIReferences(void);
+void serdeBindHumanAIReferences(void);
 
 DOMINO_CODE serdeSaveOrg(const char* save_path);
 DOMINO_CODE serdeLoadOrg(const char* save_path, uint32_t total_count, uint32_t shard_count);

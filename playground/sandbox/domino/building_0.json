@@ -1,0 +1,36 @@
+{
+  "type": "building",
+  "shard_id": 0,
+  "entities": [
+    {
+      "id": 1,
+      "data_id": 1,
+      "owner_org_id": 0,
+      "island_id": 0,
+      "city_id": 0,
+      "country_id": 0,
+      "wealth": 0,
+      "micro_member_id_list": [],
+      "position_x": 0,
+      "position_y": 0,
+      "position_z": 0,
+      "outer_host_country_id": 0,
+      "address_id": 0,
+      "total_member_count": 0,
+      "status": 0,
+      "type": 0,
+      "region_index": 0,
+      "owner_type": 0,
+      "space_id": 0,
+      "space_area_id": 0,
+      "micro_member_type_list": [],
+      "data": {
+        "data_id": 1,
+        "name": "样例住宅",
+        "description": "用于同楼场景的数据样例；住房权限与睡眠资格规则尚未实现。",
+        "member_id_list": [],
+        "member_type_list": []
+      }
+    }
+  ]
+}

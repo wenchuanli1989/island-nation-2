@@ -1,5 +1,6 @@
 #include "meta.h"
 
+#include <inttypes.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +91,7 @@ static DOMINO_CODE writeOneModuleMetaFile(const char* save_path, const StorageMo
 static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
     /* ID 计数器独立持久化；road ID 由两端节点 ID 组合，无独立计数器。 */
     yyjson_mut_obj_add_uint(doc, inc, "human", atomic_load(&g_domino_global_increment_id.human_increment_id));
+    yyjson_mut_obj_add_uint(doc, inc, "task", atomic_load(&g_domino_global_increment_id.task_increment_id));
     yyjson_mut_obj_add_uint(doc, inc, "org", atomic_load(&g_domino_global_increment_id.org_increment_id));
     yyjson_mut_obj_add_uint(doc, inc, "country", atomic_load(&g_domino_global_increment_id.country_increment_id));
     yyjson_mut_obj_add_uint(doc, inc, "city", atomic_load(&g_domino_global_increment_id.city_increment_id));
@@ -103,8 +105,16 @@ static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
     yyjson_mut_obj_add_uint(doc, inc, "description", atomic_load(&g_domino_global_increment_id.description_increment_id));
 }
 
-static void ingestIncrementIds(yyjson_val* inc) {
-    /* metaLoad 校验 inc 存在后再调用；缺失字段按 yyjson 默认 0 恢复。 */
+static DOMINO_CODE ingestIncrementIds(yyjson_val* inc) {
+    yyjson_val* task_val = yyjson_obj_get(inc, "task");
+    if (!yyjson_is_uint(task_val) || yyjson_get_uint(task_val) > UINT32_MAX) {
+        DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
+                              "invalid meta.json: missing or out-of-range runtime_data.global_increment_id.task");
+        return ERR_INVALID_JSON;
+    }
+    /* 游标为下一候选 ID；0 是初始化或回绕后的合法值，分配时跳过。 */
+    atomic_store(&g_domino_global_increment_id.task_increment_id, (domino_task_id_t)yyjson_get_uint(task_val));
+    /* 其他实体仍按各模块原有计数器格式恢复。 */
     atomic_store(&g_domino_global_increment_id.human_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "human")));
     atomic_store(&g_domino_global_increment_id.org_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "org")));
     atomic_store(&g_domino_global_increment_id.country_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "country")));
@@ -117,6 +127,7 @@ static void ingestIncrementIds(yyjson_val* inc) {
     atomic_store(&g_domino_global_increment_id.movable_object_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "movable_object")));
     atomic_store(&g_domino_global_increment_id.name_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "name")));
     atomic_store(&g_domino_global_increment_id.description_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "description")));
+    return CODE_OK;
 }
 
 DOMINO_CODE saveAllShards(const char* save_path) {
@@ -249,17 +260,19 @@ static DOMINO_CODE loadSubModuleMeta(yyjson_val* sub_module, const StorageModule
         goto error;
     }
     yyjson_val* shard_count_val = yyjson_obj_get(root, "shard_count");
-    if (!shard_count_val || !yyjson_is_uint(shard_count_val)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: shard count missing", meta_file_name);
+    if (!yyjson_is_uint(shard_count_val) || yyjson_get_uint(shard_count_val) > UINT32_MAX) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: shard count missing or out of range",
+                          meta_file_name);
         goto error;
     }
     yyjson_val* total_count_val = yyjson_obj_get(root, "total_count");
-    if (!total_count_val || !yyjson_is_uint(total_count_val)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: total count missing", meta_file_name);
+    if (!yyjson_is_uint(total_count_val) || yyjson_get_uint(total_count_val) > UINT32_MAX) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: total count missing or out of range",
+                          meta_file_name);
         goto error;
     }
     uint32_t shard_count = (uint32_t)yyjson_get_uint(shard_count_val);
-    if (shard_count != (uint32_t)yyjson_arr_size(shard_arr)) {
+    if ((size_t)shard_count != yyjson_arr_size(shard_arr)) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid %s: shard count mismatch", meta_file_name);
         goto error;
     }
@@ -347,9 +360,10 @@ DOMINO_CODE loadAllSubModule(yyjson_val* sub_module) {
     for (size_t i = 0; i < g_storage_module_type_count; i++) {
         const StorageModuleType* module_type = &g_storage_module_types[i];
         const StorageSubModuleMeta* meta = storageSubModuleMetaFind(module_type->type_name);
-        if (!meta || meta->shard_count == 0) {
+        if (!meta) {
             continue;
         }
+        /* 空集合也调用加载入口，避免绕过 human_ai 与人物数量等跨模块约束。 */
         result = module_type->load_fn(save_path, meta->total_count, meta->shard_count);
         if (result != CODE_OK) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to load %s", module_type->type_name);
@@ -409,10 +423,10 @@ yyjson_doc* metaLoad(DOMINO_CODE* result) {
         DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid meta.json: missing version");
         goto error;
     }
-    uint32_t version = (uint32_t)yyjson_get_uint(version_val);
-    if (version != (uint32_t)DOMINO_STORAGE_SAVE_VERSION) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid meta.json: version(%u) != expected(%u)", version,
-                          (uint32_t)DOMINO_STORAGE_SAVE_VERSION);
+    uint64_t version = yyjson_get_uint(version_val);
+    if (version != DOMINO_STORAGE_SAVE_VERSION) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "invalid meta.json: version(%" PRIu64 ") != expected(%u)",
+                          version, (uint32_t)DOMINO_STORAGE_SAVE_VERSION);
         goto error;
     }
     yyjson_val* info = yyjson_obj_get(root, "info");
@@ -458,7 +472,11 @@ yyjson_doc* metaLoad(DOMINO_CODE* result) {
     serdeReadStr(info, "account_id", g_domino_storage_account_id, sizeof(g_domino_storage_account_id));
     serdeReadStr(runtime_option, "run_mode", g_domino_storage_run_mode, sizeof(g_domino_storage_run_mode));
     dominoSetRuntimeDateTimeBase(yyjson_get_uint(game_date_time_ns_val));
-    ingestIncrementIds(inc);
+    *result = ingestIncrementIds(inc);
+    if (*result != CODE_OK) {
+        yyjson_doc_free(doc);
+        return nullptr;
+    }
     return doc;
 error:
     *result = ERR_INVALID_JSON;
