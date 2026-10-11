@@ -36,7 +36,7 @@
 | `engine/src/dispatch/entry.c` | 仅处理 `DOMINO_ENGINE_MSG_NONE` | 路由人物命令、计划结果所需的外部事件和导航修改命令 |
 | `engine/src/queue/thread_queue.c`、`thread_queue.h` | 带锁、可扩容 FIFO，单条／批量消费均已存在；首 8 字节由队列写入消息 ID；`Stop` 与 `WakeAll` 分离 | 复用值复制、批量消费和条件变量，按端点关停／唤醒，补充 AI 控制等待谓词 |
 | `engine/src/time/entry.c`、`entry.h` | 底层以纳秒采样；`dominoTimeGetRuntimeMs(&now_ms)` 校验范围并输出 32 位累计未冻结现实毫秒；InitAfter 即解除冻结，Freeze 不等待工作线程确认，也不自动通知 timer | 复用现有 32 位现实毫秒业务入口，接入暂停确认、Run 启动协调和 timer 时间变更通知 |
-| `engine/src/timer/` | 已有独立线程、命令队列、共享最小堆、登记和标记取消；直接投递 `DominoTimer` 到业务队列，尚未接入引擎生命周期或 human | 保留 Schedule／Cancel 接口及 32 位现实毫秒字段，接入 human 关联映射、错误处理和生命周期 |
+| `engine/src/timer/` | 已有独立线程、命令队列、共享最小堆、登记和标记取消；以通用 `DominoThreadMessage` 投递 `DominoTimer` 载荷到业务收件队列，尚未接入引擎生命周期或 human | 保留 Schedule／Cancel 接口及 32 位现实毫秒字段，接入 human 关联映射、错误处理和生命周期 |
 | `engine/src/nav/graph.c`、`path.c`、`floyd.c`、`state.c` | graph 维护直接有向邻接；path 按需构建 Floyd 缓存；当前工作区已对齐准备缓存槽及无失败提交接口；`remaining_distance` 仍写入路径权重 | 明确运行期串行所有权，补充真实首末接驳、在途位置、距离数据和出行时间 |
 | `engine/src/social/entry.c`、`shared/include/domino_shared_social.h` | 已有组织、建筑、资产等容器和字段；尚无本方案的合同、地点服务、交易及共享活动闭环 | 随首个实际消费者增加最小领域记录与操作；明确余额、所有权、容量及数量单位 |
 | `engine/src/storage/serde_human.c`、`serde_human_ai.c`、`serde_registry.c`、`meta.c` | 人物属性与日程、需求事实保存在必需的 data；`human_ai` 仅按人物嵌套任务和行为，校验任务数组唯一归属、父子关系和三槽状态；根 meta 保存全局任务 ID 的下一候选值 | 后续业务增加参数、领域引用与恢复动作；执行器接入统一结算后才能完成业务续接 |
@@ -119,11 +119,11 @@ flowchart LR
 
 1. 人物任务清单：三个通道共用 `DominoHumanData.task_id_list[32]`，`task_count` 表示有效前缀长度，保存本人仍持有的全部任务 ID；任务实例仍在全局任务池中。数组按提交顺序追加，不表示执行顺序。执行器按通道、计划开始时刻和业务条件选择任务，同时间以数组位置决定先后；当前活动任务由三个固定 ID 槽位直接定位。
 2. 规划队列：某人物需要规划的原因与快照，通常不是已经成立的任务。
-3. AI 执行事件队列：计划草案和外部命令；timer 到期通知使用单独的 `DominoTimer` 队列，再由执行器汇入人物就绪处理。暂停／停止另走可唤醒等待者的控制状态。
+3. 线程收件队列：执行器、规划器各自拥有一个 `DominoThreadMessage` 队列，混合接收 AI 请求／结果、timer 到期通知和其他命令，按每条消息的 `items_type` 分派并解释 `items_ptr`。暂停／停止另走可唤醒等待者的控制状态，不依赖业务队列空位。
 
-现有 timer 要求目标队列的 `item_size == sizeof(DominoTimer)`，不能直接投递到含草案等 payload 的 AI 事件队列。两个输入队列关联同一个待实现的通知器，由 mutex、条件变量和递增的 `wake_epoch` 组成。成功入队及控制状态变化都更新通知器；timer 直接调用通用 Produce 的路径也必须触发它。现有 `WakeAll()` 仅通知单个队列，不能代替这一机制。
+通用消息的 `id` 由收件队列生成，`items_type` 标识载荷类别，`items_ptr` 指向独占连续块，`items_size` 表示字节数。timer 目标队列以 `sizeof(DominoThreadMessage)` 初始化；到期时发送 `DOMINO_THREAD_MESSAGE_TIMER`，载荷为独立 `DominoTimer` 副本，因此可以与草案、外部命令进入同一个收件队列。消费方先检查类型和大小，业务处理或丢弃后释放载荷。收件队列自身提供唤醒版本和截止点等待；成功入队在队列锁内推进版本并通知，模块先同步发布控制状态再调用 `dominoThreadQueueWakeAll()`，不占用消息槽位。`Stop/Resume` 仍只修改端点状态。通用机制和 timer 投递已实现，human 执行器及暂停屏障仍待接入。
 
-执行器先采样通知版本，再非阻塞地按有限批次轮流消费两个队列，并处理本地就绪人物；没有可处理工作时，持通知器锁复查版本和控制状态后才等待。待投规划请求按其调度重试截止点进入同一等待谓词，未到期限的待办不持续标为就绪；最近截止点限制等待时长。暂停期间合并的待登记唤醒在恢复阶段处理，不构成运行期登记失败的重试机制。不得持通知器锁出入队、调用 timer API 或执行业务，避免与 timer 的请求锁、队列锁形成反向依赖。
+执行器每轮先用 `dominoThreadQueueSnapshot()` 采样通知版本，再读取模块同步保护的控制状态，非阻塞地按有限批次消费统一收件队列并按消息类型分派，并处理本地就绪人物；没有可处理工作时，将本轮采样的版本值传给 `dominoThreadQueueWait()`，由它在队列锁内复查版本后等待。Wait 不因已有消息而立即返回，暂停时仍可保留消息并休眠；端点关停则返回关停错误。控制状态先发布再通知，检查期间发生变化会使版本失配或唤醒等待，醒后重新检查控制状态。待投规划请求按其调度重试截止点限制等待时长，未到期限的待办不持续标为就绪；Wait 接收 TIME_UTC 绝对截止点，业务到期仍用累计未冻结现实毫秒判定。暂停期间合并的待登记唤醒在恢复阶段处理，不构成运行期登记失败的重试机制。这些队列接口返回时已经释放队列锁；不得持队列锁调用 timer API 或执行业务，等待前须释放通知方需要取得的业务锁，避免与 timer 的请求锁、队列锁形成反向依赖。
 
 计时器使用最小堆，不使用 FIFO 保存未来时间。不得把整个未来日程的任务持续投进执行事件队列检查。
 
@@ -135,7 +135,7 @@ flowchart LR
 
 请求和结果使用独立分配的连续块，队列复制描述符并移交所有权。接收者处理后释放；投递失败时仍由发送者拥有。替换请求、拒绝草案、暂停丢弃和退出排空共用载荷释放入口。已提交的行为或路线块从草案转移到任务后，草案不再拥有它们。队列中的指针只指向独占块，不能指向全局 `kvec` 内部元素。
 
-所有 AI 队列消息描述符首字段必须是 `uint64_t id`，由 `dominoThreadQueueProduce()` 回写并覆盖；业务关联 ID 单独保存。消费可复用 `dominoThreadQueueConsumeBatch()`，它只等待至少一项，不等待凑满批次。
+所有跨线程 AI 消息统一封装为 `DominoThreadMessage`，其首字段 `uint64_t id` 由 `dominoThreadQueueProduce()` 回写并覆盖；业务关联 ID 保存在载荷中。消费可复用 `dominoThreadQueueConsumeBatch()`，它只等待至少一项，不等待凑满批次。
 
 ### 4.4 满载、紧急提升与空闲等待
 
@@ -804,11 +804,11 @@ session_elapsed_ms >= 34560000 → 发起协调冻结、保存并退出
 
 没有改期、目标注册、可写通知或业务回调分派接口。改变到期时间通过取消旧登记再发起新登记完成；收益结算由消费线程执行。
 
-`DominoTimer` 共用作登记命令、堆项和到期事件，当前源码声明尺寸为 40 字节，字段为：
+`DominoTimer` 用作登记命令、堆项和到期消息的载荷，当前源码声明尺寸为 40 字节，字段为：
 
-- `uint64_t id`：当前所在队列的消息 ID，每次入队会被覆盖。
+- `uint64_t id`：登记命令队列的消息 ID；到期投递仅改写外层 `DominoThreadMessage.id`，不修改载荷内部 ID。
 - `domino_timer_id_t timer_id`：稳定登记 ID，64 位，仅在本次 timer Init 生命周期内有效。
-- `DominoThreadQueue* event_queue_ptr`：业务方拥有的目标队列，已初始化且仅存储 `DominoTimer`。
+- `DominoThreadQueue* event_queue_ptr`：业务方拥有的通用收件队列，已初始化并存储 `DominoThreadMessage`，可以混合多个消息类型。
 - `domino_runtime_ms_t due_ms`、`delay_ms`：32 位累计现实毫秒截止点和现实毫秒延迟。
 - `event_type`、`cancelled_flag`：业务事件类别及取消标记。
 
@@ -831,7 +831,7 @@ UINT32_MAX / 17280000 ≈ 248.55 游戏年
 
 当前最小堆按 `(due_ms, timer_id)` 排序，索引 0 不使用。入堆／弹顶为 O(log M)，没有 `timer_id` 哈希索引；取消线性扫描命令队列、堆和指定业务事件队列，设置标记，不直接删除任意堆项。已取消命令被跳过，计时线程处理堆时回收已取消堆顶，尚未到堆顶的取消记录仍占堆空间。
 
-已投递但未出队的事件仍可被标记取消；取消与业务消费在业务队列锁内竞争。消费方先检查 `cancelled_flag`。未知、已取消或已出队的登记返回 `ERR_NOT_FOUND`；已经出队的事件不能撤回，还须校验业务对象和当前唤醒身份。再次 Init 前必须排空旧业务事件，不能跨生命周期复用旧 ID。
+已投递但未出队的事件仍可被标记取消；取消与业务消费在业务队列锁内竞争。消费方先根据 `items_type` 和 `items_size` 取得 `DominoTimer` 载荷，再检查 `cancelled_flag`；处理或跳过后均释放消息载荷。取消扫描只解释 TIMER 类型，保留其他类型的消息。未知、已取消或已出队的登记返回 `ERR_NOT_FOUND`；已经出队的事件不能撤回，还须校验业务对象和当前唤醒身份。再次 Init 前必须排空旧业务事件，不能跨生命周期复用旧 ID。
 
 `request_mutex` 串行保护请求转移、堆、取消和唤醒状态；持有它之后才取得队列锁。当前到期投递也在请求锁内进行，无释放锁后的目标回调。每轮先处理最多 64 个堆项，再处理最多 64 条命令；取消堆顶也占堆批次预算。消费过命令或堆预算耗尽时立即重新检查，否则进入条件等待。
 

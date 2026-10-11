@@ -5,8 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <threads.h>
+#include <time.h>
 
 #include "domino_shared_error_codes.h"
+#include "thread_message.h"
 
 #define DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY 100U
 #define DOMINO_ENGINE_QUEUE_MAX_CAPACITY 10000U
@@ -24,10 +26,11 @@ typedef struct DominoThreadQueue {
     cnd_t not_empty;
     cnd_t not_full;
     cnd_t waiters_drained;
-    uint64_t next_id;  ///< 成功入队时递增，由 mutex 保护。
+    uint64_t next_id;     ///< 成功入队时递增，由 mutex 保护。
+    uint64_t wake_epoch;  ///< 入队成功或 WakeAll 时递增，仅作为唤醒版本，由 mutex 保护。
     size_t item_size;
     void* items_ptr;
-    uint32_t waiter_count;  ///< 已进入数据/空位条件等待的操作数，仅销毁时等待其归零。
+    uint32_t waiter_count;  ///< 全部已登记的条件等待操作数，仅销毁时等待其归零。
     uint32_t head;
     uint32_t tail;
     uint32_t count;
@@ -40,11 +43,32 @@ typedef struct DominoThreadQueue {
 
 /**
  * @brief 初始化环形队列，item_size 必须包含开头的 uint64_t ID，且至少为 8 字节。
+ * @note 跨模块收件队列使用 sizeof(DominoThreadMessage)，消息按 items_type 分派，同一队列允许混合载荷类型。
  * @return `CODE_OK` 成功；队列指针为空返回 `ERR_NULL_POINTER`；容量、元素大小无效或容量乘法溢出返回 `ERR_INVALID_PARAM`；
  *         内存分配失败返回 `ERR_MEMORY_ALLOC`。
  * @note 不得对已初始化的队列重复调用；初始化须由调用方排除并发访问，销毁后可重新初始化。
  */
 DOMINO_CODE dominoThreadQueueInit(DominoThreadQueue* queue_ptr, size_t item_size, uint32_t initial_capacity, uint32_t max_capacity);
+
+/**
+ * @brief 采样本队列的唤醒版本；须在检查模块控制状态和待处理消息之前调用。
+ * @return CODE_OK 成功；空指针返回 ERR_NULL_POINTER；未初始化返回 ERR_NOT_INITIALIZED。
+ * @note 版本仅用于与 Wait 比较是否变化，不是消息数、消息 ID 或业务时间；出队及 Stop/Resume 不推进版本。
+ */
+DOMINO_CODE dominoThreadQueueSnapshot(DominoThreadQueue* queue_ptr, uint64_t* epoch_out_ptr);
+
+/**
+ * @brief 在队列锁内复查唤醒版本，等待成功入队、WakeAll、端点关停或截止点，不消费消息。
+ * @param observed_epoch 检查模块控制状态和消息之前取得的版本；版本已变化时立即返回。
+ * @param deadline_utc_ptr TIME_UTC 绝对截止点；nullptr 表示无限等待。不是业务累计毫秒。
+ * @return CODE_OK 表示版本已变化或到达截止点，调用方须重新检查控制状态、消息和业务到期条件；
+ *         消费端已关停返回 ERR_QUEUE_CONSUMER_STOPPED，优先于生产端；生产端已关停返回 ERR_QUEUE_PRODUCER_STOPPED；
+ *         空指针返回 ERR_NULL_POINTER；未初始化返回 ERR_NOT_INITIALIZED；tv_nsec 无效返回 ERR_INVALID_PARAM。
+ * @note 仅等待版本变化，不以队列非空为返回条件，因此暂停时保留消息仍可休眠。生产端关停时，剩余消息仍可用 Consume 排空。
+ *       控制状态由模块通过原子或自己的锁保护，先发布状态再 WakeAll。阻塞中的关停仍须 Stop → WakeAll。
+ *       不得持队列锁或通知方需要的业务锁调用；本函数与阻塞出入队的等待者均受 Destroy 的等待登记保护。
+ */
+DOMINO_CODE dominoThreadQueueWait(DominoThreadQueue* queue_ptr, uint64_t observed_epoch, const struct timespec* deadline_utc_ptr);
 
 /**
  * @brief 仅设置指定端的停止标志，限制后续入队或出队；不通知或等待阻塞调用，重复关停会累积生效。
@@ -78,13 +102,15 @@ bool dominoThreadQueueIsStopped(DominoThreadQueue* queue_ptr, DominoThreadQueueE
  * @brief 显式通知两端的所有条件等待者重新检查状态，不改变端点标志、数据或容量，也不等待其退出。
  * @param queue_ptr 待通知队列；空指针或未初始化时不操作。
  * @note 用于需要唤醒的退出流程：Stop → WakeAll → join → Destroy。
- *       未停止且仍缺少数据/空位的调用会继续等待；唤醒本身不代表操作完成。
+ *       推进本队列唤醒版本，使 Wait 返回以检查模块控制状态，不占用队列容量。
+ *       阻塞出入队若仍缺少数据/空位且未停止，会继续等待；唤醒本身不代表业务操作完成。
  */
 void dominoThreadQueueWakeAll(DominoThreadQueue* queue_ptr);
 
 /**
  * @brief 关停双端并唤醒等待者，等待已登记的条件等待者退出，丢弃剩余元素并释放资源。
  * @note 调用方须阻止新操作，排除仍在等待 mutex 的调用及其他关停/恢复/唤醒/销毁操作；本函数不会 join 工作线程。
+ *       常规流程仍须先 join 工作线程；本函数不释放元素指向的业务载荷，剩余载荷须由模块排空并释放。
  */
 void dominoThreadQueueDestroy(DominoThreadQueue* queue_ptr);
 
@@ -98,6 +124,7 @@ void dominoThreadQueueDestroy(DominoThreadQueue* queue_ptr);
  *         分配失败返回 ERR_MEMORY_ALLOC；ID 耗尽返回 ERR_OUT_OF_RANGE。
  * @note 每次成功入队都会覆盖原 ID，从 1 开始按入队顺序递增，仅在同一队列的一次 Init 生命周期内唯一。
  *       扩容及 Stop/Resume 保留计数，Destroy 后重新 Init 才重置；计数耗尽不回绕。
+ *       成功入队在同一锁内推进唤醒版本，通知阻塞消费者及所有 Wait 等待者；失败不推进版本。
  */
 DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* queue_ptr, void* item_ptr, bool blocking);
 

@@ -69,15 +69,21 @@ static bool processHeapBatch(void) {
             break;
         }
         // 取消检查、堆顶移除和事件入队共用请求锁，Cancel 无法在迁移中插入。
-        // 队列回写消息 ID，保留原 timer_id 供取消查找。
+        // 收件队列复制通用消息描述符；载荷独立于堆及当前线程的栈。
         DominoTimer timer = *timer_ptr;
         dominoTimerHeapPop(&g_domino_timer.heap);
-        DOMINO_CODE code = dominoThreadQueueProduce(timer.event_queue_ptr, &timer, false);
+        DominoThreadMessage message = {0};
+        DOMINO_CODE code = dominoThreadMessageInitCopy(&message, DOMINO_THREAD_MESSAGE_TIMER, &timer, sizeof(timer));
+        if (code == CODE_OK) {
+            code = dominoThreadQueueProduce(timer.event_queue_ptr, &message, false);
+        }
         if (code != CODE_OK) {
+            dominoThreadMessageRelease(&message);
             (void)fprintf(stderr, "domino timer: delivery to queue %p, timer %" PRIu64 " failed (%d)\n", (void*)timer.event_queue_ptr, timer.timer_id,
                           code);
             abort();
         }
+        // 入队成功后载荷归接收方；此处不再访问或释放 message.items_ptr。
         work_count++;
     }
     checkThreadResult(mtx_unlock(&g_domino_timer.request_mutex));

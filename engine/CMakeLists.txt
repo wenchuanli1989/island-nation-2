@@ -79,6 +79,30 @@ if(BUILD_TESTING)
     add_test(NAME domino-engine-thread-queue COMMAND domino-engine-thread-queue-test)
     set_tests_properties(domino-engine-thread-queue PROPERTIES TIMEOUT 30)
 
+    add_executable(domino-engine-thread-queue-wait-test
+        tests/thread_queue_wait_test.c
+    )
+    target_include_directories(domino-engine-thread-queue-wait-test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(domino-engine-thread-queue-wait-test PRIVATE
+        domino-engine
+    )
+    add_test(NAME domino-engine-thread-queue-wait COMMAND domino-engine-thread-queue-wait-test)
+    set_tests_properties(domino-engine-thread-queue-wait PROPERTIES TIMEOUT 30)
+
+    add_executable(domino-engine-thread-message-test
+        tests/thread_message_test.c
+    )
+    target_include_directories(domino-engine-thread-message-test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(domino-engine-thread-message-test PRIVATE
+        domino-engine
+    )
+    add_test(NAME domino-engine-thread-message COMMAND domino-engine-thread-message-test)
+    set_tests_properties(domino-engine-thread-message PROPERTIES TIMEOUT 30)
+
     add_executable(domino-engine-timer-id-test
         tests/timer_id_test.c
     )

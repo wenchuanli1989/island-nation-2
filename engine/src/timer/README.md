@@ -1,6 +1,6 @@
 # 通用游戏计时器
 
-提供一次性现实时间通知，以及按业务队列和 `timer_id` 标记取消。业务登记时传入自己的事件生产队列，计时线程将到期记录直接投递到该队列，消费与处理完全由业务模块负责。改期使用取消旧 ID 后重新登记；不提供周期任务、原地改期、存档或离线补算。当前未接入引擎生命周期、human 或 time 状态变更的通知流程。
+提供一次性现实时间通知，以及按业务队列和 `timer_id` 标记取消。业务登记时传入自己的事件生产队列，计时线程把到期记录封装成通用消息投递到该队列，消费与处理完全由业务模块负责。改期使用取消旧 ID 后重新登记；不提供周期任务、原地改期、存档或离线补算。当前未接入引擎生命周期、human 或 time 状态变更的通知流程。
 
 ```text
 业务线程 → 命令队列 → 计时线程（全局堆） → 请求携带的业务事件队列 → 业务线程消费
@@ -21,15 +21,15 @@
 | `dominoTimerNotifyTimeChanged()` | 通知计时线程重新检查累计未冻结现实时间，不改变时间或业务消费状态 |
 | `dominoTimerModuleExit()` | 通知计时线程退出并 join，释放命令队列、堆及同步资源；业务队列由业务方处理 |
 
-Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素大小为 `sizeof(DominoTimer)`；分别返回 `ERR_NULL_POINTER`、`ERR_NOT_INITIALIZED` 或 `ERR_INVALID_PARAM`。队列只能存储 `DominoTimer`，容量由业务模块选择。Init 的任何资源初始化失败都会清理已创建的部分资源。
+Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素大小为 `sizeof(DominoThreadMessage)`；分别返回 `ERR_NULL_POINTER`、`ERR_NOT_INITIALIZED` 或 `ERR_INVALID_PARAM`。队列可混合保存 AI、timer 和其他消息，容量由业务模块选择。Init 的任何资源初始化失败都会清理已创建的部分资源。
 
 ## 数据结构
 
-登记参数、命令队列、堆项和到期事件统一使用扁平的 `DominoTimer`，大小为 40 字节：
+登记参数、内部命令队列和堆项使用扁平的 `DominoTimer`；到期时它成为通用消息的载荷，大小为 40 字节：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `id` | `uint64_t` | 首 8 字节的队列消息 ID，每次入队由队列重新分配 |
+| `id` | `uint64_t` | 登记命令队列分配的消息 ID；到期投递不修改它 |
 | `timer_id` | `domino_timer_id_t`（`uint64_t`） | 稳定的计时器 ID，用于取消和业务校验 |
 | `event_queue_ptr` | `DominoThreadQueue*` | 业务方拥有的到期事件队列，登记、取消及投递使用同一队列地址 |
 | `due_ms` | `domino_runtime_ms_t`（`uint32_t`） | Schedule 计算的累计未冻结现实毫秒下的绝对到期时间 |
@@ -37,7 +37,7 @@ Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素
 | `event_type` | `uint8_t` | 业务事件类型 |
 | `cancelled_flag` | `bool` | 取消标记 |
 
-记录按值复制，队列指针随记录进入命令队列、堆和业务队列。队列对象及其地址必须保持有效：计时线程退出并 join、业务消费者结束前，不得搬移、销毁或重新初始化队列。
+登记命令和堆项按值复制；到期时 `dominoThreadMessageInitCopy()` 创建独立的 `DominoTimer` 载荷，外层 `DominoThreadMessage` 以 `items_type = DOMINO_THREAD_MESSAGE_TIMER`、`items_size = sizeof(DominoTimer)` 进入业务收件队列。发送成功后载荷归消费者，处理、取消跳过或丢弃后均调用 `dominoThreadMessageRelease()`。队列指针随载荷传递。队列对象及其地址必须保持有效：计时线程退出并 join、业务消费者结束前，不得搬移、销毁或重新初始化队列。
 
 ## 登记、取消和消费
 
@@ -49,30 +49,30 @@ Schedule 和 Cancel 要求业务队列指针非空、已经初始化，且元素
 
 正常登记时将 `cancelled_flag` 初始化为 false。调用方提供 `delay_ms`、`event_queue_ptr`、`event_type` 和 `cancelled_flag`，这些业务输入字段在 Schedule 中保持不变。每次调用先将请求的 `timer_id` 置为 0，全部校验通过后将计算结果写入请求的 `due_ms`，再直接把调用方的 `timer_ptr` 传给命令队列 Produce，不构造局部计时记录。输入的 `id`、`timer_id` 和 `due_ms` 不作为登记依据，请求记录在调用期间须由当前线程独占。已取消请求直接返回 `ERR_INVALID_PARAM`，不入队也不消耗命令 ID。
 
-命令 Produce 成功时，队列先将新消息 ID 写回调用方请求的 `id`，再把整条记录按值复制入队；此时队列副本的 `timer_id` 仍为 0。Produce 返回后，Schedule 将调用方请求的 `timer_id` 设为 `id`，作为取消凭据。计时线程取出命令后设置副本的 `timer_id = id`，再加入全局堆；到期事件入队只重新分配 `id`，保留稳定的 `timer_id`。重复登记同一记录会覆盖其 `id` 和 `timer_id`，业务仍需使用旧取消凭据时应在下一次登记前保存。
+命令 Produce 成功时，队列先将新消息 ID 写回调用方请求的 `id`，再把整条记录按值复制入队；此时队列副本的 `timer_id` 仍为 0。Produce 返回后，Schedule 将调用方请求的 `timer_id` 设为 `id`，作为取消凭据。计时线程取出命令后设置副本的 `timer_id = id`，再加入全局堆；到期投递只生成外层 `DominoThreadMessage.id`，载荷内的登记 `id` 和稳定 `timer_id` 均保持不变。重复登记同一记录会覆盖其 `id` 和 `timer_id`，业务仍需使用旧取消凭据时应在下一次登记前保存。
 
 非空请求的校验失败只将 `timer_id` 清为 0，原有 `id` 和 `due_ms` 保持不变。命令入队失败时不消耗消息 ID，调用方的 `id` 保持原值、`timer_id` 为 0，但已经计算并写入的 `due_ms` 保留；命令队列满或内存不足等提交错误直接返回调用方。提交成功只表示请求已入队，后台入堆失败时记录业务队列地址、timer ID 和错误码，然后调用 `abort()` 立即终止程序。
 
-取消不提交命令、不维护有效 ID 集合，也不删除任意堆节点。它按队列指针和 ID 同时匹配：先在命令队列按 `timer.id` 查找，再在全局堆及传入的业务队列按 `timer_id` 线性查找，将匹配请求的标志设为 true。处理时，已取消的命令由计时线程取出后跳过；已取消堆顶直接弹出，尚未成为堆顶的取消项留在堆中；已进入业务队列的取消项由业务消费者取出后跳过。主循环检测到冻结后，命令队列和堆中的取消项保留原位置，直到解冻后由计时线程处理。
+取消不提交命令、不维护有效 ID 集合，也不删除任意堆节点。它按队列指针和 ID 同时匹配：先在命令队列按 `timer.id` 查找，再在全局堆及传入的业务队列按 `timer_id` 线性查找；业务队列扫描先检查 `items_type`，只对 TIMER 消息校验载荷大小并解释 `items_ptr`，跳过其他类型，将匹配请求的标志设为 true。处理时，已取消的命令由计时线程取出后跳过；已取消堆顶直接弹出，尚未成为堆顶的取消项留在堆中；已进入业务队列的取消项由业务消费者取出后跳过。主循环检测到冻结后，命令队列和堆中的取消项保留原位置，直到解冻后由计时线程处理。
 
-命令处理每批只获取和释放一次 `request_mutex`，整批出队与入堆均在锁内完成；堆顶取消检查与投递同样持有请求锁，取消不能在请求迁移中插入。投递时先按值复制堆顶并移除堆顶，再直接调用 `dominoThreadQueueProduce(timer.event_queue_ptr, &timer, false)`。任意非 `CODE_OK` 的投递结果均记录业务队列地址（`%p`）、timer ID 和错误码并调用 `abort()`；包括队列满、生产端停止、内存分配失败或消息 ID 耗尽，不保留请求等待重试。
+命令处理每批只获取和释放一次 `request_mutex`，整批出队与入堆均在锁内完成；堆顶取消检查与投递同样持有请求锁，取消不能在请求迁移中插入。投递时先按值复制堆顶并移除堆顶，再构造独立 timer 载荷和通用消息，调用 `dominoThreadQueueProduce(timer.event_queue_ptr, &message, false)`。投递失败时先释放尚未转移的载荷，成功后计时线程不再读取或释放它。任意非 `CODE_OK` 的投递结果均记录业务队列地址（`%p`）、timer ID 和错误码并调用 `abort()`；包括队列满、生产端停止、内存分配失败或消息 ID 耗尽，不保留请求等待重试。
 
-取消成功返回 `CODE_OK`；未知、重复取消、队列不匹配或已出队的 ID 返回 `ERR_NOT_FOUND`。对已投递事件的取消与业务 Consume 在业务队列锁内竞争。业务必须在成功出队后检查 `cancelled_flag`，跳过取消事件；未取消事件一旦出队便取得处理资格，即使尚未开始业务处理，也不能再撤回。业务消费只获取队列锁，不持 timer 请求锁。
+取消成功返回 `CODE_OK`；未知、重复取消、队列不匹配或已出队的 ID 返回 `ERR_NOT_FOUND`。扫描遇到 TIMER 类型但空载荷或错误大小时返回 `ERR_INVALID_MESSAGE`，不强制转换畸形载荷。对已投递事件的取消与业务 Consume 在业务队列锁内竞争。业务必须在成功出队后检查 `cancelled_flag`，跳过取消事件；未取消事件一旦出队便取得处理资格，即使尚未开始业务处理，也不能再撤回。业务消费只获取队列锁，不持 timer 请求锁。
 
 业务自行调用 `dominoThreadQueueConsume()`，可以按自身循环选择阻塞或非阻塞模式，依据对象存在性、任务状态和当前 `timer_id` 判断通知是否仍有效。消费或业务处理不需要通知 timer，也不受 timer 的分派函数约束。ID 仅在本次 Init 生命周期内有效；复用业务队列进入下一次 timer Init 前，必须排空旧事件，避免与重新生成的 ID 混淆。
 
 以下调用片段展示业务队列的初始化、登记、消费和取消；业务模块应处理各步返回码。控制线程单独调用 `dominoTimerModuleInit()`，并确保 time 已准备好后再登记。
 
 ```c
-static DominoThreadQueue business_timer_queue;
+static DominoThreadQueue business_inbox;
 
-DOMINO_CODE code = dominoThreadQueueInit(&business_timer_queue, sizeof(DominoTimer), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
+DOMINO_CODE code = dominoThreadQueueInit(&business_inbox, sizeof(DominoThreadMessage), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
                                        DOMINO_ENGINE_QUEUE_MAX_CAPACITY);
 ```
 
 ```c
 DominoTimer timer = {
-    .event_queue_ptr = &business_timer_queue,
+    .event_queue_ptr = &business_inbox,
     .delay_ms = 60000U,  // 现实 1 分钟。
     .event_type = 1U,
     .cancelled_flag = false,
@@ -81,16 +81,28 @@ DOMINO_CODE code = dominoTimerSchedule(&timer);
 ```
 
 ```c
-DominoTimer event;
-DOMINO_CODE code = dominoThreadQueueConsume(&business_timer_queue, &event, false);
-if (code == CODE_OK && !event.cancelled_flag) {
-    // 业务方按 event.timer_id 与 event.event_type 校验并处理自己的对象。
+DominoThreadMessage message;
+DOMINO_CODE code = dominoThreadQueueConsume(&business_inbox, &message, false);
+if (code == CODE_OK) {
+    if (message.items_type == DOMINO_THREAD_MESSAGE_TIMER) {
+        if (message.items_ptr == nullptr || message.items_size != sizeof(DominoTimer)) {
+            code = ERR_INVALID_MESSAGE;
+        } else {
+            const DominoTimer* timer_ptr = message.items_ptr;
+            if (!timer_ptr->cancelled_flag) {
+                // 按 timer_id、event_type 及当前业务状态处理到期通知。
+            }
+        }
+    } else {
+        // 按 items_type 分派 AI 结果、请求或其他命令，并校验对应载荷大小。
+    }
+    dominoThreadMessageRelease(&message);
 }
 ```
 
 ```c
 // 取消时传入登记所用的同一业务队列。
-DOMINO_CODE code = dominoTimerCancel(timer.timer_id, &business_timer_queue);
+DOMINO_CODE code = dominoTimerCancel(timer.timer_id, &business_inbox);
 ```
 
 ## 调度和等待
@@ -119,7 +131,7 @@ time 完成初始化、冻结或解冻后，调用方应调用 `dominoTimerNotif
 
 1. 调用方先结束所有 Schedule、NotifyTimeChanged 和 Cancel 调用，阻止后续 timer API 调用；业务队列保持原地址、有效且生产端可用。
 2. 控制线程调用 Exit，在请求锁内设置停止标志并唤醒计时线程，解锁后 join。计时线程在主循环头部检查停止标志，两个批处理函数及批次之间不重复检查；已开始的一轮可能完成最多 64 个堆项和 64 条命令，再在下一轮头部退出。睡眠前仍检查停止标志，避免退出通知已发出后再次睡眠。Exit 返回前仍可能投递当前轮事件，因此不能提前停止业务队列生产端。join 后丢弃尚未投递的命令和堆项，释放 timer 自有资源；不排空、不停止、不销毁业务队列。
-3. Exit 返回后，由业务方决定消费或丢弃剩余事件。结束阻塞消费者时，按队列 `Stop → WakeAll → join → Destroy` 清理：只停止生产端可让消费者排空已有事件后退出；停止双端则禁止继续消费。业务消费者也可提前结束，但队列及生产端仍须保留至 Exit 返回，后续由业务方清理已投递事件。
+3. Exit 返回后，由业务方决定消费或丢弃剩余事件，两种情况都要释放消息载荷。结束阻塞消费者时，按队列 `Stop → WakeAll → join → Destroy` 清理：只停止生产端可让消费者排空已有事件后退出；停止双端则禁止继续消费。业务消费者也可提前结束，但队列及生产端仍须保留至 Exit 返回，后续由业务方清理已投递事件。若双端已停，所有消费者 join 后在无并发访问时只恢复消费端，排空并 Release 后再 Destroy；队列 Destroy 不会释放 items_ptr 指向的块。
 
 Exit 不与其他 timer API 并发。计时线程 join 且业务消费者全部结束后，才可搬移、销毁或重新初始化业务队列；下一次 timer Init 前须排空旧事件。
 

@@ -9,9 +9,22 @@ static DOMINO_CODE cancelQueuedTimer(DominoThreadQueue* queue_ptr, domino_timer_
     bool command_flag = queue_ptr == &g_domino_timer.command_queue;
     uint32_t index = queue_ptr->head;
     for (uint32_t i = 0U; i < queue_ptr->count; ++i) {
-        DominoTimer* timer_ptr = (DominoTimer*)((uint8_t*)queue_ptr->items_ptr + (size_t)index * queue_ptr->item_size);
-        domino_timer_id_t queued_id = command_flag ? timer_ptr->id : timer_ptr->timer_id;
-        if (queued_id == timer_id && timer_ptr->event_queue_ptr == event_queue_ptr) {
+        void* item_ptr = (uint8_t*)queue_ptr->items_ptr + (size_t)index * queue_ptr->item_size;
+        DominoTimer* timer_ptr = nullptr;
+        if (command_flag) {
+            timer_ptr = item_ptr;
+        } else {
+            DominoThreadMessage* message_ptr = item_ptr;
+            if (message_ptr->items_type == DOMINO_THREAD_MESSAGE_TIMER) {
+                if (message_ptr->items_ptr == nullptr || message_ptr->items_size != sizeof(DominoTimer)) {
+                    code = ERR_INVALID_MESSAGE;
+                    break;
+                }
+                timer_ptr = message_ptr->items_ptr;
+            }
+        }
+        if (timer_ptr != nullptr && (command_flag ? timer_ptr->id : timer_ptr->timer_id) == timer_id &&
+            timer_ptr->event_queue_ptr == event_queue_ptr) {
             *found_out_ptr = true;
             if (!timer_ptr->cancelled_flag) {
                 timer_ptr->cancelled_flag = true;
@@ -40,7 +53,7 @@ DOMINO_CODE dominoTimerCancel(domino_timer_id_t timer_id, DominoThreadQueue* eve
     if (!event_queue_ptr->initialized) {
         return ERR_NOT_INITIALIZED;
     }
-    if (event_queue_ptr->item_size != sizeof(DominoTimer)) {
+    if (event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
         return ERR_INVALID_PARAM;
     }
     checkThreadResult(mtx_lock(&g_domino_timer.request_mutex));

@@ -6,6 +6,7 @@
 #include <threads.h>
 
 #include "domino_shared_common.h"
+#include "thread_message_test_helpers.h"
 #include "time/entry.h"
 #include "timer/internal.h"
 
@@ -44,7 +45,7 @@ static DominoThreadQueue g_test_event_queues[TEST_QUEUE_COUNT];
 /** @brief 业务自行初始化事件队列，timer 只借用队列指针。 */
 static bool initializeBusinessQueues(void) {
     for (uint32_t i = 0U; i < TEST_QUEUE_COUNT; ++i) {
-        if (dominoThreadQueueInit(&g_test_event_queues[i], sizeof(DominoTimer), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
+        if (dominoThreadQueueInit(&g_test_event_queues[i], sizeof(DominoThreadMessage), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
                                   DOMINO_ENGINE_QUEUE_MAX_CAPACITY) != CODE_OK) {
             return false;
         }
@@ -62,7 +63,7 @@ static bool initializeFixture(void) {
 static void exitFixture(void) {
     dominoTimerModuleExit();
     for (uint32_t i = 0U; i < TEST_QUEUE_COUNT; ++i) {
-        dominoThreadQueueDestroy(&g_test_event_queues[i]);
+        testDestroyMessageQueue(&g_test_event_queues[i]);
     }
 }
 
@@ -173,6 +174,7 @@ static bool testBusinessQueues(void) {
     bool success_flag = false;
     DominoThreadQueue uninitialized_queue = {0};
     DominoThreadQueue wrong_size_queue = {0};
+    DominoThreadMessage business_message = {0};
     DominoTimer request = {.timer_id = UINT64_MAX, .delay_ms = UINT32_MAX};
     dominoTimeModuleInitBefore();
     TEST_CHECK(dominoTimerSchedule(&request) == ERR_NOT_INITIALIZED && request.timer_id == 0U,
@@ -211,16 +213,22 @@ static bool testBusinessQueues(void) {
     checkThreadResult(mtx_unlock(&g_domino_timer.request_mutex));
     TEST_CHECK(correct_route_flag, "the heap record retains its caller-provided queue pointer");
     DominoTimer business_event = {.event_queue_ptr = &g_test_event_queues[0], .timer_id = 99U, .event_type = 7U};
-    TEST_CHECK(dominoThreadQueueProduce(&g_test_event_queues[0], &business_event, false) == CODE_OK,
+    TEST_CHECK(dominoThreadMessageInitCopy(&business_message, DOMINO_THREAD_MESSAGE_TIMER, &business_event, sizeof(business_event)) == CODE_OK,
+               "copy business event into an owned payload");
+    TEST_CHECK(dominoThreadQueueProduce(&g_test_event_queues[0], &business_message, false) == CODE_OK,
                "business can produce an event in its queue before timer exit");
+    uint64_t message_id = business_message.id;
+    business_message = (DominoThreadMessage){0};  // 载荷已转移给业务队列。
     dominoTimerModuleExit();
     dominoTimerModuleExit();
-    TEST_CHECK(g_test_event_queues[0].initialized && g_test_event_queues[0].count == 1U && g_test_event_queues[0].next_id == business_event.id &&
+    TEST_CHECK(g_test_event_queues[0].initialized && g_test_event_queues[0].count == 1U && g_test_event_queues[0].next_id == message_id &&
                    !g_test_event_queues[0].producer_stopped && !g_test_event_queues[0].consumer_stopped,
                "timer exit does not stop, destroy, clear, or reset the business queue");
     DominoTimer consumed_event;
-    TEST_CHECK(dominoThreadQueueConsume(&g_test_event_queues[0], &consumed_event, false) == CODE_OK && consumed_event.id == business_event.id &&
-                   consumed_event.timer_id == 99U && consumed_event.event_type == 7U && consumed_event.event_queue_ptr == &g_test_event_queues[0],
+    uint64_t consumed_message_id;
+    TEST_CHECK(testConsumeTimerMessage(&g_test_event_queues[0], &consumed_event, &consumed_message_id) == CODE_OK &&
+                   consumed_message_id == message_id && consumed_event.id == business_event.id && consumed_event.timer_id == 99U &&
+                   consumed_event.event_type == 7U && consumed_event.event_queue_ptr == &g_test_event_queues[0],
                "business directly consumes its preserved event after timer exit");
     dominoTimeModuleInitBefore();
     TEST_CHECK(dominoTimerModuleInit() == CODE_OK,
@@ -231,6 +239,7 @@ static bool testBusinessQueues(void) {
 
 cleanup:
     exitFixture();
+    dominoThreadMessageRelease(&business_message);
     dominoThreadQueueDestroy(&wrong_size_queue);
     return success_flag;
 }

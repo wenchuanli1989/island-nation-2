@@ -5,6 +5,7 @@
 #include <threads.h>
 
 #include "domino_shared_common.h"
+#include "thread_message_test_helpers.h"
 #include "time/entry.h"
 #include "timer/internal.h"
 
@@ -31,13 +32,13 @@ typedef struct TimerDispatchState {
     bool correct_thread;
 } TimerDispatchState;
 
-static DOMINO_CODE recordTimerEvent(const DominoTimer* event_ptr, TimerDispatchState* state_ptr) {
+static DOMINO_CODE recordTimerEvent(const DominoTimer* event_ptr, uint64_t message_id, TimerDispatchState* state_ptr) {
     DOMINO_CODE code = dominoTimeGetRuntimeMs(&state_ptr->dispatch_ms);
     if (code != CODE_OK) {
         return code;
     }
     state_ptr->timer_id = event_ptr->timer_id;
-    state_ptr->event_id = event_ptr->id;
+    state_ptr->event_id = message_id;
     state_ptr->due_ms = event_ptr->due_ms;
     state_ptr->delay_ms = event_ptr->delay_ms;
     state_ptr->dispatch_count++;
@@ -48,9 +49,10 @@ static DOMINO_CODE recordTimerEvent(const DominoTimer* event_ptr, TimerDispatchS
 /** @brief 业务消费者自行取出事件并过滤取消标志。 */
 static DOMINO_CODE consumeTimerEvent(DominoThreadQueue* queue_ptr, TimerDispatchState* state_ptr) {
     DominoTimer event;
-    DOMINO_CODE code = dominoThreadQueueConsume(queue_ptr, &event, false);
+    uint64_t message_id;
+    DOMINO_CODE code = testConsumeTimerMessage(queue_ptr, &event, &message_id);
     if (code == CODE_OK && !event.cancelled_flag) {
-        return recordTimerEvent(&event, state_ptr);
+        return recordTimerEvent(&event, message_id, state_ptr);
     }
     return code;
 }
@@ -98,10 +100,10 @@ static bool testTimerWaits(void) {
     domino_timer_id_t exit_queued_id;
     dominoTimeModuleInitBefore();
     dominoTimeModuleInitAfter();
-    TEST_CHECK(
-        dominoThreadQueueInit(&event_queue, sizeof(DominoTimer), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY, DOMINO_ENGINE_QUEUE_MAX_CAPACITY) == CODE_OK,
-        "initialize the business event queue");
-    TEST_CHECK(dominoThreadQueueInit(&long_event_queue, sizeof(DominoTimer), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
+    TEST_CHECK(dominoThreadQueueInit(&event_queue, sizeof(DominoThreadMessage), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
+                                     DOMINO_ENGINE_QUEUE_MAX_CAPACITY) == CODE_OK,
+               "initialize the business event queue");
+    TEST_CHECK(dominoThreadQueueInit(&long_event_queue, sizeof(DominoThreadMessage), DOMINO_ENGINE_QUEUE_DEFAULT_CAPACITY,
                                      DOMINO_ENGINE_QUEUE_MAX_CAPACITY) == CODE_OK,
                "initialize the other business event queue");
     TEST_CHECK(dominoTimerModuleInit() == CODE_OK, "initialize timer");
@@ -183,8 +185,8 @@ static bool testTimerWaits(void) {
 cleanup:
     dominoTimerModuleExit();
     dominoTimeModuleExit();
-    dominoThreadQueueDestroy(&long_event_queue);
-    dominoThreadQueueDestroy(&event_queue);
+    testDestroyMessageQueue(&long_event_queue);
+    testDestroyMessageQueue(&event_queue);
     return success;
 }
 

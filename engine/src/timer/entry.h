@@ -11,11 +11,11 @@
 /** @brief 64 位登记 ID，不是时间值；业务毫秒统一使用 32 位 domino_runtime_ms_t。 */
 typedef uint64_t domino_timer_id_t;
 
-/** @brief 登记命令、堆项及到期事件共用的按值计时记录；业务对象关联由消费方维护。 */
+/** @brief 登记命令、堆项及到期消息的计时载荷；到期时封装为 DominoThreadMessage。 */
 typedef struct DominoTimer {
-    uint64_t id;                         ///< 当前队列的消息 ID，每次入队由队列覆盖。
+    uint64_t id;                         ///< 登记命令队列的消息 ID；到期投递不修改载荷内部 ID。
     domino_timer_id_t timer_id;          ///< 登记命令的消息 ID，在本次 Init 生命周期内作为稳定取消凭据。
-    DominoThreadQueue* event_queue_ptr;  ///< 业务方拥有的到期事件队列，元素类型为 DominoTimer。
+    DominoThreadQueue* event_queue_ptr;  ///< 业务方拥有的通用收件队列，元素类型为 DominoThreadMessage。
     domino_runtime_ms_t due_ms;          ///< 32 位累计未冻结现实毫秒截止点，用于内部排序和到期判断。
     domino_runtime_ms_t delay_ms;        ///< 32 位现实毫秒延迟，从 Schedule 调用时起计算；0 表示尽快投递。
     uint8_t event_type;
@@ -46,7 +46,9 @@ void dominoTimerNotifyTimeChanged(void);
 /**
  * @brief 按现实毫秒延迟提交未取消的计时请求；入队后通知计时线程，不等待该请求处理完成。
  * @note 调用方填写 delay_ms、event_queue_ptr、event_type 和 cancelled_flag；输入的 id、timer_id、due_ms 不参与登记。
- * @note 事件队列必须已初始化、只存储 DominoTimer，且在计时线程停止及业务消费结束前不得销毁或重新初始化。
+ * @note 事件队列必须已初始化并存储 DominoThreadMessage，可混合 timer、AI、命令等类型；计时线程停止及业务消费结束前不得销毁或重建。
+ * @note 到期消息 items_type 为 DOMINO_THREAD_MESSAGE_TIMER，items_ptr 指向独立 DominoTimer 副本，items_size 为 sizeof(DominoTimer)。
+ *       消费方校验类型和大小后读取载荷，处理或跳过取消项后均须调用 dominoThreadMessageRelease；消息 id 与 timer_id 独立。
  * @note 校验通过后写入请求的 due_ms，再由队列按值复制；排队时间计入延迟，成功入队时回写 id 并令 timer_id = id。
  * @note 请求记录须在调用期间由当前线程独占；每次调用先将 timer_id 置为 0，成功入队后写回非零登记 ID。
  * @note 校验失败时 id 和 due_ms 不变；入队失败时 id 不变、已计算的 due_ms 保留；其余输入字段保持不变。
@@ -66,9 +68,9 @@ DOMINO_CODE dominoTimerSchedule(DominoTimer* timer_ptr);
 
 /**
  * @brief 按 ID 和业务队列查找命令、堆项或已投递事件并设置取消标志，不删除命令或事件。
- * @param event_queue_ptr 登记请求中填写的同一业务队列，必须已初始化且只存储 DominoTimer。
+ * @param event_queue_ptr 登记请求中填写的同一通用收件队列，必须已初始化且存储 DominoThreadMessage。
  * @return 成功返回 CODE_OK；ID 为 0 或队列元素大小不匹配返回 ERR_INVALID_PARAM；队列指针为空返回 ERR_NULL_POINTER；
- *         模块或队列未初始化返回 ERR_NOT_INITIALIZED；未知、已取消或已出队的请求返回 ERR_NOT_FOUND。
+ *         模块或队列未初始化返回 ERR_NOT_INITIALIZED；未知、已取消或已出队的请求返回 ERR_NOT_FOUND；畸形 timer 消息返回 ERR_INVALID_MESSAGE。
  * @note 已投递事件的取消与业务 Consume 在队列锁内竞争；业务必须在出队后检查 cancelled_flag 并跳过取消事件。
  *       已出队的事件不能撤回，业务自行校验对象存在、任务状态及当前 timer_id。
  * @note 不提交命令或消耗消息 ID；调用方须排除与 Init/Exit 并发。

@@ -12,15 +12,20 @@ static inline void dominoThreadQueueAssertSuccess(int result_code, const char* w
     abort();
 }
 
-/** @brief 持锁等待数据或空位；登记等待者供销毁流程确认条件变量已无人使用。 */
-static inline void dominoThreadQueueWaitLocked(DominoThreadQueue* queue_ptr, cnd_t* condition_ptr, const char* what_str) {
+/** @brief 持锁等待；登记等待者供销毁流程确认条件变量已无人使用，允许有限等待超时。 */
+static inline int dominoThreadQueueWaitLocked(DominoThreadQueue* queue_ptr, cnd_t* condition_ptr, const struct timespec* deadline_utc_ptr,
+                                              const char* what_str) {
     queue_ptr->waiter_count++;
-    int result_code = cnd_wait(condition_ptr, &queue_ptr->mutex);
+    int result_code =
+        deadline_utc_ptr == nullptr ? cnd_wait(condition_ptr, &queue_ptr->mutex) : cnd_timedwait(condition_ptr, &queue_ptr->mutex, deadline_utc_ptr);
     queue_ptr->waiter_count--;
     if (queue_ptr->waiter_count == 0U) {
         dominoThreadQueueAssertSuccess(cnd_broadcast(&queue_ptr->waiters_drained), "wait:cnd_broadcast(waiters_drained)");
     }
-    dominoThreadQueueAssertSuccess(result_code, what_str);
+    if (result_code != thrd_timedout) {
+        dominoThreadQueueAssertSuccess(result_code, what_str);
+    }
+    return result_code;
 }
 
 /** @brief 调用方持锁；只在满队列且尚未达到最大容量时调用。 */
@@ -71,6 +76,51 @@ DOMINO_CODE dominoThreadQueueInit(DominoThreadQueue* queue_ptr, size_t item_size
     dominoThreadQueueAssertSuccess(cnd_init(&queue_ptr->waiters_drained), "init:cnd_init(waiters_drained)");
     queue_ptr->initialized = true;
     return CODE_OK;
+}
+
+DOMINO_CODE dominoThreadQueueSnapshot(DominoThreadQueue* queue_ptr, uint64_t* epoch_out_ptr) {
+    if (queue_ptr == nullptr || epoch_out_ptr == nullptr) {
+        return ERR_NULL_POINTER;
+    }
+    if (!queue_ptr->initialized) {
+        return ERR_NOT_INITIALIZED;
+    }
+    dominoThreadQueueAssertSuccess(mtx_lock(&queue_ptr->mutex), "snapshot:mtx_lock");
+    *epoch_out_ptr = queue_ptr->wake_epoch;
+    dominoThreadQueueAssertSuccess(mtx_unlock(&queue_ptr->mutex), "snapshot:mtx_unlock");
+    return CODE_OK;
+}
+
+DOMINO_CODE dominoThreadQueueWait(DominoThreadQueue* queue_ptr, uint64_t observed_epoch, const struct timespec* deadline_utc_ptr) {
+    if (queue_ptr == nullptr) {
+        return ERR_NULL_POINTER;
+    }
+    if (!queue_ptr->initialized) {
+        return ERR_NOT_INITIALIZED;
+    }
+    if (deadline_utc_ptr != nullptr && (deadline_utc_ptr->tv_nsec < 0L || deadline_utc_ptr->tv_nsec >= 1000000000L)) {
+        return ERR_INVALID_PARAM;
+    }
+
+    DOMINO_CODE result_code = CODE_OK;
+    bool timed_out = false;
+    dominoThreadQueueAssertSuccess(mtx_lock(&queue_ptr->mutex), "wait:mtx_lock");
+    for (;;) {
+        if (queue_ptr->consumer_stopped) {
+            result_code = ERR_QUEUE_CONSUMER_STOPPED;
+            break;
+        }
+        if (queue_ptr->producer_stopped) {
+            result_code = ERR_QUEUE_PRODUCER_STOPPED;
+            break;
+        }
+        if (queue_ptr->wake_epoch != observed_epoch || timed_out) {
+            break;
+        }
+        timed_out = dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_empty, deadline_utc_ptr, "wait:cnd_wait(not_empty)") == thrd_timedout;
+    }
+    dominoThreadQueueAssertSuccess(mtx_unlock(&queue_ptr->mutex), "wait:mtx_unlock");
+    return result_code;
 }
 
 void dominoThreadQueueStop(DominoThreadQueue* queue_ptr, DominoThreadQueueEnd end) {
@@ -136,6 +186,7 @@ void dominoThreadQueueWakeAll(DominoThreadQueue* queue_ptr) {
     }
 
     dominoThreadQueueAssertSuccess(mtx_lock(&queue_ptr->mutex), "wake_all:mtx_lock");
+    queue_ptr->wake_epoch++;
     dominoThreadQueueAssertSuccess(cnd_broadcast(&queue_ptr->not_empty), "wake_all:cnd_broadcast(not_empty)");
     dominoThreadQueueAssertSuccess(cnd_broadcast(&queue_ptr->not_full), "wake_all:cnd_broadcast(not_full)");
     dominoThreadQueueAssertSuccess(mtx_unlock(&queue_ptr->mutex), "wake_all:mtx_unlock");
@@ -203,7 +254,7 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* que
             result_code = ERR_QUEUE_FULL;
             goto unlock;
         }
-        dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_full, "produce:cnd_wait(not_full)");
+        (void)dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_full, nullptr, "produce:cnd_wait(not_full)");
     }
 
     uint64_t item_id = ++queue_ptr->next_id;
@@ -213,8 +264,10 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* que
         queue_ptr->tail = 0U;
     }
     queue_ptr->count++;
+    queue_ptr->wake_epoch++;
     if (queue_ptr->waiter_count > 0U) {
-        dominoThreadQueueAssertSuccess(cnd_signal(&queue_ptr->not_empty), "produce:cnd_signal(not_empty)");
+        // 版本等待者与阻塞消费者共用条件变量，统一广播以便所有等待者重新检查条件。
+        dominoThreadQueueAssertSuccess(cnd_broadcast(&queue_ptr->not_empty), "produce:cnd_broadcast(not_empty)");
         if (queue_ptr->next_id == UINT64_MAX) {
             // 编号耗尽后唤醒剩余生产者，避免继续等待空位。
             dominoThreadQueueAssertSuccess(cnd_broadcast(&queue_ptr->not_full), "produce:cnd_broadcast(not_full)");
@@ -265,7 +318,7 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueConsumeBatch(DominoThreadQueue
             result_code = ERR_QUEUE_EMPTY;
             goto unlock;
         }
-        dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_empty, "consume:cnd_wait(not_empty)");
+        (void)dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_empty, nullptr, "consume:cnd_wait(not_empty)");
     }
 
     const uint32_t consumed_count = queue_ptr->count < max_count ? queue_ptr->count : max_count;

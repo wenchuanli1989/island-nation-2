@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "domino_shared_common.h"
+#include "thread_message_test_helpers.h"
 #include "time/entry.h"
 #include "timer/internal.h"
 
@@ -55,7 +56,7 @@ static void recordTimerEvent(const DominoTimer* event_ptr, TimerDispatchState* s
 static bool startFixture(TimerFixture* fixture_ptr, uint32_t queue_capacity) {
     dominoTimeModuleInitBefore();
     for (uint32_t i = 0U; i < TEST_QUEUE_COUNT; ++i) {
-        if (dominoThreadQueueInit(&fixture_ptr->queues[i], sizeof(DominoTimer), queue_capacity, queue_capacity) != CODE_OK) {
+        if (dominoThreadQueueInit(&fixture_ptr->queues[i], sizeof(DominoThreadMessage), queue_capacity, queue_capacity) != CODE_OK) {
             return false;
         }
     }
@@ -75,7 +76,7 @@ static void destroyFixture(TimerFixture* fixture_ptr) {
     dominoTimerModuleExit();
     dominoTimeModuleExit();
     for (uint32_t i = 0U; i < TEST_QUEUE_COUNT; ++i) {
-        dominoThreadQueueDestroy(&fixture_ptr->queues[i]);
+        testDestroyMessageQueue(&fixture_ptr->queues[i]);
     }
 }
 
@@ -87,7 +88,7 @@ static DominoTimer createTimerRequest(DominoThreadQueue* queue_ptr) {
 /** @brief 业务自行出队并检查取消标记，不取得 timer 请求锁。 */
 static DOMINO_CODE consumeNextEvent(DominoThreadQueue* queue_ptr, TimerDispatchState* state_ptr) {
     DominoTimer timer;
-    DOMINO_CODE code = dominoThreadQueueConsume(queue_ptr, &timer, false);
+    DOMINO_CODE code = testConsumeTimerMessage(queue_ptr, &timer, nullptr);
     if (code == CODE_OK && !timer.cancelled_flag) {
         recordTimerEvent(&timer, state_ptr);
     }

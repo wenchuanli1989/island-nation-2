@@ -80,7 +80,7 @@ __attribute__((hot)) DOMINO_CODE dominoTimerSchedule(DominoTimer* timer_ptr) {
     if (!timer_ptr->event_queue_ptr->initialized) {
         return ERR_NOT_INITIALIZED;
     }
-    if (timer_ptr->event_queue_ptr->item_size != sizeof(DominoTimer)) {
+    if (timer_ptr->event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
         return ERR_INVALID_PARAM;
     }
     domino_runtime_ms_t now_ms;
