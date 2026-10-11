@@ -54,9 +54,10 @@ typedef struct DominoEngineClientData {
 static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096 bytes");
 
 /**
- * @brief 从已初始化状态启动主循环，主循环线程创建成功即返回，不等待内部规划线程就绪。
- * @param client_data_out_ptr 可为 nullptr；非空时仅写入 game_date_time_ns。
- * @return CODE_OK 成功；状态、队列初始化或线程创建失败时返回负错误码。
+ * @brief 从已初始化状态同步创建主循环和规划线程，全部创建成功后返回。
+ * @param client_data_out_ptr 可为 nullptr；成功时非空输出仅写入 game_date_time_ns。
+ * @return CODE_OK 成功；状态、队列初始化、线程创建或清理失败时返回负错误码。
+ * @note 启动失败时停止已创建线程并释放队列，可重试 Run；若线程清理失败则进入 STOPPING，只允许重试 Exit。
  */
 extern DOMINO_CODE dominoEngineRun(DominoEngineClientData* client_data_out_ptr);
 

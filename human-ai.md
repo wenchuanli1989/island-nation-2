@@ -32,7 +32,7 @@
 | `engine/src/human/entry.c`、`entry.h`、`store.c` | 管理同序的人物／data 数组及共用人物 ID 索引，以及全局 `DominoTask` 任务池；任务直接持有独占连续行为块及自身执行版本 | 在统一所有权上接入规划／执行生命周期；不另建人物 AI、任务或行为数据来源 |
 | `shared/include/domino_shared_behavior.h` | 已分离十二类任务与十五类行为枚举，删除旧五字段和 `REST`；定义计划／实际时间、进度、状态、任务关系及停止意图，`DominoTask` 同时包含行为块指针和运行期执行版本 | 随具体业务增加专有参数与执行回调 |
 | `shared/include/domino_shared_human.h` | 64 字节人物核心保存身份、状态、位置、data 引用及调度身份／标志；4096 字节 data 前部整合需求、日程、随机状态和调度补充字段，其余人物属性按语义分组 | 执行器按 data 中的三个槽推进；从 `human->data->current_building_id` 判定同楼 |
-| `engine/src/entry.c` | 主循环内部启动规划线程，Run 不等待内部线程就绪 | human 管理规划／执行线程，引擎管理通用计时线程，Run 成功前统一确认就绪 |
+| `engine/src/entry.c` | Run 同步创建主循环和规划线程，全部创建成功后返回；启动失败停止已创建线程并清理队列 | human 管理规划／执行线程，引擎管理通用计时线程，Run 成功前统一确认就绪 |
 | `engine/src/dispatch/entry.c` | 仅处理 `DOMINO_ENGINE_MSG_NONE` | 路由人物命令、计划结果所需的外部事件和导航修改命令 |
 | `engine/src/queue/thread_queue.c`、`thread_queue.h` | 带锁、可扩容 FIFO，单条／批量消费均已存在；首 8 字节由队列写入消息 ID；`Stop` 与 `WakeAll` 分离 | 复用值复制、批量消费和条件变量，按端点关停／唤醒，补充 AI 控制等待谓词 |
 | `engine/src/time/entry.c`、`entry.h` | 底层以纳秒采样；`dominoTimeGetRuntimeMs(&now_ms)` 校验范围并输出 32 位累计未冻结现实毫秒；InitAfter 即解除冻结，Freeze 不等待工作线程确认，也不自动通知 timer | 复用现有 32 位现实毫秒业务入口，接入暂停确认、Run 启动协调和 timer 时间变更通知 |
@@ -95,7 +95,7 @@ flowchart LR
     Timer -->|到期事件| Other
 ```
 
-以上是目标拓扑。独立执行线程建议命名为 `dominoHumanExecutionThread()`，规划线程为 `dominoHumanPlanningThread()`，二者由拟新增的 `dominoHumanStart()`、`dominoHumanStop()` 管理。现有 `dominoTimerThread()` 已由 `dominoTimerModuleInit()` 创建并由 `dominoTimerModuleExit()` join，但引擎尚未调用这两个入口。接入后由引擎协调 timer 生命周期；从引擎主循环移除现有直接创建规划线程的逻辑。
+以上是目标拓扑。独立执行线程建议命名为 `dominoHumanExecutionThread()`，规划线程为 `dominoHumanPlanningThread()`，二者由拟新增的 `dominoHumanStart()`、`dominoHumanStop()` 管理。现有 `dominoTimerThread()` 已由 `dominoTimerModuleInit()` 创建并由 `dominoTimerModuleExit()` join，但引擎尚未调用这两个入口。接入后由引擎协调 timer 生命周期；将 Run 中现有直接创建规划线程的逻辑移入 human 模块。
 
 ### 4.2 写入职责
 

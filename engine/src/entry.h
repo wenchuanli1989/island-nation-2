@@ -17,7 +17,7 @@ extern char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX];
 /** @brief 初始化时保存的启动配置；storage_path 指向引擎持有的路径副本。 */
 extern DominoEngineLaunchConfig g_domino_engine_launch_config;
 
-/** @brief human behavior planning 线程停止标志，由主循环线程写入。 */
+/** @brief human behavior planning 线程停止标志，由引擎启动和停止流程写入。 */
 extern _Atomic bool g_domino_human_behavior_planning_stop;
 
 /** @brief 当前线程是否为客户端线程，且引擎处于 INITIALIZED 或 RUNNING。 */

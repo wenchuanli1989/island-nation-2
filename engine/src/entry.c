@@ -23,6 +23,7 @@ char g_domino_storage_account_id[DOMINO_STORAGE_ACCOUNT_ID_MAX] = "";
 char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX] = "local";
 
 static bool g_domino_main_loop_thread_started = false;
+static bool g_domino_human_behavior_planning_thread_started = false;
 static char g_domino_storage_path[DOMINO_STORAGE_PATH_MAX] = "";
 
 static thrd_t g_domino_client_thread;
@@ -76,6 +77,7 @@ static void dominoEngineResetSessionState(void) {
     memset(g_domino_storage_account_id, 0, sizeof(g_domino_storage_account_id));
     (void)snprintf(g_domino_storage_run_mode, sizeof(g_domino_storage_run_mode), "%s", "local");
     g_domino_main_loop_thread_started = false;
+    g_domino_human_behavior_planning_thread_started = false;
     g_domino_engine_exit_progress = DOMINO_ENGINE_EXIT_PROGRESS_NONE;
     g_domino_engine_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED;
 }
@@ -108,23 +110,27 @@ static void dominoEngineQueueModuleExit(void) {
     dominoThreadQueueDestroy(&g_domino_from_main_loop_queue);
 }
 
-static DOMINO_CODE dominoEngineShutdownMainLoopThread(void) {
-    if (!g_domino_main_loop_thread_started) {
-        return CODE_OK;
-    }
-
+static DOMINO_CODE dominoEngineShutdownThreads(void) {
+    atomic_store(&g_domino_human_behavior_planning_stop, true);
     /* 先禁止队列操作，再显式唤醒阻塞线程；退出不依赖游戏时间是否冻结。 */
     dominoThreadQueueStop(&g_domino_from_main_loop_queue, DOMINO_THREAD_QUEUE_BOTH);
     dominoThreadQueueStop(&g_domino_to_main_loop_queue, DOMINO_THREAD_QUEUE_BOTH);
     dominoThreadQueueWakeAll(&g_domino_from_main_loop_queue);
     dominoThreadQueueWakeAll(&g_domino_to_main_loop_queue);
 
-    int thread_result = CODE_OK;
-    if (thrd_join(g_domino_main_loop_thread, &thread_result) != thrd_success) {
-        return ERR_SYSTEM;
+    if (g_domino_main_loop_thread_started) {
+        if (thrd_join(g_domino_main_loop_thread, nullptr) != thrd_success) {
+            return ERR_SYSTEM;
+        }
+        g_domino_main_loop_thread_started = false;
     }
-    g_domino_main_loop_thread_started = false;
-    return (DOMINO_CODE)thread_result;
+    if (g_domino_human_behavior_planning_thread_started) {
+        if (thrd_join(g_domino_human_behavior_planning_thread, nullptr) != thrd_success) {
+            return ERR_SYSTEM;
+        }
+        g_domino_human_behavior_planning_thread_started = false;
+    }
+    return CODE_OK;
 }
 
 DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr, bool blocking) {
@@ -229,14 +235,6 @@ fail:
 static int dominoMainLoopThread(void* arg_ptr) {
     (void)arg_ptr;
 
-    atomic_store(&g_domino_human_behavior_planning_stop, false);
-
-    if (thrd_create(&g_domino_human_behavior_planning_thread, dominoHumanBehaviorPlanningThread, nullptr) != thrd_success) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "failed to create human behavior planning thread");
-        atomic_store(&g_domino_human_behavior_planning_stop, true);
-        return ERR_THREAD_CREATE;
-    }
-
     DominoEngineMessage message;
     while (true) {
         if (dominoThreadQueueIsStopped(&g_domino_to_main_loop_queue, DOMINO_THREAD_QUEUE_CONSUMER)) {
@@ -268,11 +266,6 @@ static int dominoMainLoopThread(void* arg_ptr) {
         }
     }
 
-    atomic_store(&g_domino_human_behavior_planning_stop, true);
-    if (thrd_join(g_domino_human_behavior_planning_thread, nullptr) != thrd_success) {
-        return ERR_SYSTEM;
-    }
-
     return CODE_OK;
 }
 
@@ -297,10 +290,16 @@ DOMINO_CODE dominoEngineRun(DominoEngineClientData* client_data_out_ptr) {
         return result_code;
     }
 
+    atomic_store(&g_domino_human_behavior_planning_stop, false);
+    if (thrd_create(&g_domino_human_behavior_planning_thread, dominoHumanBehaviorPlanningThread, nullptr) != thrd_success) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "failed to create human behavior planning thread");
+        goto fail;
+    }
+    g_domino_human_behavior_planning_thread_started = true;
+
     if (thrd_create(&g_domino_main_loop_thread, dominoMainLoopThread, nullptr) != thrd_success) {
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "failed to create main loop thread");
-        dominoEngineQueueModuleExit();
-        return ERR_THREAD_CREATE;
+        goto fail;
     }
     g_domino_main_loop_thread_started = true;
 
@@ -309,6 +308,15 @@ DOMINO_CODE dominoEngineRun(DominoEngineClientData* client_data_out_ptr) {
     }
     g_domino_engine_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_RUNNING;
     return CODE_OK;
+
+fail:
+    result_code = dominoEngineShutdownThreads();
+    if (result_code != CODE_OK) {
+        g_domino_engine_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_STOPPING;
+        return result_code;
+    }
+    dominoEngineQueueModuleExit();
+    return ERR_THREAD_CREATE;
 }
 
 DOMINO_CODE dominoEngineExit(void) {
@@ -323,7 +331,7 @@ DOMINO_CODE dominoEngineExit(void) {
 
     DOMINO_CODE result = CODE_OK;
     if (g_domino_engine_exit_progress < DOMINO_ENGINE_EXIT_PROGRESS_THREADS_STOPPED) {
-        result = dominoEngineShutdownMainLoopThread();
+        result = dominoEngineShutdownThreads();
         if (result != CODE_OK) {
             return result;
         }
