@@ -64,17 +64,24 @@ DominoMovableObject* dominoGetMovableObjectByID(domino_movable_object_id_t movab
     return nullptr;
 }
 
-void dominoHostModuleInit(void) {
+DOMINO_CODE dominoHostModuleInit(void) {
     dominoHostResetWorldState();
 
     kv_init(domino_all_island_list);
     kv_init(domino_all_movable_object_list);
-    kv_resize(DominoIsland, domino_all_island_list, HOST_ISLAND_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoMovableObject, domino_all_movable_object_list, HOST_MOVABLE_OBJECT_VEC_RESERVE_CAPACITY_MIN);
     dominoIslandIdMap = dominoIslandIdMap_init();
+    if (!dominoIslandIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoIslandIdMap (code=%d)", ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoMovableObjectIdMap = dominoMovableObjectIdMap_init();
+    if (!dominoMovableObjectIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoMovableObjectIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
 
-    DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_INFO, "hostModuleInit");
+    return CODE_OK;
 }
 
 void dominoHostModuleExit(void) {
@@ -83,5 +90,4 @@ void dominoHostModuleExit(void) {
     kv_destroy(domino_all_movable_object_list);
     kv_destroy(domino_all_island_list);
     dominoHostResetWorldState();
-    DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_INFO, "hostModuleExit");
 }

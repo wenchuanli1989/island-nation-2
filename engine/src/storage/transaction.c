@@ -23,28 +23,28 @@ typedef enum TxnPathKind {
 } TxnPathKind;
 
 static DOMINO_CODE txnBuildBackupPath(const char* save_path, char* backup_out, size_t backup_cap) {
-    if (!save_path || save_path[0] == '\0' || !backup_out || backup_cap == 0U) {
-        return ERR_INVALID_PARAM;
-    }
     int written = snprintf(backup_out, backup_cap, "%s.prev", save_path);
-    if (written < 0 || (size_t)written >= backup_cap) {
-        return ERR_OUT_OF_RANGE;
+    if (written < 0) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to format backup path (path=%s)", save_path);
+        return ERR_STRING_FORMAT;
+    }
+    if ((size_t)written >= backup_cap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "backup path exceeds output buffer (path=%s, capacity=%zu)",
+                          save_path, backup_cap);
+        return ERR_BUFFER_TOO_SMALL;
     }
     return CODE_OK;
 }
 
 static DOMINO_CODE txnGetPathKind(const char* path, TxnPathKind* kind_out) {
-    if (!path || path[0] == '\0' || !kind_out) {
-        return ERR_INVALID_PARAM;
-    }
-
     struct stat path_stat;
     if (lstat(path, &path_stat) != 0) {
         if (errno == ENOENT) {
             *kind_out = TXN_PATH_MISSING;
             return CODE_OK;
         }
-        return ERR_FILE_READ;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to inspect save path (path=%s, errno=%d)", path, errno);
+        return ERR_FILE_STAT;
     }
     *kind_out = S_ISDIR(path_stat.st_mode) ? TXN_PATH_DIRECTORY : TXN_PATH_OTHER;
     return CODE_OK;
@@ -53,12 +53,19 @@ static DOMINO_CODE txnGetPathKind(const char* path, TxnPathKind* kind_out) {
 static DOMINO_CODE txnFlushDirectory(const char* directory_path) {
     int directory_fd = open(directory_path, O_RDONLY | O_DIRECTORY);
     if (directory_fd < 0) {
-        return ERR_FILE_OPEN;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to open directory for flushing (path=%s, errno=%d)",
+                          directory_path, errno);
+        return ERR_DIRECTORY_OPEN;
     }
-    int sync_result = fsync(directory_fd);
-    int close_result = close(directory_fd);
-    if (sync_result != 0 || close_result != 0) {
+    if (fsync(directory_fd) != 0) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to flush save directory (path=%s, errno=%d)",
+                          directory_path, errno);
         return ERR_FILE_FLUSH;
+    }
+    if (close(directory_fd) != 0) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to close save directory (path=%s, errno=%d)",
+                          directory_path, errno);
+        return ERR_DIRECTORY_CLOSE;
     }
     return CODE_OK;
 }
@@ -68,24 +75,11 @@ static DOMINO_CODE txnFlushSaveParent(const char* save_path) {
     char base[DOMINO_STORAGE_PATH_MAX];
     DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
     if (result != CODE_OK) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to split save path (path=%s, code=%d)", save_path,
+                          result);
         return result;
     }
-    if (base[0] == '\0') {
-        return ERR_INVALID_PARAM;
-    }
     return txnFlushDirectory(parent);
-}
-
-static DOMINO_CODE txnRollbackBackup(const char* backup_path, const char* save_path) {
-    if (dominoRename(backup_path, save_path) != 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn rollback backup failed: %s -> %s", backup_path, save_path);
-        return ERR_FILE_RENAME;
-    }
-    DOMINO_CODE result = txnFlushSaveParent(save_path);
-    if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn rollback parent flush failed: %s", save_path);
-    }
-    return result;
 }
 
 DOMINO_CODE txnPrepareSaveParent(const char* save_path) {
@@ -93,12 +87,16 @@ DOMINO_CODE txnPrepareSaveParent(const char* save_path) {
     char base[DOMINO_STORAGE_PATH_MAX];
     DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
     if (result != CODE_OK) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to split save path (path=%s, code=%d)", save_path,
+                          result);
         return result;
     }
-    if (base[0] == '\0') {
-        return ERR_INVALID_PARAM;
+    result = dominoMkdirRecursive(parent);
+    if (result != CODE_OK) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to create save parent (path=%s, code=%d)", parent,
+                          result);
     }
-    return dominoMkdirRecursive(parent);
+    return result;
 }
 
 /* staging 与正式目录位于同一父目录，提交依赖 rename 与父目录 fsync。 */
@@ -107,20 +105,27 @@ DOMINO_CODE txnBuildStagingPath(const char* save_path, char* staging_out, size_t
     char base[DOMINO_STORAGE_PATH_MAX];
     DOMINO_CODE result = dominoPathSplitParentBase(save_path, parent, sizeof(parent), base, sizeof(base));
     if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: ");
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to split save path (path=%s, code=%d)", save_path,
+                          result);
         return result;
     }
-    if (base[0] == '\0') {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: base is empty");
-        return ERR_INVALID_PARAM;
+    uint64_t wall_timestamp_ms;  // UTC 时间戳仅用于事务目录命名，不是业务累计时钟。
+    result = dominoWallTimeMsChecked(&wall_timestamp_ms);
+    if (result != CODE_OK) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to read transaction naming clock (code=%d)", result);
+        return result;
     }
-    uint64_t wall_timestamp_ms = dominoWallTimeMs();  // UTC 时间戳仅用于事务目录命名，不是业务累计时钟。
     uint64_t pid = dominoGetPid();
     int written;
     written = snprintf(staging_out, staging_cap, "%s/.%s.__txn__.%" PRIu64 "-%" PRIu64, parent, base, wall_timestamp_ms, pid);
-    if (written < 0 || (size_t)written >= staging_cap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn build staging path failed: buffer overflow");
-        return ERR_OUT_OF_RANGE;
+    if (written < 0) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to format staging path (path=%s)", save_path);
+        return ERR_STRING_FORMAT;
+    }
+    if ((size_t)written >= staging_cap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "staging path exceeds output buffer (path=%s, capacity=%zu)",
+                          save_path, staging_cap);
+        return ERR_BUFFER_TOO_SMALL;
     }
     return CODE_OK;
 }
@@ -144,13 +149,12 @@ DOMINO_CODE txnRecoverSave(const char* save_path) {
     }
 
     if (active_kind == TXN_PATH_OTHER) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery refused non-directory active path: %s", save_path);
-        return ERR_INVALID_DATA;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "active save path is not a directory (path=%s)", save_path);
+        return ERR_PATH_TYPE;
     }
     if (backup_kind == TXN_PATH_OTHER) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery refused non-directory backup path: %s",
-                          backup_path);
-        return ERR_INVALID_DATA;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "backup save path is not a directory (path=%s)", backup_path);
+        return ERR_PATH_TYPE;
     }
 
     if (active_kind == TXN_PATH_MISSING) {
@@ -158,16 +162,14 @@ DOMINO_CODE txnRecoverSave(const char* save_path) {
             return CODE_OK;
         }
         if (dominoRename(backup_path, save_path) != 0) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery restore failed: %s -> %s", backup_path,
-                              save_path);
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
+                              "failed to restore save backup (source=%s, target=%s, errno=%d)", backup_path, save_path, errno);
             return ERR_FILE_RENAME;
         }
         result = txnFlushSaveParent(save_path);
         if (result != CODE_OK) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery parent flush failed: %s", save_path);
             return result;
         }
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_WARN, "txn recovered previous save: %s", save_path);
         return CODE_OK;
     }
 
@@ -178,19 +180,18 @@ DOMINO_CODE txnRecoverSave(const char* save_path) {
     /* active 已出现表示 staging rename 已完成；先刷父目录，再清理旧备份。 */
     result = txnFlushSaveParent(save_path);
     if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery active flush failed: %s", save_path);
         return result;
     }
-    if (dominoRemovePathRecursive(backup_path) != 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery stale backup cleanup failed: %s", backup_path);
-        return ERR_FILE_WRITE;
+    result = dominoRemovePathRecursive(backup_path);
+    if (result != CODE_OK) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to remove save backup (path=%s, code=%d)", backup_path,
+                          result);
+        return result;
     }
     result = txnFlushSaveParent(save_path);
     if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn recovery cleanup flush failed: %s", save_path);
         return result;
     }
-    DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_WARN, "txn removed stale backup after committed save: %s", backup_path);
     return CODE_OK;
 }
 
@@ -215,55 +216,59 @@ DOMINO_CODE txnCommitReplace(const char* staging_path, const char* save_path) {
     if (result != CODE_OK) {
         return result;
     }
+    if (staging_kind == TXN_PATH_MISSING) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "staged save directory is missing (path=%s)", staging_path);
+        return ERR_FILE_NOT_FOUND;
+    }
     if (staging_kind != TXN_PATH_DIRECTORY || active_kind == TXN_PATH_OTHER) {
-        DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn commit requires real staging/active directories");
-        return ERR_INVALID_DATA;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
+                          "invalid save transaction paths (staging=%s, kind=%d, active=%s, kind=%d)", staging_path, staging_kind, save_path,
+                          active_kind);
+        return ERR_PATH_TYPE;
     }
 
     result = txnFlushDirectory(staging_path);
     if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn staging directory flush failed: %s", staging_path);
         return result;
     }
 
     bool had_active_save = active_kind == TXN_PATH_DIRECTORY;
     if (had_active_save) {
-        /* 先保留旧存档，使 staging -> save_path 失败时仍有回滚来源。 */
+        /* 先保留旧存档；后续失败交给下一次启动恢复，当前进程不回滚。 */
         if (dominoRename(save_path, backup_path) != 0) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn rename active save to backup failed: %s -> %s",
-                              save_path, backup_path);
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to retain old save (source=%s, target=%s, errno=%d)",
+                              save_path, backup_path, errno);
             return ERR_FILE_RENAME;
         }
         result = txnFlushSaveParent(save_path);
         if (result != CODE_OK) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn backup rename flush failed: %s", backup_path);
-            (void)txnRollbackBackup(backup_path, save_path);
             return result;
         }
     }
     if (dominoRename(staging_path, save_path) != 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn rename staging to active save failed: %s -> %s",
-                          staging_path, save_path);
-        if (had_active_save) {
-            (void)txnRollbackBackup(backup_path, save_path);
-        }
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to commit staged save (source=%s, target=%s, errno=%d)",
+                          staging_path, save_path, errno);
         return ERR_FILE_RENAME;
     }
 
     result = txnFlushSaveParent(save_path);
     if (result != CODE_OK) {
-        /* active 与 backup 同时保留，下一次 Init/保存会按提交完成状态收敛。 */
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "txn active rename flush failed: %s", save_path);
+        /* active 与 backup 同时保留，下一次 Init 会按提交完成状态收敛。 */
         return result;
     }
 
-    /* 提交成功后删除备份目录，删除失败不改变本次保存成功语义。 */
-    if (had_active_save && dominoRemovePathRecursive(backup_path) != 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_WARN, "txn committed but backup cleanup failed: %s", backup_path);
-        return CODE_OK;
-    }
-    if (had_active_save && txnFlushSaveParent(save_path) != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_WARN, "txn committed but backup cleanup flush failed: %s", backup_path);
+    /* 提交完成后清理旧备份；失败仍直接上报，保留已完成的磁盘步骤。 */
+    if (had_active_save) {
+        result = dominoRemovePathRecursive(backup_path);
+        if (result != CODE_OK) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to remove committed save backup (path=%s, code=%d)",
+                              backup_path, result);
+            return result;
+        }
+        result = txnFlushSaveParent(save_path);
+        if (result != CODE_OK) {
+            return result;
+        }
     }
     return CODE_OK;
 }

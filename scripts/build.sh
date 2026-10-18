@@ -183,7 +183,7 @@ main() {
             cmake_build "debug" "build-macos-debug" "playground" \
                 -S "$WORKSPACE_DIR" -B "$WORKSPACE_DIR/build-macos-debug" \
                 -DPLAYGROUND_SOURCE_DIR="$WORKSPACE_DIR/playground/src" \
-                -DDOMINO_PLAYGROUND_MODE=ON -DBUILD_TESTING=OFF
+                -DDOMINO_PLAYGROUND_MODE=ON
             ;;
 
         debug)

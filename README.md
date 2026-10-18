@@ -21,20 +21,24 @@ domino/
 
 ### 当前引擎生命周期
 
-`dominoEngineInit(runtime_config)` 按固定顺序初始化模块：
+`dominoEngineInit(launch_config)` 按固定顺序初始化模块：
 
 ```text
-logger -> common -> host -> nav(before) -> social -> human -> storage(load) -> time(after) -> nav(after)
+logger -> common -> host -> nav(before) -> social -> human -> time(before) -> storage(load) -> nav(after) -> time(after)
 ```
 
-- `runtime_config.storage_path` 当前必须是非空存档目录；没有 `meta.json` 时会以新世界启动。
-- `runtime_config.storage_integrity_verify` 会写入存档根 `meta.json`，加载时必须与存档声明完全一致。
-- 每次 `dominoEngineInit()` 都先建立空世界基线，再从当前 `storage_path` 覆盖加载；同一进程切换存档路径时，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。
+- `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，查询、读取或解析失败均返回错误。
+- `launch_config.storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载使用存档自身声明的校验策略。
+- 每次 `dominoEngineInit()` 都先建立空世界基线，再从当前 `storage_path` 覆盖加载；上一轮成功 Exit 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
-`dominoEngineRun()` 会启动消息消费主循环和 human 行为规划工作线程；time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围并返回错误码。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
+`dominoEngineRun()` 由客户端准备主循环消息队列和运行通知，在时钟保持冻结时直接调用 human Start 完成启动校验并建立执行／规划线程，再启动 timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行；原本等待中的线程保持等待，恢复或退出时再唤醒。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围并返回错误码。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
-`dominoEngineExit()` 会停止工作线程、冻结并结算时间、准备 nav 派生状态，再事务式保存存档，最后按依赖逆序释放 human、social、nav、host、common、logger。退出阶段返回可恢复错误时引擎保持 `STOPPING`；保存失败不会释放内存世界，处理外部 IO 问题后再次调用 `dominoEngineExit()` 会从未完成阶段继续。内存分配失败按现有接口契约简洁处理，具体规则见 [`CODING_STANDARDS.md`](CODING_STANDARDS.md#41-内存分配失败策略)。`STOPPING` 期间不允许调用其他 public API。
+运行中的世界经客户端调用 `dominoEngineExit()` 进入 `STOPPING`，先发布退出标志、冻结时钟并校验退出时刻 T，再直接唤醒主循环和全部业务线程；已经暂停的世界无需解冻。主循环和各业务线程完成当前有限批次后退出，主循环不再协调停钟或收尾。客户端依次 join 主循环、human 执行／规划线程和 timer，再将人物结算到 T 并清理队列；相关线程停止前，其投递目标和 timer 登记入口保持有效。随后客户端释放运行资源，准备 nav 派生状态、事务式保存存档，最后按依赖逆序释放世界模块，日志保持到保存完成后才关闭。普通暂停不遍历人物结算。仅 Init、未 Run 的世界也可直接保存退出。成功 Exit 回到未初始化状态，允许同进程建立新世界。
+
+Init／Run／Exit、Freeze／Thaw 的生命周期状态、参数校验和资源步骤返回错误时，子模块直接向上传递并记录实例首错；队列满和后台运行故障同样进入 `FAILED` 并唤醒等待者。不执行失败清理、回滚或重试，也不由引擎主动 `abort()`／`exit()`。`FAILED` 后唯一允许调用的引擎接口是只读的 `dominoEngineGetLifecycleError()`；宿主报告错误并结束进程，在此之前残留线程可能访问的资源须保持有效，失败实例不可重用，不保证违规重复调用其他 API 会返回已记录错误。保存失败同样如此，磁盘事务由后续新进程加载时恢复。`lib/` 中库函数的既有终止行为保留，允许其内部触发 `abort()`，不转换成生命周期错误；其他内存分配失败按接口契约传播，具体规则见 [`CODING_STANDARDS.md`](CODING_STANDARDS.md#41-内存分配失败策略)。
+
+Init／Exit 调用链不经运行期日志队列记录生命周期诊断，原错误直接上抛，由宿主报告；logger 关闭排空、刷新或关闭文件失败同样上抛并停止后续释放。正常运行期日志仍遵循原有错误策略。
 
 ### 数据与存档
 
@@ -52,7 +56,7 @@ logger -> common -> host -> nav(before) -> social -> human -> storage(load) -> t
 
 `lib/klib/` 只保留 Domino 当前使用的 `kvec.h` 和 `khashl.h`。官方基线为 [attractivechaos/klib](https://github.com/attractivechaos/klib) master，2026-06-04 对比到 commit `97a0fcb790b43b9e5da8994f4671021fec036f19`；官方源码见 [`kvec.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/kvec.h) 和 [`khashl.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/khashl.h)。本仓库版本属于随仓维护版：保留官方数据结构、宏接口和核心算法，只围绕 Domino 的高频内存访问、错误可诊断性和静态检查要求做窄范围补丁。
 
-- `kvec.h`：官方扩容路径直接调用 `realloc(sizeof(type) * capacity)`；本地统一改为 `kv_realloc_array()`，先检查 `elem_size * count` 是否超过 `SIZE_MAX`，再在分配失败时输出原因、元素大小、元素数量、文件和行号并 `abort()`。这样可以避免容量计算回绕导致短分配，也让 OOM 在调试、压测和大世界数据导入时快速暴露；数组布局、增长策略和公开宏接口保持不变。
+- `kvec.h`：`kv_*` 扩容通过 `kv_realloc_array()` 检查大小溢出，并在分配失败时输出诊断后 `abort()`。生命周期、存档和运行期均使用原有公开接口，保留库内部的终止行为，不额外增加可失败接口或绕过层。数组布局、增长策略和原公开宏接口保持不变。
 - `khashl.h`：保留官方 `r30` 的开放寻址、75% 默认负载因子、Fibonacci hashing、bucket 布局和使用方式。本地只补强错误传播和边界保护：`KHASHL_SET_INIT`/`KHASHL_MAP_INIT` 生成的 `prefix##_resize()` 返回底层 resize 结果；收缩分支先保存 `Krealloc()` 返回值，失败时返回 `-1`，避免直接覆盖原 `keys` 指针；`kh_exist()` 增加 `x < kh_end(h)` 判断，降低错误迭代器导致越界读的风险。
 - 静态分析适配：两个头文件包裹 `NOLINTBEGIN`/`NOLINTEND`，屏蔽 klib 宏内部短变量名和多声明风格对 clang-tidy 的噪声，避免第三方宏风格污染项目质量检查。
 - 后续同步原则：从官方 klib 更新时优先保留上述本地补丁；如果官方已经覆盖同类修正，再移除本地重复补丁，保持差异可解释、可审计。
@@ -80,7 +84,7 @@ logger -> common -> host -> nav(before) -> social -> human -> storage(load) -> t
 ./scripts/build.sh macos-debug
 ```
 
-产物和编译数据库位于 `build-macos-debug/`，与 Docker 的 `build-debug/` 分开；该入口不构建测试目标。
+产物和编译数据库位于 `build-macos-debug/`，与 Docker 的 `build-debug/` 分开。
 macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供，业务代码继续使用标准线程 API。
 VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击` 跳转函数定义。
 选择 **「调试Playground」** 按 `F5`，会自动构建并调试固定入口 `playground/src/main.c`。
@@ -178,6 +182,4 @@ command -v clang clangd clang-format clang-tidy lldb scan-build
 
 ### 待办
 
-- 单元测试框架
-- 代码覆盖率工具
 - CI/CD 配置

@@ -9,10 +9,10 @@
 #include "model_view.h"
 #include "storage_view.h"
 
-/** @brief 初始化实体、分段、ID map 和路径缓存状态；实体数组沿用 kvec，分配失败时终止进程。 */
+/** @brief 初始化实体、分段和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
 DOMINO_CODE navStateInit(void);
 
-/** @brief 释放全部 Nav 状态；先释放借用实体地址的缓存，再释放实体与分段容器，也支持初始化失败时清理。 */
+/** @brief 正常退出时释放全部 Nav 状态；先释放借用实体地址的缓存，再释放实体与分段容器。 */
 void navStateDestroy(void);
 
 bool navStateIsReady(void);
@@ -43,6 +43,20 @@ DOMINO_CODE navStateValidateRuntimeData(void);
 /** @brief 刷新 fork road 与 road ID map 的数组下标；仅在保存前图校验完成、实体 canonical 排序后调用。 */
 void navStateRefreshIdMapIndices(void);
 
+/**
+ * @brief 按 ID 查找路口并区分缺失与损坏；成功输出借用指针，失败输出 nullptr。
+ * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；映射损坏返回 ERR_INVALID_DATA；未初始化返回 ERR_NOT_INITIALIZED。
+ * @note out_fork_road 非空；缺失不记录错误日志，其他失败在此记录。数组扩容或排序后须重新查询。
+ */
+DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoForkRoad** out_fork_road);
+
+/**
+ * @brief 按 ID 查找道路并区分缺失与损坏；成功输出借用指针，失败输出 nullptr。
+ * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；映射损坏返回 ERR_INVALID_DATA；未初始化返回 ERR_NOT_INITIALIZED。
+ * @note out_road 非空；缺失不记录错误日志，其他失败在此记录。数组扩容或排序后须重新查询。
+ */
+DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road);
+
 /** @brief 以下查找返回借用指针；缺失时返回 nullptr，数组扩容或排序后需重新按 ID 查找。 */
 DominoForkRoad* dominoGetForkRoadByID(domino_fork_road_id_t fork_road_id);
 
@@ -65,7 +79,7 @@ void navStateInvalidatePathCache(uint8_t region_index, uint8_t road_network_type
 /**
  * @brief 取得指定路网的完整路径缓存借用指针。
  * @return 缓存完整可用时返回指针，缺失或已失效时返回 nullptr。
- * @note 缓存失效、替换或 Nav 状态销毁后须重新获取；调用方不得释放缓存或其数组。
+ * @note 缓存失效、替换或 Nav 状态销毁后须重新获取；调用方不得修改或释放缓存及其数组。
  */
 [[nodiscard]] const DominoNavPathCache* navStateGetPathCache(uint8_t region_index, uint8_t road_network_type);
 

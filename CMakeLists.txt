@@ -7,8 +7,6 @@ project(Domino
     LANGUAGES C
 )
 
-include(CTest)
-
 # 生成compile_commands.json（供clangd使用）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

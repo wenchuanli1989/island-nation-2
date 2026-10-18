@@ -35,7 +35,7 @@ typedef struct DominoLogConfig {
     /**
      * @brief 本实例的日志队列容量（元素个数）。
      *
-     * 为 0 时使用默认容量，非零值不得超过 UINT32_MAX；队列固定容量，满载时阻塞等待空位。
+     * 为 0 时使用默认容量，非零值不得超过 UINT32_MAX；队列固定容量，满载时上报 ERR_QUEUE_FULL 并终结本次引擎实例。
      * 每个队列元素的正文缓冲当前固定为 256 字节，最终输出行也使用同尺寸缓冲，
      * 因此前缀过长或正文过长时会追加截断标记。
      */
@@ -76,7 +76,7 @@ struct DominoThreadQueue;
  * @brief 独立日志服务；调用方提供实例存储，内部资源由 engine 管理。
  *
  * 成员仅供 engine 内部使用，调用方不得直接修改。初始化成功后不得复制或移动对象，
- * 必须保持对象地址和存储有效，直到 dominoLogDestroy 返回。
+ * 必须保持对象地址和存储有效，直到 dominoLogDestroy 成功返回；生命周期失败后由宿主决定何时结束进程，此前保活实例及残留线程资源。
  */
 typedef struct DominoLogger {
     DominoLogModule modules[DOMINO_LOG_MAX_MODULES];
@@ -85,42 +85,49 @@ typedef struct DominoLogger {
     struct DominoThreadQueue* queue_ptr;
     size_t module_count;
     _Atomic uint32_t seq;
+    _Atomic int lifecycle_result;  ///< 初始化、运行或退出的首个错误；失败后不再接收日志。
     DOMINO_LOG_LEVEL default_min_level;
+    _Atomic bool writer_completed_flag;
 } DominoLogger;
 
 /**
  * @brief 在调用方提供的对象上初始化日志服务，每个实例拥有独立队列、写线程、模块表、文件和序号。
  *
- * writer 异步写 stdout/stderr 以及可选文件；生产者在本实例队列满时阻塞等待空位。
+ * writer 异步写 stdout/stderr 以及可选文件；生产者不等待队列空位，入队失败保存首错并上报引擎。
  * 多个实例可同时存在并独立初始化、销毁；stdout/stderr 是共享输出流，实例间不保证输出顺序。
  * 需要隔离文件输出时，应为各实例指定不同的 file_path。
  * 模块列表在分配内部资源和启动 writer 前完成校验并复制，初始化成功后模块表只读，直至销毁实例。
- * 对象无需预先清零，但不得对尚未销毁的已初始化对象再次调用。失败时释放已获取的内部资源并清空对象，
- * 可直接重试初始化；销毁后也可在同一对象上重新初始化。
+ * 对象无需预先清零，但不得对尚未成功销毁的对象再次调用。失败时立即返回并保留已获取的内部资源，
+ * 不清理、不回滚、不重试；调用方不得继续使用或重新初始化失败对象。成功销毁后可在同一对象上重新初始化。
  *
  * @param config 实例配置；file_path 仅在本次调用中使用，不保留调用方指针。
  * @param modules_ptr 模块配置数组，仅在本次调用中使用；module_count 为 0 时可为 nullptr。
  * @param module_count 模块数量，不得超过 DOMINO_LOG_MAX_MODULES；为 0 时初始化空模块表。
  * @param logger_ptr 调用方提供的 DominoLogger 对象地址，存储在销毁完成前必须保持有效。
  * @return 0 成功；空对象或非空列表的空指针返回 ERR_NULL_POINTER；非法配置返回 ERR_INVALID_PARAM；
- *         模块数量或队列容量超限返回 ERR_OUT_OF_RANGE；容量乘法溢出返回 ERR_MEMORY_OVERFLOW；
+ *         模块数量或队列容量超限返回 ERR_CAPACITY_EXCEEDED；容量乘法溢出返回 ERR_MEMORY_OVERFLOW；
  *         重复 ID 或名称返回 ERR_ALREADY_EXISTS；其他失败返回具体负错误码。
  */
 int dominoLogInit(DominoLogConfig config, const DominoLogModule* modules_ptr, size_t module_count, DominoLogger* logger_ptr);
 
 /**
- * @brief 排空指定实例的队列、刷新输出并退出写线程，释放内部资源（阻塞）。
+ * @brief 排空指定实例的队列并退出写线程，刷新输出并释放内部资源（阻塞）。
  *
  * 调用前必须停止并等待该实例的所有 producer，且不得与该实例的其他 API 调用并发。
- * 其他实例仍可正常使用。不释放调用方提供的对象存储，返回后对象清空，可重新初始化或由调用方释放存储。
- * nullptr、零初始化对象、初始化失败后的对象和已销毁对象均为无操作；不得传入内容未初始化的对象。
+ * 其他实例仍可正常使用。不释放调用方提供的对象存储，成功返回后对象清空，可重新初始化或释放存储。
+ * 任一步骤失败时立即返回并保留剩余资源，不继续清理、不重试；后续销毁调用仅返回已保存的错误。
+ * nullptr、零初始化对象和已成功销毁对象均为无操作；初始化失败对象返回原始错误；不得传入内容未初始化的对象。
+ * @return CODE_OK 成功；已失败实例返回保存的首错（包括入队满载 ERR_QUEUE_FULL）；线程等待、join 和队列同步失败返回对应的具体错误码；
+ *         刷新失败返回 ERR_FILE_FLUSH；写入失败返回 ERR_FILE_WRITE；关闭文件失败返回 ERR_FILE_CLOSE。
  */
-void dominoLogDestroy(DominoLogger* logger_ptr);
+int dominoLogDestroy(DominoLogger* logger_ptr);
 
 /**
  * @brief 格式化并异步记录日志到指定实例；同一实例支持多个 producer 并发调用。
  *
- * 空实例、非法日志等级或未注册模块会被丢弃；source location 会在函数返回前复制到队列元素。
+ * 空实例、失败实例、非法日志等级或未注册模块会被丢弃；source location 会在函数返回前复制到队列元素。
+ * 格式化、入队或写出失败保存日志实例首错、上报引擎并唤醒 writer 停止；格式化失败使用 ERR_STRING_FORMAT。
+ * 故障直接写 stderr，不重试、不通过异步队列报告自身故障；宿主须保活资源并结束进程。
  */
 void dominoLogVa(DominoLogger* logger_ptr, domino_log_module_id_t module_id, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* fmt,
                  va_list arg_list) DOMINO_LOG_PRINTF_ATTR(5, 0);

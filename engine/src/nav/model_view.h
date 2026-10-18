@@ -11,9 +11,6 @@
 /** @file model_view.h @brief Nav 内部类型、运行期索引与状态变量的统一声明。 */
 
 #define DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX ((size_t)UINT32_C(1) << 30U)
-#define DOMINO_FORK_ROAD_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_ROAD_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_ROAD_LINE_VEC_RESERVE_CAPACITY_MIN 1024u
 #define DOMINO_NAV_PATH_CACHE_SLOT_COUNT ((size_t)UINT16_MAX + 1U)
 
 #define WEIGHT_INFINITY UINT32_MAX  ///< 路径矩阵中的不可达权值（domino_nav_weight_t）

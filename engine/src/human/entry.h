@@ -6,8 +6,6 @@
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-#define HUMAN_VEC_RESERVE_CAPACITY_MIN 1024u
-
 extern DOMINO_CODE dominoHumanModuleInit(void);
 
 extern void dominoHumanModuleExit(void);
@@ -27,5 +25,4 @@ extern DominoHumanVec domino_all_human_list;
 extern DominoHumanDataVec domino_all_human_data_list;
 extern DominoHumanIDMap* dominoHumanIdMap;
 
-extern int dominoHumanBehaviorPlanningThread(void* arg_ptr);
 #endif

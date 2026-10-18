@@ -25,10 +25,20 @@
             return "无效数据";
         case ERR_INVALID_JSON:
             return "无效JSON";
+        case ERR_UNSUPPORTED_VERSION:
+            return "不支持的版本";
+        case ERR_CAPACITY_EXCEEDED:
+            return "超过容量上限";
+        case ERR_ID_EXHAUSTED:
+            return "ID已耗尽";
+        case ERR_CHECKSUM_MISMATCH:
+            return "校验和不匹配";
+        case ERR_STRING_FORMAT:
+            return "字符串格式化失败";
         case ERR_MEMORY_ALLOC:
             return "内存分配失败";
         case ERR_MEMORY_OVERFLOW:
-            return "内存溢出";
+            return "内存字节数计算溢出";
         case ERR_BUFFER_TOO_SMALL:
             return "缓冲区太小";
         case ERR_NETWORK:
@@ -63,6 +73,22 @@
             return "文件刷盘失败";
         case ERR_FILE_RENAME:
             return "文件重命名失败";
+        case ERR_FILE_STAT:
+            return "读取路径信息失败";
+        case ERR_DIRECTORY_CREATE:
+            return "创建目录失败";
+        case ERR_DIRECTORY_READ:
+            return "读取目录失败";
+        case ERR_FILE_REMOVE:
+            return "删除文件或目录失败";
+        case ERR_FILE_CLOSE:
+            return "关闭文件失败";
+        case ERR_DIRECTORY_OPEN:
+            return "打开目录失败";
+        case ERR_DIRECTORY_CLOSE:
+            return "关闭目录失败";
+        case ERR_PATH_TYPE:
+            return "路径类型不匹配";
         case ERR_PLAYER_NOT_FOUND:
             return "玩家未找到";
         case ERR_PLAYER_ALREADY_EXISTS:
@@ -81,6 +107,24 @@
             return "互斥锁初始化失败";
         case ERR_SEMAPHORE_INIT:
             return "信号量初始化失败";
+        case ERR_THREAD_JOIN:
+            return "线程回收失败";
+        case ERR_MUTEX_LOCK:
+            return "互斥锁加锁失败";
+        case ERR_MUTEX_UNLOCK:
+            return "互斥锁解锁失败";
+        case ERR_CONDITION_INIT:
+            return "条件变量初始化失败";
+        case ERR_CONDITION_WAIT:
+            return "条件变量等待失败";
+        case ERR_CONDITION_SIGNAL:
+            return "条件变量单播通知失败";
+        case ERR_CONDITION_BROADCAST:
+            return "条件变量广播通知失败";
+        case ERR_CLOCK_READ:
+            return "时钟采样失败";
+        case ERR_THREAD_SLEEP:
+            return "线程休眠失败";
         case ERR_QUEUE_EMPTY:
             return "队列为空";
         case ERR_QUEUE_FULL:

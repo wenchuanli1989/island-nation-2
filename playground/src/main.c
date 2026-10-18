@@ -37,13 +37,13 @@ int main(int argc, char* argv[]) {
     DOMINO_CODE run_rc = dominoEngineRun(&client_data);
     if (run_rc != CODE_OK) {
         (void)fprintf(stderr, "dominoEngineRun failed: %d\n", run_rc);
-    } else {
-        printf("runtime data: game_date_time_ns=%" PRIu64 "\n", client_data.game_date_time_ns);
+        return 1;
     }
+    printf("runtime data: game_date_time_ns=%" PRIu64 "\n", client_data.game_date_time_ns);
     DOMINO_CODE exit_rc = dominoEngineExit();
     if (exit_rc != CODE_OK) {
         (void)fprintf(stderr, "dominoEngineExit failed: %d\n", exit_rc);
         return 1;
     }
-    return run_rc == CODE_OK ? 0 : 1;
+    return 0;
 }

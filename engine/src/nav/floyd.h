@@ -6,7 +6,7 @@
 
 /**
  * @brief 反向回溯最短路径，输出各中间节点对应的前驱记录，不包含起终点。
- * @return 不可达返回 ERR_NOT_FOUND，输出容量不足返回 ERR_OUT_OF_RANGE；成功时写入记录数。
+ * @return 不可达返回 ERR_NOT_FOUND，输出容量不足返回 ERR_BUFFER_TOO_SMALL；成功时写入记录数。
  * @note 调用方保证矩阵由 Floyd 构建且两个顶点下标有效；同点路径由调用方处理。
  */
 extern DOMINO_CODE findShortestPath(PathInfo* shortest_path_info, int max_shortest_path_info_count, int* shortest_path_info_count,

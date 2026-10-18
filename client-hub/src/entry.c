@@ -9,6 +9,5 @@ int domino_client_hub_run(void) {
     }
 
     DOMINO_CLIENT_HUB_LOG_MSG(DOMINO_LOG_LEVEL_INFO, "domino client hub run");
-    dominoClientHubLoggerExit();
-    return CODE_OK;
+    return dominoClientHubLoggerExit();
 }

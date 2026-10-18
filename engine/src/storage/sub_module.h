@@ -13,7 +13,7 @@
 
 #define STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT 64u
 
-/** @brief 本轮存取使用的模块 meta；文件名由 type_name 推导，摘要由根 meta 保存。 */
+/** @brief 加载时使用的模块 meta；文件名由 type_name 推导，摘要由根 meta 保存。 */
 typedef struct {
     uint32_t crc32c;
     uint32_t size;
@@ -41,10 +41,12 @@ bool storageSubModuleIntegrityVerify(void);
 /** @brief 释放本轮 load/save 会话的全部临时索引。 */
 void storageSubModuleDestroy(void);
 
+/** @brief 加入已解析的模块记录；调用方按固定注册表遍历，每轮每个类型只加入一次，名称已终止。 */
 DOMINO_CODE storageSubModuleMetaAdd(StorageSubModuleMeta meta);
 
 const StorageSubModuleMeta* storageSubModuleMetaFind(const char* type_name);
 
+/** @brief 加入分片摘要；调用方保证名称已终止，且每个注册类型按递增 shard_id 只加入一次。 */
 DOMINO_CODE storageSubModuleShardAdd(StorageSubModuleShard shard);
 
 const StorageSubModuleShard* storageSubModuleShardFind(const char* type_name, uint32_t shard_id);

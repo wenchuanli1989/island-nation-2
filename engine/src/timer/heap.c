@@ -1,7 +1,10 @@
 #include "heap.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdlib.h>
+
+#include "../logger/entry.h"
 
 static inline bool isEarlier(const DominoTimer* left_ptr, const DominoTimer* right_ptr) {
     return left_ptr->due_ms < right_ptr->due_ms || (left_ptr->due_ms == right_ptr->due_ms && left_ptr->timer_id < right_ptr->timer_id);
@@ -9,15 +12,19 @@ static inline bool isEarlier(const DominoTimer* left_ptr, const DominoTimer* rig
 
 static DOMINO_CODE growHeap(DominoTimerHeap* heap_ptr) {
     if (heap_ptr->capacity > UINT32_MAX / 2U) {
-        return ERR_MEMORY_OVERFLOW;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆扩容超出元素容量范围: capacity=%" PRIu32,
+                          heap_ptr->capacity);
+        return ERR_CAPACITY_EXCEEDED;
     }
     uint32_t new_capacity = heap_ptr->capacity == 0U ? 128U : heap_ptr->capacity * 2U;
     // 索引 0 不存放元素，分配时额外预留一个位置。
     if ((size_t)new_capacity >= SIZE_MAX / sizeof(DominoTimer)) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆分配大小溢出: capacity=%" PRIu32, new_capacity);
         return ERR_MEMORY_OVERFLOW;
     }
     DominoTimer* events_ptr = realloc(heap_ptr->events_ptr, ((size_t)new_capacity + 1U) * sizeof(*events_ptr));
     if (events_ptr == nullptr) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆内存分配失败: capacity=%" PRIu32, new_capacity);
         return ERR_MEMORY_ALLOC;
     }
     heap_ptr->events_ptr = events_ptr;

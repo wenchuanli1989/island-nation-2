@@ -5,6 +5,8 @@
 
 #include "domino_shared_error_codes.h"
 
+/* 内部事务契约：save_path 是引擎持有的已校验路径，staging_path 由 txnBuildStagingPath 生成，输出缓冲区有效。 */
+
 /** @brief 确保存档目录的父目录树存在。 */
 DOMINO_CODE txnPrepareSaveParent(const char* save_path);
 
@@ -19,7 +21,7 @@ DOMINO_CODE txnBuildStagingPath(const char* save_path, char* staging_out, size_t
  */
 DOMINO_CODE txnRecoverSave(const char* save_path);
 
-/** @brief 将 staging 目录提交为正式存档目录，失败时尽量恢复旧存档。 */
+/** @brief 将 staging 目录提交为正式存档目录；失败直接返回，遗留状态交给下次启动恢复。 */
 DOMINO_CODE txnCommitReplace(const char* staging_path, const char* save_path);
 
 #endif

@@ -1,15 +1,13 @@
 #ifndef DOMINO_ENGINE_HOST_MODULE_H
 #define DOMINO_ENGINE_HOST_MODULE_H
 
+#include "domino_shared_error_codes.h"
 #include "domino_shared_host.h"
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-#define HOST_ISLAND_VEC_RESERVE_CAPACITY_MIN 1024u
-#define HOST_MOVABLE_OBJECT_VEC_RESERVE_CAPACITY_MIN 1024u
-
-/** @brief 清空上一世界的固定状态，并初始化 host 容器、ID map 和全局自增计数器。 */
-extern void dominoHostModuleInit(void);
+/** @brief 清空世界固定状态并初始化 host 容器和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
+extern DOMINO_CODE dominoHostModuleInit(void);
 
 extern void dominoHostModuleExit(void);
 

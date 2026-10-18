@@ -3,11 +3,13 @@
 
 #include <stdint.h>
 
+#include "domino_shared_error_codes.h"
 #include "domino_shared_types.h"
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-extern void dominoCommonModuleInit(void);
+/** @brief 初始化公共实体容器和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
+extern DOMINO_CODE dominoCommonModuleInit(void);
 
 extern void dominoCommonModuleExit(void);
 

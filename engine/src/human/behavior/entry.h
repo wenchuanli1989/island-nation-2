@@ -9,6 +9,10 @@ typedef struct DominoBehaviorTypeInfo {
 } DominoBehaviorTypeInfo;
 
 const DominoBehaviorTypeInfo* dominoHumanGetBehaviorTypeInfo(DOMINO_BEHAVIOR_TYPE type);
+/**
+ * @brief 校验行为记录中的类型、进度、时间和专有参数，不检查目标实体是否存在。
+ * @return CODE_OK 成功；behavior_ptr 为空返回 ERR_NULL_POINTER；记录字段不一致返回 ERR_INVALID_DATA。
+ */
 DOMINO_CODE dominoHumanValidateBehaviorRecord(const DominoBehavior* behavior_ptr);
 
 #endif

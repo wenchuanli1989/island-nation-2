@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "../host/entry.h"
+#include "../logger/entry.h"
 #include "domino_shared_nav.h"
 #include "graph.h"
 #include "klib/kvec.h"
@@ -47,13 +48,21 @@ static void navRestoreRoad(DominoRoad* road, DominoForkRoad* start_fork_road, do
 
 DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* target_fork_road, domino_nav_weight_atom_t weight, uint8_t region_index,
                           uint8_t network_type) {
-    if (!start_fork_road || !target_fork_road || start_fork_road == target_fork_road || !dominoNavEdgeWeightIsPassable(weight)) {
+    if (!start_fork_road || !target_fork_road) {
+        DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot add road with null endpoints");
+        return ERR_NULL_POINTER;
+    }
+    if (start_fork_road == target_fork_road || !dominoNavEdgeWeightIsPassable(weight)) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "cannot add road with identical endpoints or impassable weight: weight=%u", (unsigned)weight);
         return ERR_INVALID_PARAM;
     }
     if (!navStateIsReady()) {
+        DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot add road before Nav initialization");
         return ERR_NOT_INITIALIZED;
     }
 
+    DOMINO_CODE result;
     domino_fork_road_id_t start_id = start_fork_road->id;
     domino_fork_road_id_t target_id = target_fork_road->id;
     const bool create_start = start_id == 0U;
@@ -81,15 +90,44 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
     }
 
     if (!create_start) {
-        existing_start = dominoGetForkRoadByID(start_id);
-        if (!existing_start || existing_start->status != 0U || existing_start->region_index != region_index || existing_start->type != network_type) {
-            return ERR_INVALID_DATA;
+        result = navStateFindForkRoadById(start_id, &existing_start);
+        if (result != CODE_OK) {
+            if (result == ERR_NOT_FOUND) {
+                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road start fork does not exist: id=%u", start_id);
+            }
+            return result;
+        }
+        if (existing_start->status != 0U) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road start fork is inactive: id=%u status=%u", start_id,
+                              (unsigned)existing_start->status);
+            return ERR_GAME_STATE_INVALID;
+        }
+        if (existing_start->region_index != region_index || existing_start->type != network_type) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "road start is outside requested network: id=%u region=%u type=%u", start_id, (unsigned)region_index,
+                              (unsigned)network_type);
+            return ERR_INVALID_PARAM;
         }
     }
     if (!create_target) {
-        const DominoForkRoad* existing = dominoGetForkRoadByID(target_id);
-        if (!existing || existing->status != 0U || existing->region_index != region_index || existing->type != network_type) {
-            return ERR_INVALID_DATA;
+        DominoForkRoad* existing = nullptr;
+        result = navStateFindForkRoadById(target_id, &existing);
+        if (result != CODE_OK) {
+            if (result == ERR_NOT_FOUND) {
+                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road target fork does not exist: id=%u", target_id);
+            }
+            return result;
+        }
+        if (existing->status != 0U) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road target fork is inactive: id=%u status=%u", target_id,
+                              (unsigned)existing->status);
+            return ERR_GAME_STATE_INVALID;
+        }
+        if (existing->region_index != region_index || existing->type != network_type) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "road target is outside requested network: id=%u region=%u type=%u", target_id, (unsigned)region_index,
+                              (unsigned)network_type);
+            return ERR_INVALID_PARAM;
         }
     }
 
@@ -97,25 +135,41 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
     DominoRoad* existing_road = nullptr;
     if (!create_start && !create_target) {
         if (start_id == target_id) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot add road between identical fork IDs: id=%u", start_id);
             return ERR_INVALID_PARAM;
         }
         road_id = navBuildRoadId(start_id, target_id);
-        existing_road = dominoGetRoadByID(road_id);
+        result = navStateFindRoadById(road_id, &existing_road);
+        if (result != CODE_OK && result != ERR_NOT_FOUND) {
+            return result;
+        }
         if (existing_road && existing_road->status == 0U) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road already exists: start=%u target=%u", start_id, target_id);
             return ERR_ALREADY_EXISTS;
         }
     }
     if (existing_start) {
-        if (existing_start->to_fork_road_count >= MAX_EDGES_PER_VERTEX) {
-            return ERR_OUT_OF_RANGE;
+        if (existing_start->to_fork_road_count > MAX_EDGES_PER_VERTEX) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road start has invalid outgoing edge count: id=%u count=%u",
+                              start_id, (unsigned)existing_start->to_fork_road_count);
+            return ERR_INVALID_DATA;
+        }
+        if (existing_start->to_fork_road_count == MAX_EDGES_PER_VERTEX) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road start outgoing edge capacity reached: id=%u capacity=%u",
+                              start_id, (unsigned)MAX_EDGES_PER_VERTEX);
+            return ERR_CAPACITY_EXCEEDED;
         }
         if (!create_target && navGraphHasEdge(existing_start, target_id)) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "outgoing edge exists without an active road: start=%u target=%u",
+                              start_id, target_id);
             return ERR_INVALID_DATA;
         }
     }
     const int road_segment_index = navStateFindSegmentIndex(&domino_all_road_nav_data_segment_list, region_index, network_type);
     if (existing_road) {
         if (existing_road->region_index != region_index || existing_road->type != network_type) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "deleted road network differs from its endpoints: start=%u target=%u", start_id, target_id);
             return ERR_INVALID_DATA;
         }
         navRestoreRoad(existing_road, existing_start, target_id, weight, road_segment_index);
@@ -128,23 +182,33 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
     const size_t start_index = create_start ? old_fork_count : (size_t)(existing_start - domino_all_fork_road_list.a);
     const uint32_t fork_segment_delta = (create_start ? 1U : 0U) + (create_target ? 1U : 0U);
     if (old_fork_count > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX - fork_segment_delta || old_road_count >= DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
-        return ERR_OUT_OF_RANGE;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "Nav entity capacity exceeded: forks=%zu roads=%zu new_forks=%u limit=%zu", old_fork_count, old_road_count,
+                          fork_segment_delta, DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX);
+        return ERR_CAPACITY_EXCEEDED;
     }
     const size_t required_fork_count = old_fork_count + (size_t)fork_segment_delta;
     const int fork_segment_index = navStateFindSegmentIndex(&domino_all_fork_road_nav_data_segment_list, region_index, network_type);
     if (fork_segment_index < 0 && fork_segment_delta == 0U) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "existing road endpoints have no fork segment: region=%u type=%u",
+                          (unsigned)region_index, (unsigned)network_type);
         return ERR_INVALID_DATA;
     }
     const uint32_t active_fork_count =
         fork_segment_index >= 0 ? kv_A(domino_all_fork_road_nav_data_segment_list, (size_t)fork_segment_index).total_count : 0U;
     if ((uint64_t)active_fork_count + fork_segment_delta > MAX_FORK_ROAD_COUNT_PER_NETWORK) {
-        return ERR_OUT_OF_RANGE;
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "network fork capacity exceeded: region=%u type=%u count=%u new_forks=%u limit=%u", (unsigned)region_index,
+                          (unsigned)network_type, active_fork_count, fork_segment_delta, (unsigned)MAX_FORK_ROAD_COUNT_PER_NETWORK);
+        return ERR_CAPACITY_EXCEEDED;
     }
     if (fork_segment_delta > 0U) {
         /* Nav 修改须串行执行，在原子递增前检查本次新增路口所需的 ID 范围。 */
         const domino_fork_road_id_t next_id = atomic_load_explicit(&g_domino_global_increment_id.fork_road_increment_id, memory_order_relaxed);
         if (next_id > UINT32_MAX - fork_segment_delta) {
-            return ERR_OUT_OF_RANGE;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "fork road ID range exhausted: next_id=%u requested=%u", next_id,
+                              fork_segment_delta);
+            return ERR_ID_EXHAUSTED;
         }
         if (create_start) {
             DOMINO_ALLOC_NON_ZERO_ID(g_domino_global_increment_id.fork_road_increment_id, start_id);
@@ -158,23 +222,28 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
     }
     /* 邻接字段可被外部改写；新 ID 分配后也须确认当前起点没有这条出边。 */
     if (existing_start && create_target && navGraphHasEdge(existing_start, target_id)) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "outgoing edge already references a newly allocated fork ID: start=%u target=%u", start_id, target_id);
         return ERR_INVALID_DATA;
     }
 
-    DOMINO_CODE result;
     khint_t target_map_slot = 0U;
     int absent = 0;
     if (create_start) {
         khint_t slot = dominoForkRoadIdMap_put(dominoForkRoadIdMap, start_id, &absent);
         if (absent != 1) {
-            return absent < 0 ? ERR_MEMORY_ALLOC : ERR_ALREADY_EXISTS;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "failed to insert allocated start fork ID: id=%u reason=%s",
+                              start_id, absent < 0 ? "allocation failure" : "allocated ID already registered");
+            return absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA;
         }
         kh_val(dominoForkRoadIdMap, slot) = (uint32_t)old_fork_count;
     }
     if (create_target) {
         target_map_slot = dominoForkRoadIdMap_put(dominoForkRoadIdMap, target_id, &absent);
         if (absent != 1) {
-            result = absent < 0 ? ERR_MEMORY_ALLOC : ERR_ALREADY_EXISTS;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "failed to insert allocated target fork ID: id=%u reason=%s",
+                              target_id, absent < 0 ? "allocation failure" : "allocated ID already registered");
+            result = absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA;
             goto rollback_start;
         }
         kh_val(dominoForkRoadIdMap, target_map_slot) = (uint32_t)(old_fork_count + (create_start ? 1U : 0U));
@@ -182,7 +251,9 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
     {
         khint_t slot = dominoRoadIdMap_put(dominoRoadIdMap, road_id, &absent);
         if (absent != 1) {
-            result = absent < 0 ? ERR_MEMORY_ALLOC : ERR_ALREADY_EXISTS;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "failed to insert new road ID: start=%u target=%u reason=%s",
+                              start_id, target_id, absent < 0 ? "allocation failure" : "unexpected registered road ID");
+            result = absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA;
             goto rollback_target;
         }
         kh_val(dominoRoadIdMap, slot) = (uint32_t)old_road_count;
@@ -260,23 +331,46 @@ rollback_start:
 }
 
 DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id) {
-    DominoRoad* road = dominoGetRoadByID(road_id);
-    if (!road) {
-        return ERR_NOT_FOUND;
+    if (!navStateIsReady()) {
+        DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot remove road before Nav initialization");
+        return ERR_NOT_INITIALIZED;
+    }
+    DominoRoad* road = nullptr;
+    DOMINO_CODE result = navStateFindRoadById(road_id, &road);
+    if (result != CODE_OK) {
+        if (result == ERR_NOT_FOUND) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot remove missing road: start=%u target=%u",
+                              navExtractRoadStartForkRoadId(road_id), navExtractRoadTargetForkRoadId(road_id));
+        }
+        return result;
     }
     if (road->status != 0U) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot remove already deleted road: start=%u target=%u status=%u",
+                          navExtractRoadStartForkRoadId(road_id), navExtractRoadTargetForkRoadId(road_id), (unsigned)road->status);
         return ERR_GAME_STATE_INVALID;
     }
 
     domino_fork_road_id_t start_id = navExtractRoadStartForkRoadId(road_id);
     domino_fork_road_id_t target_id = navExtractRoadTargetForkRoadId(road_id);
-    DominoForkRoad* start = dominoGetForkRoadByID(start_id);
-    DominoForkRoad* target = dominoGetForkRoadByID(target_id);
+    DominoForkRoad* start = nullptr;
+    result = navStateFindForkRoadById(start_id, &start);
+    if (result != CODE_OK && result != ERR_NOT_FOUND) {
+        return result;
+    }
+    DominoForkRoad* target = nullptr;
+    result = navStateFindForkRoadById(target_id, &target);
+    if (result != CODE_OK && result != ERR_NOT_FOUND) {
+        return result;
+    }
     if (!start || !target || start->status != 0U || target->status != 0U || start->region_index != road->region_index ||
         target->region_index != road->region_index || start->type != road->type || target->type != road->type) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "cannot remove road with missing or inconsistent endpoints: start=%u target=%u", start_id, target_id);
         return ERR_INVALID_DATA;
     }
     if (start->to_fork_road_count > MAX_EDGES_PER_VERTEX) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "cannot remove road with invalid start edge count: id=%u count=%u",
+                          start_id, (unsigned)start->to_fork_road_count);
         return ERR_INVALID_DATA;
     }
 
@@ -305,20 +399,30 @@ DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id) {
     const int fork_segment_index = navStateFindSegmentIndex(&domino_all_fork_road_nav_data_segment_list, road->region_index, road->type);
     const int road_segment_index = navStateFindSegmentIndex(&domino_all_road_nav_data_segment_list, road->region_index, road->type);
     if (fork_segment_index < 0 || road_segment_index < 0) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "cannot remove road with missing segments: start=%u target=%u fork_segment=%d road_segment=%d", start_id, target_id,
+                          fork_segment_index, road_segment_index);
         return ERR_INVALID_DATA;
     }
     DominoNavDataSegment* fork_segment = &kv_A(domino_all_fork_road_nav_data_segment_list, (size_t)fork_segment_index);
     DominoNavDataSegment* road_segment = &kv_A(domino_all_road_nav_data_segment_list, (size_t)road_segment_index);
     if (fork_segment->total_count < fork_segment_delta || road_segment->total_count == 0U) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "cannot remove road with inconsistent segment counts: forks=%u removed_forks=%u roads=%u", fork_segment->total_count,
+                          fork_segment_delta, road_segment->total_count);
         return ERR_INVALID_DATA;
     }
 
     /* 邻接校验只扫描一次；所有可能返回失败的检查都在状态和计数提交之前。 */
     if (dominoNavEdgeWeightIsPassable(road->weight[0])) {
         if (!navGraphRemoveEdge(start, target_id)) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "passable road has no outgoing edge: start=%u target=%u",
+                              start_id, target_id);
             return ERR_INVALID_DATA;
         }
     } else if (navGraphHasEdge(start, target_id)) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "impassable road has an outgoing edge: start=%u target=%u", start_id,
+                          target_id);
         return ERR_INVALID_DATA;
     }
     road->status = 1U;

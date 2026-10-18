@@ -1,17 +1,13 @@
 #ifndef DOMINO_ENGINE_SOCIAL_MODULE_H
 #define DOMINO_ENGINE_SOCIAL_MODULE_H
 
+#include "domino_shared_error_codes.h"
 #include "domino_shared_social.h"
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-#define DOMINO_SOCIAL_ORG_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_SOCIAL_BUILDING_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_SOCIAL_ASSET_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_SOCIAL_CITY_VEC_RESERVE_CAPACITY_MIN 1024u
-#define DOMINO_SOCIAL_COUNTRY_VEC_RESERVE_CAPACITY_MIN 1024u
-
-extern void dominoSocialModuleInit(void);
+/** @brief 初始化社会实体容器和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
+extern DOMINO_CODE dominoSocialModuleInit(void);
 
 extern void dominoSocialModuleExit(void);
 

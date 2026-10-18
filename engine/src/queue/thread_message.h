@@ -32,7 +32,7 @@ typedef struct DominoThreadMessage {
 /**
  * @brief 分配独立连续块并复制载荷；payload_ptr 只需在本次调用期间有效。
  * @note message_ptr 不得已拥有载荷；成功后 id 为 0，失败不修改输出。复制不会递归复制载荷内部的指针。
- * @return 空指针返回 ERR_NULL_POINTER；NONE 或零长度返回 ERR_INVALID_PARAM；分配失败返回 ERR_MEMORY_ALLOC。
+ * @return 空指针返回 ERR_NULL_POINTER；无效消息类型或零长度返回 ERR_INVALID_PARAM；分配失败返回 ERR_MEMORY_ALLOC。
  */
 DOMINO_CODE dominoThreadMessageInitCopy(DominoThreadMessage* message_ptr, DominoThreadMessageType items_type, const void* payload_ptr,
                                         size_t items_size);

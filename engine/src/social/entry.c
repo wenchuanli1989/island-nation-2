@@ -97,7 +97,7 @@ DominoCountryData* dominoGetCountryDataByID(domino_data_id_t data_id) {
     return &kv_A(domino_all_country_data_list, kh_val(dominoCountryDataIdMap, key));
 }
 
-void dominoSocialModuleInit(void) {
+DOMINO_CODE dominoSocialModuleInit(void) {
     kv_init(domino_all_org_list);
     kv_init(domino_all_building_list);
     kv_init(domino_all_asset_list);
@@ -109,29 +109,61 @@ void dominoSocialModuleInit(void) {
     kv_init(domino_all_city_data_list);
     kv_init(domino_all_country_data_list);
 
-    kv_resize(DominoOrg, domino_all_org_list, DOMINO_SOCIAL_ORG_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoOrgData, domino_all_org_data_list, DOMINO_SOCIAL_ORG_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoBuilding, domino_all_building_list, DOMINO_SOCIAL_BUILDING_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoBuildingData, domino_all_building_data_list, DOMINO_SOCIAL_BUILDING_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoAsset, domino_all_asset_list, DOMINO_SOCIAL_ASSET_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoCity, domino_all_city_list, DOMINO_SOCIAL_CITY_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoCityData, domino_all_city_data_list, DOMINO_SOCIAL_CITY_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoCountry, domino_all_country_list, DOMINO_SOCIAL_COUNTRY_VEC_RESERVE_CAPACITY_MIN);
-    kv_resize(DominoCountryData, domino_all_country_data_list, DOMINO_SOCIAL_COUNTRY_VEC_RESERVE_CAPACITY_MIN);
-
     dominoOrgIdMap = dominoOrgIdMap_init();
+    if (!dominoOrgIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoOrgIdMap (code=%d)", ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoCountryIdMap = dominoCountryIdMap_init();
+    if (!dominoCountryIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoCountryIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoCityIdMap = dominoCityIdMap_init();
+    if (!dominoCityIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoCityIdMap (code=%d)", ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoBuildingIdMap = dominoBuildingIdMap_init();
+    if (!dominoBuildingIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoBuildingIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
 
     dominoAssetIdMap = dominoAssetIdMap_init();
+    if (!dominoAssetIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoAssetIdMap (code=%d)", ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
 
     dominoOrgDataIdMap = dominoOrgDataIdMap_init();
+    if (!dominoOrgDataIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoOrgDataIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoBuildingDataIdMap = dominoBuildingDataIdMap_init();
+    if (!dominoBuildingDataIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoBuildingDataIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoCityDataIdMap = dominoCityDataIdMap_init();
+    if (!dominoCityDataIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoCityDataIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
     dominoCountryDataIdMap = dominoCountryDataIdMap_init();
+    if (!dominoCountryDataIdMap) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoCountryDataIdMap (code=%d)",
+                          ERR_MEMORY_ALLOC);
+        return ERR_MEMORY_ALLOC;
+    }
 
-    DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_INFO, "socialModuleInit");
+    return CODE_OK;
 }
 
 void dominoSocialModuleExit(void) {
@@ -158,5 +190,4 @@ void dominoSocialModuleExit(void) {
     kv_destroy(domino_all_city_list);
     kv_destroy(domino_all_country_list);
     kv_destroy(domino_all_org_list);
-    DOMINO_ENGINE_LOG_MSG(DOMINO_ENGINE_LOG_MODULE_SOCIAL, DOMINO_LOG_LEVEL_INFO, "socialModuleExit");
 }

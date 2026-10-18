@@ -50,35 +50,49 @@ bool navGraphRemoveEdge(DominoForkRoad* fork_road, domino_fork_road_id_t to_fork
 DOMINO_CODE navGraphRebuildAdjacency(void) {
     const size_t fork_count = kv_size(domino_all_fork_road_list);
     NavOutgoingEdges* outgoing_edges = nullptr;
+    if (fork_count > SIZE_MAX / sizeof(*outgoing_edges)) {
+        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                          "adjacency rebuild allocation size overflows: fork_count=%zu element_size=%zu", fork_count, sizeof(*outgoing_edges));
+        return ERR_MEMORY_OVERFLOW;
+    }
     if (fork_count > 0U) {
         outgoing_edges = (NavOutgoingEdges*)calloc(fork_count, sizeof(*outgoing_edges));
         if (!outgoing_edges) {
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "failed to allocate adjacency rebuild buffer: fork_count=%zu",
+                              fork_count);
             return ERR_MEMORY_ALLOC;
         }
     }
 
-    DOMINO_CODE result = CODE_OK;
     for (size_t index = 0U; index < kv_size(domino_all_road_list); index++) {
         const DominoRoad* road = &kv_A(domino_all_road_list, index);
         const domino_fork_road_id_t start_id = navExtractRoadStartForkRoadId(road->id);
         const domino_fork_road_id_t target_id = navExtractRoadTargetForkRoadId(road->id);
-        const DominoForkRoad* start = dominoGetForkRoadByID(start_id);
-        const DominoForkRoad* target = dominoGetForkRoadByID(target_id);
+        DominoForkRoad* start = nullptr;
+        DOMINO_CODE result = navStateFindForkRoadById(start_id, &start);
+        if (result != CODE_OK && result != ERR_NOT_FOUND) {
+            return result;
+        }
+        DominoForkRoad* target = nullptr;
+        result = navStateFindForkRoadById(target_id, &target);
+        if (result != CODE_OK && result != ERR_NOT_FOUND) {
+            return result;
+        }
         if (!start || !target || start_id == target_id) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road %llu has missing or identical endpoints",
-                              (unsigned long long)road->id);
-            result = ERR_INVALID_DATA;
-            goto cleanup;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "road has missing or identical endpoints during adjacency rebuild: index=%zu start=%u target=%u", index, start_id,
+                              target_id);
+            return ERR_INVALID_DATA;
         }
         if (road->status != 0U) {
             continue;
         }
         if (start->status != 0U || target->status != 0U || start->region_index != road->region_index || target->region_index != road->region_index ||
             start->type != road->type || target->type != road->type) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "road %llu has invalid endpoints or network attributes",
-                              (unsigned long long)road->id);
-            result = ERR_INVALID_DATA;
-            goto cleanup;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "road endpoints do not match active network during adjacency rebuild: index=%zu start=%u target=%u", index, start_id,
+                              target_id);
+            return ERR_INVALID_DATA;
         }
         if (!dominoNavEdgeWeightIsPassable(road->weight[0])) {
             continue;
@@ -87,9 +101,9 @@ DOMINO_CODE navGraphRebuildAdjacency(void) {
         /* 查询结果已保证位于当前数组内，调用期间数组、map 与实体属性保持稳定。 */
         NavOutgoingEdges* edges = &outgoing_edges[(size_t)(start - domino_all_fork_road_list.a)];
         if (edges->count >= MAX_EDGES_PER_VERTEX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "fork road %u exceeds max outgoing edges", start_id);
-            result = ERR_OUT_OF_RANGE;
-            goto cleanup;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "loaded fork road exceeds outgoing edge capacity: id=%u capacity=%u", start_id, (unsigned)MAX_EDGES_PER_VERTEX);
+            return ERR_CAPACITY_EXCEEDED;
         }
         /* Storage 的唯一 road ID 同时保证这条有向边未重复。 */
         edges->target_ids[edges->count++] = target_id;
@@ -105,7 +119,6 @@ DOMINO_CODE navGraphRebuildAdjacency(void) {
 
     navStateInvalidateAllPathCaches();
 
-cleanup:
     free(outgoing_edges);
-    return result;
+    return CODE_OK;
 }

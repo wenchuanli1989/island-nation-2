@@ -125,7 +125,7 @@ static inline bool dominoNavEdgeWeightIsPassable(domino_nav_weight_atom_t weight
  * road ID 由 `start_fork_road_id << 32 | target_fork_road_id` 组成。
  * 同 ID 道路已逻辑删除且两个端点仍活跃时，复用原道路记录并更新 weight[0]，保留 ID、几何及其余属性。
  * 同 ID 道路仍活跃时返回 ERR_ALREADY_EXISTS；已逻辑删除的端点不能通过本函数恢复。
- * 新增后分组的活跃路口数不得超过 MAX_FORK_ROAD_COUNT_PER_NETWORK，超限返回 ERR_OUT_OF_RANGE。
+ * 新增后分组的活跃路口数不得超过 MAX_FORK_ROAD_COUNT_PER_NETWORK，超限返回 ERR_CAPACITY_EXCEEDED。
  *
  * @note id == 0 的参数须为调用方拥有的新实体；已登记实体的 ID 不得改写。
  * 添加会扩容 fork road / road 扁平数组；Nav 查询与修改须由调用方串行协调。

@@ -9,6 +9,5 @@ int domino_engine_remote_local_run(void) {
     }
 
     DOMINO_ENGINE_REMOTE_LOCAL_LOG_MSG(DOMINO_LOG_LEVEL_INFO, "domino engine remote local run");
-    dominoEngineRemoteLocalLoggerExit();
-    return CODE_OK;
+    return dominoEngineRemoteLocalLoggerExit();
 }

@@ -2,6 +2,8 @@
 
 #include <time.h>
 
+#include "../logger/entry.h"
+
 static void initPathMatrix(domino_nav_vertex_index_t vertex_num, const VertexEdges* vertices, PathInfo (*path_matrix)[vertex_num]) {
     for (uint16_t source_vertex_index = 0; source_vertex_index < vertex_num; source_vertex_index++) {
         PathInfo* const source_info = path_matrix[source_vertex_index];
@@ -86,7 +88,10 @@ DOMINO_CODE findShortestPath(PathInfo* shortest_path_info, int max_shortest_path
             break;
         }
         if (stack_top >= max_shortest_path_info_count) {
-            return ERR_OUT_OF_RANGE;
+            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
+                              "shortest path output buffer is too small: start=%u target=%u capacity=%d", (unsigned)start_vertex_index,
+                              (unsigned)end_vertex_index, max_shortest_path_info_count);
+            return ERR_BUFFER_TOO_SMALL;
         }
         shortest_path_info[stack_top] = *current_info;
 
