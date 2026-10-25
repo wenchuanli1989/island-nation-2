@@ -2,6 +2,8 @@
 
 #include <time.h>
 
+#include "domino_shared_common.h"
+
 static void init_path_matrix(vertex_id_t vertex_num, const VertexEdges* vertices, PathInfo (*path_matrix)[vertex_num]) {
     for (vertex_id_t source_vertex_id = 0; source_vertex_id < vertex_num; source_vertex_id++) {
         PathInfo* const source_info = path_matrix[source_vertex_id];
@@ -111,16 +113,30 @@ FloydPathPlanningResult floydPathPlanning(vertex_id_t vertex_num, const VertexEd
     FloydPathPlanningResult result = {0};
 
     clock_t start = clock();
+    if (start == (clock_t)-1) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取路径矩阵初始化开始计时失败");
+    }
     init_path_matrix(vertex_num, vertices, path_matrix);
-    result.init_time_used = ((double)(clock() - start)) / CLOCKS_PER_SEC;
+    clock_t end = clock();
+    if (end == (clock_t)-1 || end < start) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取路径矩阵初始化结束计时失败或时钟倒退");
+    }
+    result.init_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;
 
     long total_tick;
     long hit_tick;
     long null_weight_count;
     long null_weight_count_inner;
     start = clock();
+    if (start == (clock_t)-1) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取核心算法开始计时失败");
+    }
     floyd_core(vertex_num, path_matrix, &total_tick, &hit_tick, &null_weight_count, &null_weight_count_inner);
-    result.core_time_used = ((double)(clock() - start)) / CLOCKS_PER_SEC;
+    end = clock();
+    if (end == (clock_t)-1 || end < start) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取核心算法结束计时失败或时钟倒退");
+    }
+    result.core_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;
     result.total_tick = total_tick;
     result.hit_tick = hit_tick;
     result.null_weight_count = null_weight_count;

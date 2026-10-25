@@ -3,15 +3,20 @@
 
 #include <stdint.h>
 
-#include "domino_shared_error_codes.h"
 #include "domino_shared_types.h"
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-/** @brief 初始化公共实体容器和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
-extern DOMINO_CODE dominoCommonModuleInit(void);
+/** @brief 创建公共实体 ID map；分配失败直接打印到 stderr 并终止进程。
+ * @pre 由引擎串行保证 Init → Destroy 顺序；容器由首次静态初始化或上次 Destroy 保持为空。
+ */
+extern void dominoCommonModuleInit(void);
 
-extern void dominoCommonModuleExit(void);
+/** @brief 释放名称、描述容器和 ID map，立即清空容器指针、数量、容量及全局 map 指针。
+ * @pre 当前实例已 Init，且引擎已停止线程并完成保存；由生命周期控制方串行调用。
+ * @note 完成后可重新 Init；不重复校验引擎已保证的生命周期顺序。
+ */
+extern void dominoCommonModuleDestroy(void);
 
 /** @brief 查找名称；ID 为 0 或不存在时返回 nullptr，结果借用全局数组。 */
 extern domino_name_t* dominoGetNameByID(domino_name_id_t name_id);

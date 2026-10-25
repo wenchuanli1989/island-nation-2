@@ -2,24 +2,24 @@
 
 本文档说明 `engine/src/storage` 的当前实现。Storage 子系统负责把引擎内存态保存到 `g_domino_engine_launch_config.storage_path` 指向的存档目录，并在引擎启动时从该目录恢复。
 
-加载或退出保存返回错误时立即向上传播，保留已修改的内存和磁盘状态，不执行失败清理、回滚或重试。Engine 进入 `FAILED` 后由宿主决定何时结束进程，此前保活残留线程可访问的资源；storage 不主动终止进程。成功路径仍释放临时 JSON、缓冲区和索引，并完成正常存档提交。内存分配的必要检查与溢出检查保留，不增加致命分配器；加载向量使用原有 `kv_push`、`kv_pushp` 公开接口，允许库内部按既有契约 `abort()`。存档专用文件读取、原子写入和递归删除在失败时直接返回。
+加载、保存中的 IO、分配、格式、完整性和引用错误在检测处调用 `DOMINO_EXIT_WITH_ERROR`，同步打印上下文和错误码到 stderr，再执行 `exit(EXIT_FAILURE)`。不再逐层返回致命错误或等待宿主终止；失败保留已修改的内存和磁盘步骤，不回滚或重试。成功路径继续释放临时 JSON、缓冲区和索引，并完成正常存档提交。
 
-JSON 文档、字段、数组和嵌套对象逐步检查构造结果，失败返回 `ERR_MEMORY_ALLOC`，已有业务数据校验失败继续返回对应错误码。失败的序列化不会进入文件写入或事务提交。错误来源或 shared 文件操作的 engine 调用边界在返回前记录路径、实体或字段上下文，再向上传播具体错误码；已有来源日志的传播层不重复记录。根 `meta.json` 不存在表示新存档，保持正常控制分支，不记录 ERROR。
+根 `meta.json` 不存在表示新世界，`metaLoad()` 返回 `nullptr`；可选模块不存在仍跳过。加载时或提交完成后的旧备份清理失败不影响 active 存档，统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不进入日志队列，输出后继续。再次提交前必须成功清理旧备份并刷新目录；失败由提交边界直接报告致命错误一次，避免先打印非致命告警再打印退出错误。
 
-JSON 语法错误返回 `ERR_INVALID_JSON`；已解析 JSON 的结构、引用或元数据不一致返回 `ERR_INVALID_DATA`；版本不支持返回 `ERR_UNSUPPORTED_VERSION`，CRC32C 不匹配返回 `ERR_CHECKSUM_MISMATCH`。数值越界、业务容量超限、内存大小溢出和路径缓冲不足分别返回 `ERR_OUT_OF_RANGE`、`ERR_CAPACITY_EXCEEDED`、`ERR_MEMORY_OVERFLOW` 和 `ERR_BUFFER_TOO_SMALL`；文件及目录操作保留各自错误码。
+致命诊断保留具体错误码：JSON 语法错误为 `ERR_INVALID_JSON`，结构、引用或元数据不一致为 `ERR_INVALID_DATA`，版本不支持为 `ERR_UNSUPPORTED_VERSION`，CRC32C 不匹配为 `ERR_CHECKSUM_MISMATCH`。数值越界、容量超限、内存大小溢出和路径缓冲不足分别使用 `ERR_OUT_OF_RANGE`、`ERR_CAPACITY_EXCEEDED`、`ERR_MEMORY_OVERFLOW` 和 `ERR_BUFFER_TOO_SMALL`。必要的分配、大小与范围检查继续保留；通用文件操作仍可返回结果，由 storage 按操作阶段决定致命或非致命处理。
 
 ## 模块边界
 
-对外入口在 `entry.c`：
+供引擎内部调用的入口在 `entry.c`：
 
 - `dominoStorageModuleInit()`：加载存档。
-- `dominoStorageModuleExit()`：保存存档。
+- `dominoStorageModuleDestroy()`：保存存档。
 
 内部按职责分层：
 
 | 文件 | 职责 |
 |------|------|
-| `entry.c` / `entry.h` | 检查 `storage_path`，编排加载与保存事务。 |
+| `entry.c` / `entry.h` | 使用引擎已校验的 `storage_path`，编排加载与保存事务。 |
 | `transaction.c` / `transaction.h` | 生成 staging 目录，并用 `.prev` 备份目录提交替换。 |
 | `meta.c` / `meta.h` | 读写根 `meta.json` 与各模块 `{type}.meta.json`，编排 regions 与注册表实体。 |
 | `io.c` / `io.h` | 构建分片路径，读写 JSON 文件，计算 CRC32C，登记或读取分片摘要。 |
@@ -34,30 +34,33 @@ JSON 语法错误返回 `ERR_INVALID_JSON`；已解析 JSON 的结构、引用�
 
 ## 保存流程
 
-普通 Freeze 由客户端直接固定业务时钟，不通知业务线程；线程在下一批入口自行检查冻结，当前有限业务批次仍可写入，不能直接作为保存屏障。正常 Exit 由客户端直接发布退出标志、冻结并校验业务时刻 T，再唤醒主循环和全部业务线程；客户端依次 join 主循环、human 执行／规划线程和 timer 后，统一将人物结算到 T，再清理队列、准备导航并进入存档流程。主循环只结束当前批次并退出，不承担退出停钟、结算或保存。日志保持到保存完成后才关闭。投递者结束前其目标队列保持有效。仅 Init、未 Run 的世界直接保存已加载及配置的事实；本次暂停重构不改变存档版本或 JSON 字段。
+普通 Freeze 由客户端直接固定业务时钟，不通知业务线程；线程在下一批入口自行检查冻结，当前有限业务批次仍可写入，不能直接作为保存屏障。正常退出由客户端先调用 `dominoEngineStop()` 进入 `STOPPING`，冻结并校验业务时刻 T，再唤醒主循环和全部业务线程；依次 join 主循环、human 执行／规划线程和 timer 后，统一将人物结算到 T，再排空日志、join writer 并刷新输出，保留队列和同步对象并进入 `STOPPED`。Stop 不保存世界；外部随后调用 `dominoEngineDestroy()` 进入 `DESTROYING`，释放 timer 和主循环队列，准备导航并执行存档，再释放 human 运行资源和世界模块。Destroy 只接受 `STOPPED`，不调用任何 Stop，未先 Stop 直接调用会报错退出。主循环只结束当前批次并退出，不承担退出停钟、结算或保存。日志线程已停止，日志文件和队列保留到保存完成后才释放；保存及销毁阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不调用日志记录接口。投递者结束前其目标队列保持有效。仅 Init、未 Start 的世界也由外部先 Stop 再 Destroy：此时尚无工作线程，引擎跳过 human／timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出；Destroy 保存已加载及配置的事实；本次暂停重构不改变存档版本或 JSON 字段。
 
-`dominoStorageModuleExit()` 执行完整保存：
+世界保存与资源清理完成后，引擎才调用 `dominoTimeModuleDestroy()` 将内存时钟恢复为空的冻结快照。存档中的累计纳秒基准保持退出时刻，下一次 Init 仍按文件恢复；common、host、social 等世界容器及索引在各自 Destroy 返回前立即清空，不依赖下次加载覆盖。
 
-1. `storage_path` 为空时返回 `ERR_INVALID_PARAM`。
-2. `storageSubModuleReset()` 清空本轮保存的模块 meta 缓存与分片摘要缓存。
+storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺序由引擎对外生命周期入口保证，不额外维护初始化状态或重复校验。加载／保存各自的临时索引仍由调用方按 Init → Destroy 成对管理，完成后清空资源，供下一轮使用。加载入口依赖引擎已创建 ID map 和空目标容器，固定注册表保证每轮只加载一次，不在逐类加载中重复检查这两项前置条件；存档实际数量、重复 ID、格式、引用、IO 及真实资源失败检查继续保留。
+
+`dominoStorageModuleDestroy()` 执行完整保存：
+
+1. 使用引擎初始化时已校验并持有的 `storage_path`。
+2. `storageSubModuleInit()` 分配本轮保存的临时分片摘要缓存；空的模块记录、计数及校验策略由静态初值或上一轮 Destroy 保证。
 3. `txnPrepareSaveParent()` 递归创建目标父目录，`txnBuildStagingPath()` 再生成隐藏 staging 路径：`.{base}.__txn__.{ms}-{pid}`。
 4. `saveAllShards(staging_path)` 创建 staging 目录，并按 `g_storage_module_types[]` 写所有模块数据分片；`regions` 是注册表首项，对应固定单文件 `regions.json`。
 5. `metaSave(staging_path)` 写所有 `{type}.meta.json`，然后写根 `meta.json`。
-6. `txnCommitReplace(staging_path, save_path)` 先刷 staging 目录，再提交 staging；若原存档存在，先移动到 `{save_path}.prev`，每次 rename 后都刷父目录。
-7. active rename 已确认后删除 `.prev` 并刷父目录；这两个步骤失败也向上传播，已完成的提交保留，交给下一次 Init 收敛状态。
+6. `txnCommitReplace(staging_path, save_path)` 先恢复并持久化 active，清理已有旧备份，再刷 staging 目录并提交；若原存档存在，先移动到 `{save_path}.prev`，每次 rename 后都刷父目录。
+7. active rename 并刷父目录成功后，删除 `.prev` 并再次刷父目录；这两个清理步骤失败仅通过 `DOMINO_PRINT_MESSAGE` 直接向 stdout 输出非致命诊断，已完成的提交保留，交给下一次 Init 收敛状态。
 
-保存期间任一步失败都会立即返回对应错误，不再删除 staging、立即恢复 `.prev` 或释放本轮临时状态。
-错误返回给 `dominoEngineExit()` 后 Engine 进入 `FAILED`，当前进程不能再次保存或退出重试，宿主决定何时结束进程。
+提交完成前的致命失败立即打印到 stderr 并 exit，不删除 staging、不立即恢复 `.prev`，保留本轮已完成的磁盘步骤。
 未提交的 staging 不参与加载，也不会覆盖 active；新进程只通过 `txnRecoverSave()` 处理 active 与 `.prev`。
 
 ## 加载流程
 
 `dominoStorageModuleInit()` 执行完整加载：
 
-1. `storage_path` 为空时返回 `ERR_INVALID_PARAM`。
+1. 使用引擎初始化时已校验并持有的 `storage_path`。
 2. `txnRecoverSave()` 在读取 meta 前收敛 active 与 `.prev` 的事务状态，避免提交中途崩溃被误判成新世界。
-3. `storageSubModuleReset()` 清空上一次加载/保存留下的模块记录。
-4. `metaLoad()` 读取根 `meta.json`。仅目录项查询返回 `ENOENT` 时返回 `ERR_FILE_NOT_FOUND`，入口将其视为新存档并返回 `CODE_OK`；权限、IO、路径过长及实际读取失败均向上传播，悬空符号链接也不会按新世界启动。
+3. `storageSubModuleInit()` 分配本轮加载的临时分片摘要缓存；上一轮加载／保存结束时已由 Destroy 清空模块记录，不重复重置。
+4. `metaLoad()` 读取根 `meta.json`。仅目录项查询返回 `ENOENT` 时返回 `nullptr`，入口将其视为新世界；权限、IO、路径过长及实际读取失败直接打印到 stderr 并 exit，悬空符号链接也不会按新世界启动。
 5. `metaLoad()` 校验根对象、`version`、`info`、`runtime_option`、`runtime_data.game_date_time_ns`、`runtime_data.global_increment_id` 与 `sub_module`，并恢复 `account_id`、`run_mode`、累计未冻结现实纳秒基准与全局自增 ID。
 6. 加载流程使用根 `meta.json.integrity_verify` 作为该存档的校验策略；运行时配置只决定下一次保存策略。
 7. `loadAllSubModule()` 先按 `g_storage_module_types[]` 加载所有模块 meta，建立内存中的模块 meta 表与分片摘要表。
@@ -65,7 +68,7 @@ JSON 语法错误返回 `ERR_INVALID_JSON`；已解析 JSON 的结构、引用�
 9. 所有实体主表和 ID map 加载完成后，先统一调用 `validate_references_fn` 只读校验跨模块 ID，再调用不可失败的 `bind_references_fn` 绑定指针；反序列化函数不得依赖其他模块的加载顺序。
 
 实体分片加载完成后，宏生成的 load 函数会校验实际加载数量等于模块 meta 中的 `total_count`，并拒绝重复实体 ID。
-加载失败时保留已导入的实体、字符串和任务，不撤销容器长度或 ID 映射，也不释放当前解析文档和临时行为块；该进程不能继续使用部分世界。完整加载成功或确认没有存档的新世界启动，才释放本轮临时文档与摘要索引。
+加载致命失败时立即终止，不撤销已导入的实体、字符串、任务、容器长度或 ID 映射，也不释放当前解析文档和临时行为块。完整加载成功或确认没有存档的新世界启动，才释放本轮临时文档与摘要索引。
 
 ## 事务崩溃恢复
 
@@ -77,13 +80,13 @@ JSON 语法错误返回 `ERR_INVALID_JSON`；已解析 JSON 的结构、引用�
 | 不存在 | 目录 | 将 `.prev` rename 回 active，并刷父目录 |
 | 目录 | 不存在 | 正常已提交状态 |
 | 目录 | 目录 | active 表示 staging rename 已完成；先刷父目录，再删除旧 `.prev` |
-| symlink/普通文件 | 任意 | 返回错误，不加载、不删除、不按新世界启动 |
+| symlink/普通文件 | 任意 | 打印致命错误并 exit，不加载、不删除、不按新世界启动 |
 
 提交点是 staging 成功 rename 为 active。staging 在 rename 前会刷目录；active、`.prev` 的 rename 和备份删除后都会刷同父目录，使文件内容和目录项的持久化顺序一致。
 
-失败或崩溃遗留的 staging 目录会保留，不自动提升为 active，也不由恢复流程扫描或清理。已有存档在 active 移到 `.prev` 后、staging 提交前失败，新进程恢复 `.prev`；staging 提交后失败，新进程保留 active 并清理旧备份。首次保存若尚未提交，active 与 `.prev` 都不存在，新进程仍以新世界启动，未提交 staging 仅作为遗留文件保留。恢复流程自身发生错误也立即返回，由宿主结束该进程。
+失败或崩溃遗留的 staging 目录会保留，不自动提升为 active，也不由恢复流程扫描或清理。已有存档在 active 移到 `.prev` 后、staging 提交前失败，新进程恢复 `.prev`；staging 提交后失败，新进程保留 active 并清理旧备份。首次保存若尚未提交，active 与 `.prev` 都不存在，新进程仍以新世界启动，未提交 staging 仅作为遗留文件保留。恢复 active 所需的 IO 或路径检查失败立即打印到 stderr 并 exit；加载时 active 已确认后的备份清理失败只输出非致命诊断，再次提交前的旧备份清理失败直接终止。
 
-递归删除使用 `lstat()`：遇到目录内或根路径上的 symlink 时只 unlink 链接本身，不进入链接目标。事务层还会拒绝把 active、staging 或 `.prev` symlink 当作存档目录。
+递归删除先移除非根路径的末尾斜杠，再复用 `lstat()` 的类型结果：非目录（含根 symlink）直接删除，真实目录才进入 `nftw` 后序遍历；目录内的 symlink 也只删除链接本身，不进入链接目标。事务层还会拒绝把 active、staging 或 `.prev` symlink 当作存档目录。
 
 该协议按单写者设计：同一个 `storage_path` 不允许多个 Domino 进程并发加载/保存；跨进程互斥不属于当前事务层能力。
 
@@ -208,7 +211,7 @@ root
 - 新增分组时不扫描全局实体数组验证分组是否遗漏；加载时校验完整布局，保存前校验实体关系并从实体数组重建分组。
 - 增删会使受影响的 Floyd 缓存失效，并标记布局需要整理；导航直接消费当前基础段和增量尾。
 
-保存前 `dominoNavModuleExitBefore()` 会先整理 fork road/road 数组：活跃实体按 `region_index + type + id` 排序并位于数组
+保存前 `dominoNavModuleDestroyBefore()` 会先整理 fork road/road 数组：活跃实体按 `region_index + type + id` 排序并位于数组
 前缀，逻辑删除项位于后缀。排序后单遍扫描活跃前缀，用 `kv_push` 生成分组，再统一填写增量边界；不再为容量或活跃数量预扫实体。
 整理完成后直接刷新已有 ID map 的下标；实体和映射的一致性在排序前校验，刷新只保留内部断言。因此落盘的每个 segment 必须满足：
 
@@ -239,7 +242,7 @@ root
 ```
 
 任何 segment 字段缺失、整数溢出、越界、重复 key、区间缺口或与实体属性不一致，都会使
-`dominoEngineInit()` 失败并进入 `FAILED`，由宿主结束进程，不会静默改为运行时派生。Floyd 矩阵、顶点指针表和顶点数位于独立的运行期
+初始化直接打印致命错误并 exit，不会静默改为运行时派生。Floyd 矩阵、顶点指针表和顶点数位于独立的运行期
 path cache sidecar 中，不属于 `DominoNavDataSegment`，也不写入存档。
 
 `regions.meta.json` 的 `shard_count` 固定为 `1`，对应 `regions.json`。
@@ -271,7 +274,7 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 | `human_ai` | `DOMINO_STORAGE_SHARD_HUMAN_AI`，128；每条记录内嵌本人物的任务与行为 |
 | `asset`、`fork_road`、`road`、`road_line`、`island`、`movable_object` | `DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA`，100000 |
 
-`STORAGE_DEFINE_SHARDED_SIMPLE` 生成无嵌套 data 的实体保存/加载函数。加载入口只校验实体数量、数组大小和哈希容量上限，实体与 ID map 在实际插入时按需分配，失败直接上报；不为后续步骤预留容量。`STORAGE_DEFINE_SHARDED_WITH_DATA` 的 data push 与 data id map 维护由对应 `deserializeX()` 完成，并在该模块全部分片加载后按已校验的 data_id 绑定指针，避免加载中扩容使地址失效。human 使用专用保存／加载函数维护必需的同序 data 与共用人物 ID map，不套用可选 data 的宏。
+`STORAGE_DEFINE_SHARDED_SIMPLE` 生成无嵌套 data 的实体保存/加载函数。加载入口只校验实体数量、数组大小和哈希容量上限，实体与 ID map 在实际插入时按需分配，失败直接打印到 stderr 并 exit；不为后续步骤预留容量。`STORAGE_DEFINE_SHARDED_WITH_DATA` 的 data push 与 data id map 维护由对应 `deserializeX()` 完成，并在该模块全部分片加载后按已校验的 data_id 绑定指针，避免加载中扩容使地址失效。human 使用专用保存／加载函数维护必需的同序 data 与共用人物 ID map，不套用可选 data 的宏。
 
 ## 完整性校验
 
@@ -282,7 +285,7 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 - `storageWriteShardFile()` 写分片后计算整文件 CRC32C 与 size，并登记到分片摘要表。
 - `metaSave()` 写模块 meta 时把每个分片摘要写入 `shard[]`，同时把模块 meta 自身 CRC32C 与 size 写入根 `meta.json` 的 `sub_module`。
 - `loadSubModuleMeta()` 读取模块 meta 时校验模块 meta 文件 CRC32C/size。
-- `storageReadShardFile()` 读取分片时根据内存分片摘要表校验分片 CRC32C/size。
+- `storageReadShardFile()` 读取分片时根据内存分片摘要表校验分片 CRC32C/size。模块 meta 入口已校验并登记连续 shard_id 的全部摘要，实体加载按已登记的分片范围调用，摘要表在加载期间保持不变，内部读取不重复检查摘要是否存在。
 
 关闭完整性校验时：
 
@@ -295,17 +298,18 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 
 - `serdeWriteU32Array()` 与 `serdeWriteU8Array()` 遇到元素 `0` 时提前停止，适用于有效前缀数组。
 - `serdeWriteU8FixedArray()` 与 `serdeWriteI8FixedArray()` 固定长度写出，包含零值。
-- `serdeReadU32Array()`、`serdeReadU8Array()`、`serdeReadFloatArray()` 只接受 JSON 数组，非数组时保持目标内存当前状态。
-- `serdeReadU8FixedArray()` 与 `serdeReadI8FixedArray()` 会先清零目标数组，再按 JSON 顺序覆盖。
+- `serdeReadU32Array()`、`serdeReadU8Array()`、`serdeReadFloatArray()` 按 JSON 数组顺序覆盖目标有效范围，复用遍历下标并保留容量限制；缺失或非数组输入由遍历接口产生零次迭代，未写入的元素保持原值。实体加载入口负责初始清零，nav 的固定 uint8 数组直接复用 `serdeReadU8Array()`，不额外清零。
+- `serdeReadI8FixedArray()` 保留先清零目标数组、再按 JSON 顺序覆盖的独立约定。
+- 固定二维／三维坐标读取以数组长度检查同时拒绝缺失、非数组或长度错误，继续检查每个坐标元素的类型。
 - `serdeValidateShardRoot()` 校验分片根对象的 `type`、`shard_id` 与 `entities`。
 - `serdeWriteNameDescription()` 保存名称/描述字符串，不保存原始 ID。
-- `serdeReadNameDescription()` 加载时重新分配 `name_id` 与 `description_id` 并维护全局映射。
+- `serdeReadNameDescription()` 依赖实体 data 已由反序列化入口清零；非空名称／描述重新分配 ID 并维护全局映射，缺失或空字符串保持零 ID，不在辅助函数内重复清零。
 
 ## 实体覆盖
 
 `serde_host.c`：
 
-- `regions.json` 保存 `DominoRegion` 数组。
+- `regions.json` 保存 `DominoRegion` 数组，其中九项数量字段均为 `uint32_t`；加载时拒绝缺失、非无符号整数及超出 `UINT32_MAX` 的值。
 - `movable_object` 保存位置、方向、速度、空间信息。
 - `island` 保存 ID、类型、状态、地域索引。
 
@@ -322,7 +326,7 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 
 - 每个人物恰有一条 `{human_id, tasks}` 记录，人物任务嵌套在 `tasks` 数组中，每个任务再嵌套自己的行为块；`tasks` 按 `data.task_id_list` 的有效前缀顺序保存；加载按 ID 导入任务，统一校验归属集合一致，不要求嵌套任务记录逐项同序，不重新排序或补齐人物任务清单。本模块按 128 人分片，不重复保存人物需求或随机状态。
 - 任务与行为保存状态、计划／实际时间、有效进度、行为游标、父子关系及停止意图。任务另保存 `channel_index`（0 为主通道，1、2 为同级次通道），三者均允许任意已定义任务类型，不通过类型推断所属通道。所有业务时间均为 32 位累计未冻结现实毫秒；0 和 `UINT32_MAX` 都是合法数值，由状态和显式标志区分是否启动或结束。
-- `DominoTask` 直接保存 `behaviors_ptr` 和 `execution_version`，serde 逐字段写入任务事实，并将指针指向的行为内容写入嵌套数组，不写裸指针或执行版本。加载重新分配连续行为块，填入任务的 `behaviors_ptr` 后交给 `dominoHumanStoreImportTask()`；导入只检查任务池已初始化、任务及所属人物 ID 非零、行为块非空且数量非零、任务 ID 唯一和池容量，不逐条重复完整语义检查。成功后由任务池拥有该独占块；返回错误时直接上报，未移交的行为块保留到宿主结束进程。运行期提交层先校验草案语义、人物归属和目标建筑，再由 `dominoHumanStoreAddValidatedTask()` 复用已取得的人物 data，检查容量、版本上限、ID 分配和入池资源错误。每次导入将该任务的 `uint64_t execution_version` 初始化为 1，新建任务同样从 1 开始，随后重置人物运行态不修改任务版本。后续由执行线程在检查 `UINT64_MAX` 后直接递增本任务版本，达到上限则返回 `ERR_OUT_OF_RANGE` 且版本不变；不同任务无需保持版本不同，也不增加全局版本计数器。执行器在消费异步结果时重新核对请求身份、版本和当前资格。
+- `DominoTask` 直接保存 `behaviors_ptr` 和 `execution_version`，serde 逐字段写入任务事实，并将指针指向的行为内容写入嵌套数组，不写裸指针或执行版本。加载重新分配连续行为块，填入任务的 `behaviors_ptr` 后交给 `dominoHumanStoreImportTask()`；导入依赖调用方保证任务池已初始化，只检查任务及所属人物 ID 非零、行为块非空且数量非零、任务 ID 唯一和池容量，不逐条重复完整语义检查。成功后由任务池拥有该独占块；导入返回错误时，serde 将其视为存档损坏并直接打印到 stderr 后 exit。运行期提交层先校验草案语义、人物归属和目标建筑，再由 `dominoHumanStoreAddValidatedTask()` 复用已取得的人物 data，检查容量、版本上限、ID 分配和入池资源错误。每次导入将该任务的 `uint64_t execution_version` 初始化为 1，新建任务同样从 1 开始，随后重置人物运行态不修改任务版本。后续由执行线程在检查 `UINT64_MAX` 后直接递增本任务版本，达到上限则返回 `ERR_OUT_OF_RANGE` 且版本不变；不同任务无需保持版本不同，也不增加全局版本计数器。执行器在消费异步结果时重新核对请求身份、版本和当前资格。
 - 完整世界加载后，`human_ai` 的校验入口先调用 `serdeValidateHumanReferences()` 检查人物/data 同序身份、索引、容量及位置引用，再调用 `dominoHumanStoreValidate()`；注册表不另行重复人物校验。store 沿人物清单复用任务查询结果，统一检查任务与行为语义、唯一归属、父子及待交接关系（同一人物、同一通道，最多 4 层）、任务 `channel_index` 与三槽匹配、行为游标与进度，不再预扫描全任务池。通过后才能绑定或使用；人物保存仍检查自身前置条件，AI 保存复用完整入口。挂起父任务、活动子任务、待交接任务及未回收终态均在持有数组中；遗漏、重复、跨人物引用或孤立任务记录都报错。持有数组只表达提交顺序，不校验计划开始时刻非递减，不按任务 ID 排序；同时间任务的先后由原数组位置保留。任务不再保存 `prev_task_id/next_task_id`，人物不再保存日程首尾。人物规划／唤醒及任务执行身份不写入 JSON。
 - JSON 解析保留字段存在、类型、整数范围及分配前数组长度检查；六项需求的 0～100 语义只在 store 校验。任务／行为未启动时的开始与结算时刻、非终态的结束时刻、非等待状态的等待截止点不要求清零；它们不参与当前状态的恢复判断。有效进度、已生效时间先后、状态与游标、等待原因、停止意图及关键引用仍必须一致。睡眠不校验未使用的离散效果提交标志；目标时长和完成量约束保留。
 - 已定义的任务／行为类型统一保存和加载，任务可包含多个行为，校验公共状态、时间和游标关系。`parameters` 按行为类型读写：睡眠保存 `target_active_ms`，其余类型目前保存空对象，随专有参数定义扩充。当前执行器只执行已明确授权的核心睡眠，退出时停止全部业务线程后统一结算，计时唤醒已接入；通用任务执行与地点服务资格仍待扩充。
@@ -356,4 +360,4 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 - `metaLoad()` 严格要求当前版本格式；本项目不承担历史存档迁移。
 - `regions` 与 `human_ai` 是 required 模块，任一模块在根 `meta.json.sub_module` 中缺失或对应模块 meta 缺失都会导致加载失败；只有整个根 `meta.json` 不存在时才按新存档启动。
 - 名称与描述按字符串重新分配 ID，不保证跨 save/load 后数值 ID 稳定。
-- 存档版本由 `DOMINO_STORAGE_SAVE_VERSION` 控制，当前为 `12`：人物及其必需的 data 统一使用 `human_id`，六项需求采用 0～100 整数分，人物 data 用 `task_id_list` 保存持有任务的提交顺序，数组长度恢复 `task_count`，并保存活动槽、日程版本及需求事实；移除人物日程首尾及任务前后链接，`human_ai` 依人物 ID 数组顺序保存归组的任务／行为。根 meta 的 `global_increment_id.task` 继续保存全局原子计数器的下一候选 ID。开发样例同步版本 12，不提供旧布局迁移或双版本加载。格式变化必须同步提升版本。
+- 存档版本由 `DOMINO_STORAGE_SAVE_VERSION` 控制，当前为 `15`：地域统一保存九项 `uint32_t` 数量字段（包含 `movable_object_count` 和 `fork_road_count`）。人物及其必需的 data 统一使用 `human_id`，六项需求采用 0～100 整数分，人物 data 用 `task_id_list` 保存持有任务的提交顺序，数组长度恢复 `task_count`，并保存活动槽、日程版本及需求事实；移除人物日程首尾及任务前后链接，`human_ai` 依人物 ID 数组顺序保存归组的任务／行为。根 meta 的 `global_increment_id.task` 继续保存全局原子计数器的下一候选 ID。开发样例同步版本 15，不提供旧布局迁移或双版本加载。格式变化必须同步提升版本。

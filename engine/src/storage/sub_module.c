@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 
 static StorageSubModuleMeta g_storage_sub_modules[STORAGE_SUB_MODULE_MAX_COUNT];
 static size_t g_storage_sub_modules_len = 0;
@@ -13,25 +13,12 @@ static size_t g_storage_sub_module_shards_len = 0;
 static size_t g_storage_sub_module_shards_cap = 0;
 static bool g_storage_sub_module_integrity_verify = false;
 
-DOMINO_CODE storageSubModuleReset(void) {
-    memset(g_storage_sub_modules, 0, sizeof(g_storage_sub_modules));
-    g_storage_sub_modules_len = 0;
-    g_storage_sub_module_integrity_verify = false;
-
+void storageSubModuleInit(void) {
+    g_storage_sub_module_shards = (StorageSubModuleShard*)malloc((size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT * sizeof(StorageSubModuleShard));
     if (!g_storage_sub_module_shards) {
-        g_storage_sub_module_shards =
-            (StorageSubModuleShard*)malloc((size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT * sizeof(StorageSubModuleShard));
-        if (!g_storage_sub_module_shards) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to allocate shard metadata (count=%u)",
-                              STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT);
-            return ERR_MEMORY_ALLOC;
-        }
-        g_storage_sub_module_shards_cap = (size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT;
-    } else {
-        memset(g_storage_sub_module_shards, 0, g_storage_sub_module_shards_cap * sizeof(StorageSubModuleShard));
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard metadata (count=%u)", STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT);
     }
-    g_storage_sub_module_shards_len = 0;
-    return CODE_OK;
+    g_storage_sub_module_shards_cap = (size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT;
 }
 
 void storageSubModuleSetIntegrityVerify(bool integrity_verify) {
@@ -53,14 +40,12 @@ void storageSubModuleDestroy(void) {
     g_storage_sub_module_integrity_verify = false;
 }
 
-DOMINO_CODE storageSubModuleMetaAdd(StorageSubModuleMeta meta) {
+void storageSubModuleMetaAdd(StorageSubModuleMeta meta) {
     if (g_storage_sub_modules_len >= (size_t)STORAGE_SUB_MODULE_MAX_COUNT) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "module metadata capacity exhausted (type=%s, count=%zu)",
-                          meta.type_name, g_storage_sub_modules_len);
-        return ERR_CAPACITY_EXCEEDED;
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "module metadata capacity exhausted (type=%s, count=%zu)", meta.type_name,
+                               g_storage_sub_modules_len);
     }
     g_storage_sub_modules[g_storage_sub_modules_len++] = meta;
-    return CODE_OK;
 }
 
 const StorageSubModuleMeta* storageSubModuleMetaFind(const char* type_name) {
@@ -83,23 +68,18 @@ const StorageSubModuleShard* storageSubModuleShardFind(const char* type_name, ui
     return nullptr;
 }
 
-DOMINO_CODE storageSubModuleShardAdd(StorageSubModuleShard shard) {
+void storageSubModuleShardAdd(StorageSubModuleShard shard) {
     if (g_storage_sub_module_shards_len == g_storage_sub_module_shards_cap) {
         if (g_storage_sub_module_shards_cap > SIZE_MAX / 2U / sizeof(StorageSubModuleShard)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "shard metadata allocation size overflows (capacity=%zu)",
-                              g_storage_sub_module_shards_cap);
-            return ERR_MEMORY_OVERFLOW;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "shard metadata allocation size overflows (capacity=%zu)", g_storage_sub_module_shards_cap);
         }
-        size_t new_cap =
-            g_storage_sub_module_shards_cap == 0 ? (size_t)STORAGE_SUB_MODULE_SHARD_RESERVE_MIN_COUNT : g_storage_sub_module_shards_cap * 2;
+        size_t new_cap = g_storage_sub_module_shards_cap * 2;
         StorageSubModuleShard* new_ptr = (StorageSubModuleShard*)realloc(g_storage_sub_module_shards, new_cap * sizeof(StorageSubModuleShard));
         if (!new_ptr) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "failed to grow shard metadata (capacity=%zu)", new_cap);
-            return ERR_MEMORY_ALLOC;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to grow shard metadata (capacity=%zu)", new_cap);
         }
         g_storage_sub_module_shards = new_ptr;
         g_storage_sub_module_shards_cap = new_cap;
     }
     g_storage_sub_module_shards[g_storage_sub_module_shards_len++] = shard;
-    return CODE_OK;
 }

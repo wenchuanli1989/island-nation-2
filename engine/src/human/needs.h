@@ -6,6 +6,10 @@
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
 
+/** @file needs.h
+ * @brief 人物需求校验与结算；失败仅返回结果，由调用方结合业务上下文决定诊断和错误处理。
+ */
+
 /** @brief 校验六项需求范围及自然结算时刻，不修改人物。
  * @param data_ptr 必需的人物 data。
  * @param now_ms 本次结算的累计未冻结现实毫秒。

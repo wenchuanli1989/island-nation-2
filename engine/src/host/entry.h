@@ -1,15 +1,20 @@
 #ifndef DOMINO_ENGINE_HOST_MODULE_H
 #define DOMINO_ENGINE_HOST_MODULE_H
 
-#include "domino_shared_error_codes.h"
 #include "domino_shared_host.h"
 #include "klib/khashl.h"
 #include "klib/kvec.h"
 
-/** @brief 清空世界固定状态并初始化 host 容器和 ID map；失败直接返回，已取得的资源保留到进程终结。 */
-extern DOMINO_CODE dominoHostModuleInit(void);
+/** @brief 创建 host ID map；分配失败直接打印到 stderr 并终止进程。
+ * @pre 由引擎串行保证 Init → Destroy 顺序；世界固定状态和容器由首次静态初始化或上次 Destroy 清空。
+ */
+extern void dominoHostModuleInit(void);
 
-extern void dominoHostModuleExit(void);
+/** @brief 释放并清空 host 容器和 ID map，重置全部全局 ID、地域数量及地域字段；原子成员逐项写零。
+ * @pre 当前实例已 Init，且引擎已停止线程并完成保存；由生命周期控制方串行调用。
+ * @note 完成后可重新 Init；不重复校验引擎已保证的生命周期顺序。
+ */
+extern void dominoHostModuleDestroy(void);
 
 extern DominoIsland* dominoGetIslandByID(domino_island_id_t island_id);
 

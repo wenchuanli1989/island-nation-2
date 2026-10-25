@@ -1,7 +1,6 @@
 #ifndef DOMINO_ENGINE_STORAGE_META_H
 #define DOMINO_ENGINE_STORAGE_META_H
 
-#include "domino_shared_error_codes.h"
 #include "yyjson/yyjson.h"
 
 /**
@@ -9,19 +8,22 @@
  *
  * 调用前必须已经完成分片写入，因为模块 meta 会消费分片摘要缓存。
  */
-DOMINO_CODE metaSave(const char* save_path);
+void metaSave(const char* save_path);
 
 /**
  * @brief 读取根 meta.json，恢复运行时选项和全局自增 ID。
  *
- * 返回的 yyjson_doc 由调用者释放；result 为 ERR_FILE_NOT_FOUND 时表示新存档。
+ * 返回的 yyjson_doc 由调用者释放；nullptr 表示不存在存档，应启动新世界。
+ * 存档存在时，IO、格式、完整性或分配失败直接打印到 stderr 并 exit。
  */
-yyjson_doc* metaLoad(DOMINO_CODE* result);
+yyjson_doc* metaLoad(void);
 
 /** @brief 写注册表中的所有模块数据分片。 */
-DOMINO_CODE saveAllShards(const char* save_path);
+void saveAllShards(const char* save_path);
 
-/** @brief 读取所有模块 meta，再按注册表顺序加载模块数据。 */
-DOMINO_CODE loadAllSubModule(yyjson_val* sub_module);
+/** @brief 读取所有模块 meta，再按注册表顺序加载模块数据。
+ * @pre 引擎已初始化全部世界容器和 ID 映射；目标为空，本次 Init 尚未加载数据。
+ */
+void loadAllSubModule(yyjson_val* sub_module);
 
 #endif

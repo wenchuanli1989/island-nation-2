@@ -8,11 +8,11 @@
 #include <unistd.h>
 
 #include "demo.h"
-#include "domino_shared_error_codes.h"
+#include "domino_shared_common.h"
 
 int main(int argc, char* argv[]) {
     // 输出当前进程ID
-    printf("当前进程ID: %d\n", getpid());
+    DOMINO_PRINT_MESSAGE("当前进程ID: %d", getpid());
 
     // 解析命令行参数
     bool use_default = true;
@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
         printf("请输入顶点数: ");
         // NOLINTNEXTLINE(cert-err34-c)
         if (scanf("%hd", &vertex_num) != 1 || vertex_num <= 0) {
-            printf("错误：无效的顶点数输入\n");
+            DOMINO_PRINT_MESSAGE("错误：无效的顶点数输入");
 
             return 1;
         }
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
         printf("请输入性能模式 (1=性能模式, 0=调试模式): ");
         // NOLINTNEXTLINE(cert-err34-c)
         if (scanf("%d", &performance_mode) != 1 || (performance_mode != 0 && performance_mode != 1)) {
-            printf("错误：无效的性能模式输入\n");
+            DOMINO_PRINT_MESSAGE("错误：无效的性能模式输入");
 
             return 1;
         }
@@ -54,9 +54,18 @@ int main(int argc, char* argv[]) {
 
     // 分配边数据结构
     VertexEdges* vertices = calloc((size_t)vertex_num, sizeof(VertexEdges));
+    if (vertices == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配顶点数组失败");
+    }
 
     // 分配路径信息矩阵
+    if ((size_t)vertex_num > SIZE_MAX / (size_t)vertex_num / sizeof(PathInfo)) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "路径信息矩阵大小溢出");
+    }
     PathInfo(*path_matrix)[vertex_num] = calloc((size_t)vertex_num * (size_t)vertex_num, sizeof(PathInfo));
+    if (path_matrix == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配路径信息矩阵失败");
+    }
 
     int zero_count = 0;
     // 初始化所有边权重（每个点最多连接8个点）
@@ -80,7 +89,9 @@ int main(int argc, char* argv[]) {
 
             if (!edge_conflict && vertices[j].count < MAX_EDGES_PER_VERTEX) {
                 unsigned int random_2 = 0;
-                getrandom(&random_2, sizeof(random_2), 0);
+                if (getrandom(&random_2, sizeof(random_2), 0) != (ssize_t)sizeof(random_2)) {
+                    DOMINO_EXIT_WITH_ERROR(ERR_SYSTEM, "获取随机边权重失败");
+                }
                 vertices[i].edges[count].weight = (edge_weight_t)(200 + (int)(random_2 % 200));
                 vertices[i].edges[count].target_vertex_id = (vertex_id_t)j;
                 vertices[i].count++;
@@ -151,9 +162,15 @@ int main(int argc, char* argv[]) {
     printf("\n========================================\n");
     printf("开始弗洛伊德算法: \n");
     clock_t start = clock();
+    if (start == (clock_t)-1) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取算法开始计时失败");
+    }
     FloydPathPlanningResult floyd_path_planning_result = floydPathPlanning(vertex_num, vertices, path_matrix);
 
     clock_t end = clock();
+    if (end == (clock_t)-1 || end < start) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取算法结束计时失败或时钟倒退");
+    }
     double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;
     printf("弗洛伊德算法执行时间: %f seconds\n", cpu_time_used);
 
@@ -204,7 +221,9 @@ int main(int argc, char* argv[]) {
         printf("%d(%d) -> ", start_vertex_id, (int)vertices[start_vertex_id].road_fork_id);
         DOMINO_CODE result =
             findShortestPath(shortest_path_info, ROAD_FORK_MAX_COUNT, &road_fork_count, vertex_num, path_matrix, start_vertex_id, end_vertex_id);
-        assertDominoErrorCode(result, true, __FILE__, __LINE__);
+        if (result != CODE_OK) {
+            DOMINO_EXIT_WITH_ERROR(result, "读取已计算的最短路径失败");
+        }
         for (int i = road_fork_count - 1; i >= 0; i--) {
             printf("%d(%d) -> ", shortest_path_info[i].pre_vertex_id, (int)shortest_path_info[i].pre_road_fork_id);
         }

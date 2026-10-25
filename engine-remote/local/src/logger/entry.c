@@ -3,51 +3,29 @@
 #include <stdarg.h>
 
 static DominoLogger g_logger;
-static DominoLogger* g_logger_ptr = nullptr;
-static DOMINO_CODE g_lifecycle_result = CODE_OK;
 
-DOMINO_CODE dominoEngineRemoteLocalLoggerInit(DominoLogConfig config) {
-    if (g_lifecycle_result != CODE_OK) {
-        return g_lifecycle_result;
-    }
-    if (g_logger_ptr != nullptr) {
-        g_lifecycle_result = ERR_ALREADY_INITIALIZED;
-        return g_lifecycle_result;
-    }
-
+void dominoEngineRemoteLocalLoggerInit(DominoLogConfig config) {
     static const DominoLogModule modules[] = {
         {.module_id = 0U, .name = "remote-local"},
     };
-    DominoLogger* logger_ptr = &g_logger;
-    int result = dominoLogInit(config, modules, sizeof(modules) / sizeof(modules[0]), logger_ptr);
-    if (result != CODE_OK) {
-        g_lifecycle_result = (DOMINO_CODE)result;
-        return g_lifecycle_result;
-    }
-    g_logger_ptr = logger_ptr;
-    return CODE_OK;
+    dominoLogInit(config, modules, sizeof(modules) / sizeof(modules[0]), &g_logger);
 }
 
-DOMINO_CODE dominoEngineRemoteLocalLoggerExit(void) {
-    if (g_lifecycle_result != CODE_OK) {
-        return g_lifecycle_result;
-    }
-    int result = dominoLogDestroy(g_logger_ptr);
-    if (result != CODE_OK) {
-        g_lifecycle_result = (DOMINO_CODE)result;
-        return g_lifecycle_result;
-    }
-    g_logger_ptr = nullptr;
-    return CODE_OK;
+void dominoEngineRemoteLocalLoggerStart(void) {
+    dominoLogStart(&g_logger);
+}
+
+void dominoEngineRemoteLocalLoggerStop(void) {
+    dominoLogStop(&g_logger);
+}
+
+void dominoEngineRemoteLocalLoggerDestroy(void) {
+    dominoLogDestroy(&g_logger);
 }
 
 void dominoEngineRemoteLocalLog(DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* fmt, ...) {
     va_list arg_list;
     va_start(arg_list, fmt);
-    dominoLogVa(g_logger_ptr, 0U, level, loc, fmt, arg_list);
+    dominoLogVa(&g_logger, 0U, level, loc, fmt, arg_list);
     va_end(arg_list);
-}
-
-void dominoEngineRemoteLocalLogMsg(DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* msg_ptr) {
-    dominoLogMsg(g_logger_ptr, 0U, level, loc, msg_ptr);
 }

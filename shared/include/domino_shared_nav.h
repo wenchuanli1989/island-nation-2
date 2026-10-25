@@ -115,7 +115,7 @@ typedef struct DominoRoadLine {
 static_assert(sizeof(DominoRoadLine) == 128, "DominoRoadLine must be exactly 128 bytes");
 
 static inline bool dominoNavEdgeWeightIsPassable(domino_nav_weight_atom_t weight) {
-    return (weight > 0 && weight < DOMINO_NAV_EDGE_WEIGHT_IMPASSABLE) != 0;
+    return weight > 0 && weight < DOMINO_NAV_EDGE_WEIGHT_IMPASSABLE;
 }
 
 /**
@@ -131,7 +131,9 @@ static inline bool dominoNavEdgeWeightIsPassable(domino_nav_weight_atom_t weight
  * 添加会扩容 fork road / road 扁平数组；Nav 查询与修改须由调用方串行协调。
  * 调用后不得继续持有此前查询得到的实体指针，应按 ID 重新查询。
  *
- * @return `CODE_OK` 成功；失败返回具体负错误码。
+ * @return `CODE_OK` 成功；业务校验、实体不存在或业务容量限制返回对应负错误码。
+ * @note 可恢复业务结果不在 Nav 内部打印，由掌握调用阶段的业务边界选择输出方式。
+ * @note 未初始化、内部数据损坏、内存分配失败或 ID 耗尽时，直接打印 stderr 并 exit(EXIT_FAILURE)。
  */
 extern DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* target_fork_road, domino_nav_weight_atom_t weight,
                                  uint8_t region_index, uint8_t network_type);
@@ -139,7 +141,9 @@ extern DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad
 /**
  * @brief 逻辑删除一条 road，并在 fork road 失去所有邻接关系时逻辑删除孤立 fork road。
  *
- * @return `CODE_OK` 成功；失败返回具体负错误码。
+ * @return `CODE_OK` 成功；参数无效或道路不存在返回对应负错误码。
+ * @note 可恢复业务结果不在 Nav 内部打印，由掌握调用阶段的业务边界选择输出方式。
+ * @note 未初始化或内部数据损坏时，直接打印 stderr 并 exit(EXIT_FAILURE)。
  */
 extern DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id);
 

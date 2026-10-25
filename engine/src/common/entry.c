@@ -1,6 +1,6 @@
 #include "entry.h"
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 
 DominoNameVec domino_all_name_list;
 DominoDescriptionVec domino_all_description_list;
@@ -8,28 +8,26 @@ DominoDescriptionVec domino_all_description_list;
 DominoNameIDMap* dominoNameIdMap;
 DominoDescriptionIDMap* dominoDescriptionIdMap;
 
-DOMINO_CODE dominoCommonModuleInit(void) {
-    kv_init(domino_all_name_list);
-    kv_init(domino_all_description_list);
+void dominoCommonModuleInit(void) {
     dominoNameIdMap = dominoNameIdMap_init();
     if (!dominoNameIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_COMMON, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoNameIdMap (code=%d)", ERR_MEMORY_ALLOC);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoNameIdMap");
     }
     dominoDescriptionIdMap = dominoDescriptionIdMap_init();
     if (!dominoDescriptionIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_COMMON, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoDescriptionIdMap (code=%d)",
-                          ERR_MEMORY_ALLOC);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoDescriptionIdMap");
     }
-    return CODE_OK;
 }
 
-void dominoCommonModuleExit(void) {
+void dominoCommonModuleDestroy(void) {
     kv_destroy(domino_all_name_list);
+    kv_init(domino_all_name_list);
     kv_destroy(domino_all_description_list);
+    kv_init(domino_all_description_list);
     dominoNameIdMap_destroy(dominoNameIdMap);
+    dominoNameIdMap = nullptr;
     dominoDescriptionIdMap_destroy(dominoDescriptionIdMap);
+    dominoDescriptionIdMap = nullptr;
 }
 
 domino_name_t* dominoGetNameByID(domino_name_id_t name_id) {

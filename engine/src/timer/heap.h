@@ -11,9 +11,9 @@ typedef struct DominoTimerHeap {
 } DominoTimerHeap;
 
 /** @brief 释放事件数组并恢复为空堆。 */
-void dominoTimerHeapExit(DominoTimerHeap* heap_ptr);
-/** @brief 按值登记事件；扩容失败时保留原堆，成功返回 CODE_OK。 */
-DOMINO_CODE dominoTimerHeapPush(DominoTimerHeap* heap_ptr, const DominoTimer* timer_ptr);
+void dominoTimerHeapDestroy(DominoTimerHeap* heap_ptr);
+/** @brief 按值登记事件；容量或分配失败直接报告并终止进程。 */
+void dominoTimerHeapPush(DominoTimerHeap* heap_ptr, const DominoTimer* timer_ptr);
 /** @brief 返回最早到期事件，空堆返回 nullptr；返回指针仅在下次堆操作前有效。 */
 const DominoTimer* dominoTimerHeapPeek(const DominoTimerHeap* heap_ptr);
 /** @brief 移除非空堆的最早到期事件，用于取消项回收或投递完成后的移除。 */

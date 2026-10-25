@@ -2,15 +2,14 @@
 
 #include <inttypes.h>
 #include <stdatomic.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 #include <time.h>
 
 #include "../entry.h"
-#include "../logger/entry.h"
 #include "../time/entry.h"
+#include "domino_shared_common.h"
 #include "domino_shared_human.h"
 #include "rules.h"
 #include "task/sleep.h"
@@ -18,110 +17,36 @@
 typedef struct HumanPlanner {
     DominoThreadQueue inbox;
     DominoThreadQueue* result_queue_ptr;
-    mtx_t mutex;
     thrd_t thread;
-    DOMINO_CODE failure_code;
-    DOMINO_CODE stop_result;
-    atomic_bool ready_flag;
-    atomic_bool stop_requested_flag;
-    atomic_bool stop_completed_flag;
-    bool initialized_flag;
+    atomic_bool ready_flag;  ///< 仅用于首次启动握手，由静态初值或 Destroy 复位。
 } HumanPlanner;
 
 static HumanPlanner g_planner;
 
-/** @brief 规划器只允许在 Stop 时关闭生产端，其他消费端停止均破坏收件协议。 */
-static void logUnexpectedConsumerStop(DOMINO_CODE code, const char* operation_ptr) {
-    if (code == ERR_QUEUE_CONSUMER_STOPPED) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "human planner inbox consumer unexpectedly stopped during %s code=%d", operation_ptr, (int)code);
-    }
-}
-
-/** @brief 与现有 queue/executor 一致，同步原语失效不能继续假装持锁或完成握手。 */
-static void checkThreadResult(int result) {
-    if (result != thrd_success) {
-        (void)fprintf(stderr, "domino human planner: synchronization failure (%d)\n", result);
-        abort();
-    }
-}
-
-/** @brief 等待启动／停止回执；实例首错不依赖业务队列投递。 */
-static DOMINO_CODE waitLifecycleFlag(const atomic_bool* completed_flag_ptr) {
+/** @brief 等待工作线程发布就绪，保证 Start 返回时已完成启动握手。 */
+static void waitUntilReady(void) {
     const struct timespec interval = {.tv_nsec = 10000000L};
-    for (;;) {
-        const DOMINO_CODE code = dominoEngineGetLifecycleError();
-        if (code != CODE_OK) {
-            return code;
-        }
-        if (atomic_load(completed_flag_ptr)) {
-            return CODE_OK;
-        }
+    while (!atomic_load(&g_planner.ready_flag)) {
         if (thrd_sleep(&interval, nullptr) == -2) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "planner lifecycle acknowledgement wait sleep failed");
-            return dominoEngineReportFailure(ERR_THREAD_SLEEP);
+            DOMINO_EXIT_WITH_ERROR(ERR_THREAD_SLEEP, "planner startup acknowledgement wait sleep failed");
         }
     }
 }
 
 void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr) {
-    if (message_ptr && message_ptr->items_ptr && message_ptr->items_size == sizeof(DominoHumanPlanEnvelope) &&
-        (message_ptr->items_type == DOMINO_THREAD_MESSAGE_AI_REQUEST || message_ptr->items_type == DOMINO_THREAD_MESSAGE_AI_RESULT)) {
-        DominoHumanPlanEnvelope* envelope_ptr = message_ptr->items_ptr;
-        free(envelope_ptr->task.behaviors_ptr);
-        envelope_ptr->task.behaviors_ptr = nullptr;
+    if (message_ptr && (message_ptr->type == DOMINO_THREAD_MESSAGE_AI_REQUEST || message_ptr->type == DOMINO_THREAD_MESSAGE_AI_RESULT)) {
+        free(message_ptr->payload.plan.task.behaviors_ptr);
+        *message_ptr = (DominoThreadMessage){0};
     }
-    dominoThreadMessageRelease(message_ptr);
-}
-
-void dominoHumanPlannerRequestFailure(DOMINO_CODE code) {
-    code = dominoEngineReportFailure(code);
-    if (!g_planner.initialized_flag) {
-        return;
-    }
-    checkThreadResult(mtx_lock(&g_planner.mutex));
-    if (g_planner.failure_code == CODE_OK) {
-        g_planner.failure_code = code;
-    }
-    atomic_store(&g_planner.stop_requested_flag, true);
-    checkThreadResult(mtx_unlock(&g_planner.mutex));
-    dominoThreadQueueWakeAll(&g_planner.inbox);
-    dominoThreadQueueWakeAll(g_planner.result_queue_ptr);
-}
-
-/** @brief 线程唯一退出回执；保留队列与未取载荷，正常 Stop 在 join 后释放。 */
-static DOMINO_CODE completePlannerThread(DOMINO_CODE code) {
-    const DOMINO_CODE engine_code = dominoEngineGetLifecycleError();
-    if (engine_code != CODE_OK) {
-        code = engine_code;
-    }
-    if (code != CODE_OK) {
-        dominoHumanPlannerRequestFailure(code);
-    }
-    checkThreadResult(mtx_lock(&g_planner.mutex));
-    if (g_planner.failure_code != CODE_OK) {
-        code = g_planner.failure_code;
-    }
-    g_planner.stop_result = code;
-    checkThreadResult(mtx_unlock(&g_planner.mutex));
-    atomic_store(&g_planner.stop_completed_flag, true);
-    dominoThreadQueueWakeAll(g_planner.result_queue_ptr);
-    return code;
 }
 
 /** @brief 仅从独立快照选择同楼核心睡眠，不查询人物、建筑、任务池、导航或时钟。 */
 static void buildPlan(DominoHumanPlanEnvelope* envelope_ptr) {
     const DominoHumanPlanRequest* request_ptr = &envelope_ptr->request;
     envelope_ptr->status = DOMINO_HUMAN_PLAN_NO_PLAN;
-    envelope_ptr->code = CODE_OK;
     if (request_ptr->energy > DOMINO_HUMAN_NEED_MAX || request_ptr->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "invalid plan snapshot human=%" PRIu32 " request=%" PRIu64 " energy=%u task_count=%u", request_ptr->human_id,
-                          request_ptr->request_id, (unsigned)request_ptr->energy, (unsigned)request_ptr->task_count);
-        envelope_ptr->status = DOMINO_HUMAN_PLAN_FAILED;
-        envelope_ptr->code = ERR_INVALID_DATA;
-        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_SYSTEM_FAILURE;
-        return;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid plan snapshot human=%" PRIu32 " request=%" PRIu64 " energy=%u task_count=%u",
+                               request_ptr->human_id, request_ptr->request_id, (unsigned)request_ptr->energy, (unsigned)request_ptr->task_count);
     }
     if (request_ptr->approved_sleep_building_id == 0U || request_ptr->current_building_id != request_ptr->approved_sleep_building_id) {
         envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_NO_AUTHORIZATION;
@@ -143,37 +68,34 @@ static void buildPlan(DominoHumanPlanEnvelope* envelope_ptr) {
         envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_ENERGY_SUFFICIENT;
         return;
     }
-    envelope_ptr->code =
+    const DOMINO_CODE code =
         dominoHumanBuildSleepTaskDraft(request_ptr->human_id, request_ptr->approved_sleep_building_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY,
                                        request_ptr->energy, request_ptr->now_ms, &envelope_ptr->task);
-    envelope_ptr->status = envelope_ptr->code == CODE_OK ? DOMINO_HUMAN_PLAN_DRAFT : DOMINO_HUMAN_PLAN_FAILED;
-    envelope_ptr->reason = envelope_ptr->code == CODE_OK ? DOMINO_HUMAN_PLAN_REASON_LOW_ENERGY : DOMINO_HUMAN_PLAN_REASON_SYSTEM_FAILURE;
+    if (code == ERR_OUT_OF_RANGE) {
+        // 快照已验证；剩余可表示时长不足属于本次计划无法成立，不代表当前时钟失效。
+        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_TIME_RANGE;
+        return;
+    }
+    if (code != CODE_OK) {
+        DOMINO_EXIT_WITH_ERROR(code, "cannot build sleep plan human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id, request_ptr->request_id);
+    }
+    envelope_ptr->status = DOMINO_HUMAN_PLAN_DRAFT;
+    envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_LOW_ENERGY;
 }
 
 /** @brief 当前批次的请求完成计算和非阻塞回传；冻结不打断已开始的批次。
  * @pre 消息成功取自私有 inbox，唯一生产入口 Submit 已构造完整的 AI_REQUEST envelope。
  */
-static DOMINO_CODE processRequest(DominoThreadMessage* message_ptr) {
-    DOMINO_CODE code = dominoEngineGetLifecycleError();
-    if (code == CODE_OK) {
-        DominoHumanPlanEnvelope* envelope_ptr = message_ptr->items_ptr;
-        buildPlan(envelope_ptr);
-        if (envelope_ptr->status == DOMINO_HUMAN_PLAN_FAILED) {
-            code = envelope_ptr->code;
-        } else {
-            message_ptr->items_type = DOMINO_THREAD_MESSAGE_AI_RESULT;
-            code = dominoThreadQueueProduce(g_planner.result_queue_ptr, message_ptr);
-            if (code == ERR_QUEUE_FULL || code == ERR_QUEUE_PRODUCER_STOPPED || code == ERR_QUEUE_CONSUMER_STOPPED) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                  "cannot deliver plan result human=%" PRIu32 " request=%" PRIu64 " queue_code=%d", envelope_ptr->request.human_id,
-                                  envelope_ptr->request.request_id, (int)code);
-            }
-        }
-    }
+static void processRequest(DominoThreadMessage* message_ptr) {
+    DominoHumanPlanEnvelope* envelope_ptr = &message_ptr->payload.plan;
+    buildPlan(envelope_ptr);
+    message_ptr->type = DOMINO_THREAD_MESSAGE_AI_RESULT;
+    const DOMINO_CODE code = dominoThreadQueueProduce(g_planner.result_queue_ptr, message_ptr);
     if (code != CODE_OK) {
-        dominoHumanPlannerReleaseMessage(message_ptr);
+        DOMINO_EXIT_WITH_ERROR(code, "cannot deliver plan result human=%" PRIu32 " request=%" PRIu64, envelope_ptr->request.human_id,
+                               envelope_ptr->request.request_id);
     }
-    return code;
+    // 成功后行为块归结果队列的接收者；当前消息值直接丢弃，不再访问或释放行为指针。
 }
 
 static int humanPlannerThread(void* arg_ptr) {
@@ -183,184 +105,80 @@ static int humanPlannerThread(void* arg_ptr) {
         uint64_t epoch;
         DOMINO_CODE code = dominoThreadQueueSnapshot(&g_planner.inbox, &epoch);
         if (code != CODE_OK) {
-            return completePlannerThread(code);
+            DOMINO_EXIT_WITH_ERROR(code, "cannot snapshot human planner inbox");
         }
-        if (dominoEngineIsStopRequested() || atomic_load(&g_planner.stop_requested_flag)) {
-            return completePlannerThread(CODE_OK);
-        }
-        code = dominoEngineGetLifecycleError();
-        if (code != CODE_OK) {
-            return completePlannerThread(code);
+        if (dominoEngineIsStopping()) {
+            return CODE_OK;
         }
         if (!dominoTimeModuleIsFrozen()) {
             uint32_t consumed_count = 0U;
             for (; consumed_count < DOMINO_HUMAN_PLAN_INFLIGHT_MAX; consumed_count++) {
                 DominoThreadMessage message;
                 code = dominoThreadQueueConsume(&g_planner.inbox, &message, false);
-                if (code == ERR_QUEUE_EMPTY || code == ERR_QUEUE_PRODUCER_STOPPED) {
+                if (code == ERR_QUEUE_EMPTY) {
                     break;
                 }
                 if (code != CODE_OK) {
-                    logUnexpectedConsumerStop(code, "request consumption");
-                    return completePlannerThread(code);
+                    DOMINO_EXIT_WITH_ERROR(code, "cannot consume human planner request");
                 }
-                code = processRequest(&message);
-                if (code != CODE_OK) {
-                    return completePlannerThread(code);
-                }
+                processRequest(&message);
             }
             if (consumed_count == DOMINO_HUMAN_PLAN_INFLIGHT_MAX) {
                 continue;
             }
         }
-        code = dominoThreadQueueWait(&g_planner.inbox, epoch, nullptr);
-        if (code != CODE_OK && code != ERR_QUEUE_PRODUCER_STOPPED) {
-            logUnexpectedConsumerStop(code, "request wait");
-            return completePlannerThread(code);
+        code = dominoThreadQueueWait(&g_planner.inbox, epoch);
+        if (code != CODE_OK) {
+            DOMINO_EXIT_WITH_ERROR(code, "cannot wait for human planner request");
         }
     }
 }
 
-DOMINO_CODE dominoHumanPlannerStart(DominoThreadQueue* result_queue_ptr) {
-    if (g_planner.initialized_flag) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "human planner is already initialized");
-        return ERR_ALREADY_INITIALIZED;
-    }
-    if (!result_queue_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "human planner result queue is null");
-        return ERR_NULL_POINTER;
-    }
-    if (!result_queue_ptr->initialized) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "human planner result queue is not initialized");
-        return ERR_NOT_INITIALIZED;
-    }
-    if (result_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "human planner result queue item size=%zu expected=%zu",
-                          result_queue_ptr->item_size, sizeof(DominoThreadMessage));
-        return ERR_INVALID_PARAM;
-    }
-    memset(&g_planner, 0, sizeof(g_planner));
-    atomic_init(&g_planner.ready_flag, false);
-    atomic_init(&g_planner.stop_requested_flag, false);
-    atomic_init(&g_planner.stop_completed_flag, false);
-    g_planner.stop_result = CODE_OK;
-    if (mtx_init(&g_planner.mutex, mtx_plain) != thrd_success) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "cannot initialize human planner mutex");
-        return ERR_MUTEX_INIT;
-    }
-    DOMINO_CODE code =
-        dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoThreadMessage), DOMINO_HUMAN_PLAN_INFLIGHT_MAX, DOMINO_HUMAN_PLAN_INFLIGHT_MAX);
-    if (code != CODE_OK) {
-        return code;
-    }
+void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
+    dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoThreadMessage), DOMINO_HUMAN_PLAN_INFLIGHT_MAX, DOMINO_HUMAN_PLAN_INFLIGHT_MAX);
     g_planner.result_queue_ptr = result_queue_ptr;
-    g_planner.initialized_flag = true;
-    if (thrd_create(&g_planner.thread, humanPlannerThread, nullptr) != thrd_success) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "cannot create human planner thread");
-        return ERR_THREAD_CREATE;
-    }
-    return waitLifecycleFlag(&g_planner.ready_flag);
+}
+
+void dominoHumanPlannerStart(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planner.thread, humanPlannerThread, nullptr), ERR_THREAD_CREATE,
+                                  "cannot create human planner thread");
+    waitUntilReady();
 }
 
 void dominoHumanPlannerNotifyTimeChanged(void) {
-    if (!g_planner.initialized_flag) {
-        return;
-    }
     dominoThreadQueueWakeAll(&g_planner.inbox);
 }
 
-DOMINO_CODE dominoHumanPlannerGetError(void) {
-    if (!g_planner.initialized_flag) {
-        return CODE_OK;
-    }
-    checkThreadResult(mtx_lock(&g_planner.mutex));
-    const DOMINO_CODE code = g_planner.failure_code;
-    checkThreadResult(mtx_unlock(&g_planner.mutex));
-    return code;
-}
-
-DOMINO_CODE dominoHumanPlannerSubmit(const DominoHumanPlanRequest* request_ptr) {
+void dominoHumanPlannerSubmit(const DominoHumanPlanRequest* request_ptr) {
     if (!request_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "human planner request is null");
-        return ERR_NULL_POINTER;
-    }
-    if (!g_planner.initialized_flag) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "cannot submit human plan before planner initialization");
-        return ERR_NOT_INITIALIZED;
+        DOMINO_EXIT_WITH_ERROR(ERR_NULL_POINTER, "human planner request is null");
     }
     if (request_ptr->request_id == 0U || request_ptr->human_id == 0U || request_ptr->reasons == 0U) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "invalid plan request human=%" PRIu32 " request=%" PRIu64 " reasons=%" PRIu32, request_ptr->human_id,
-                          request_ptr->request_id, request_ptr->reasons);
-        return ERR_INVALID_PARAM;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid plan request human=%" PRIu32 " request=%" PRIu64 " reasons=%" PRIu32,
+                               request_ptr->human_id, request_ptr->request_id, request_ptr->reasons);
     }
-    checkThreadResult(mtx_lock(&g_planner.mutex));
-    DOMINO_CODE code = dominoEngineGetLifecycleError();
-    if (code == CODE_OK) {
-        code = g_planner.failure_code;
-    }
-    if (code == CODE_OK && atomic_load(&g_planner.stop_requested_flag)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "cannot submit plan after planner stop requested human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id,
-                          request_ptr->request_id);
-        code = ERR_GAME_STATE_INVALID;
-    }
+    DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_AI_REQUEST, .payload.plan = {.request = *request_ptr}};
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &message);
     if (code != CODE_OK) {
-        goto unlock;
+        DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id, request_ptr->request_id);
     }
-    const DominoHumanPlanEnvelope envelope = {.request = *request_ptr};
-    DominoThreadMessage message = {0};
-    code = dominoThreadMessageInitCopy(&message, DOMINO_THREAD_MESSAGE_AI_REQUEST, &envelope, sizeof(envelope));
-    if (code != CODE_OK) {
-        goto unlock;
-    }
-    code = dominoThreadQueueProduce(&g_planner.inbox, &message);
-    if (code != CODE_OK) {
-        if (code == ERR_QUEUE_FULL || code == ERR_QUEUE_PRODUCER_STOPPED || code == ERR_QUEUE_CONSUMER_STOPPED) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "cannot submit plan request human=%" PRIu32 " request=%" PRIu64 " queue_code=%d", request_ptr->human_id,
-                              request_ptr->request_id, (int)code);
-        }
-        dominoHumanPlannerReleaseMessage(&message);
-    }
-unlock:
-    checkThreadResult(mtx_unlock(&g_planner.mutex));
-    return code;
 }
 
-DOMINO_CODE dominoHumanPlannerStop(void) {
-    if (!g_planner.initialized_flag) {
-        return CODE_OK;
-    }
-    atomic_store(&g_planner.stop_requested_flag, true);
-    DOMINO_CODE code = dominoThreadQueueStopAndWake(&g_planner.inbox, DOMINO_THREAD_QUEUE_PRODUCER);
-    if (code != CODE_OK) {
-        return code;
-    }
-    code = waitLifecycleFlag(&g_planner.stop_completed_flag);
-    if (code != CODE_OK) {
-        return code;
-    }
-    if (g_planner.stop_result != CODE_OK) {
-        return g_planner.stop_result;
-    }
-    if (thrd_join(g_planner.thread, nullptr) != thrd_success) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "cannot join human planner thread");
-        return ERR_THREAD_JOIN;
-    }
+void dominoHumanPlannerStop(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_planner.thread, nullptr), ERR_THREAD_JOIN, "cannot join human planner thread");
+}
+
+void dominoHumanPlannerDestroy(void) {
+    dominoThreadQueueBeginFlush(&g_planner.inbox);
     DominoThreadMessage message;
+    DOMINO_CODE code;
     while ((code = dominoThreadQueueConsume(&g_planner.inbox, &message, false)) == CODE_OK) {
         dominoHumanPlannerReleaseMessage(&message);
     }
-    if (code != ERR_QUEUE_EMPTY && code != ERR_QUEUE_PRODUCER_STOPPED) {
-        logUnexpectedConsumerStop(code, "stop drain");
-        return dominoEngineReportFailure(code);
+    if (code != ERR_QUEUE_FLUSHING) {
+        DOMINO_EXIT_WITH_ERROR(code, "cannot drain human planner inbox during destroy");
     }
-    code = dominoThreadQueueDestroy(&g_planner.inbox);
-    if (code != CODE_OK) {
-        return code;
-    }
-    mtx_destroy(&g_planner.mutex);
+    dominoThreadQueueDestroy(&g_planner.inbox);
     memset(&g_planner, 0, sizeof(g_planner));
-    return CODE_OK;
+    atomic_init(&g_planner.ready_flag, false);
 }

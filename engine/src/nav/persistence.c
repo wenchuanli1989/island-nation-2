@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 #include "model_view.h"
 #include "state.h"
 #include "storage_view.h"
@@ -109,27 +109,22 @@ static void rebuildCanonicalSegments(void* array_ptr, size_t element_count, size
 }
 
 /** @brief 调用方提供有效函数和非空分段容器，且扫描期间不修改实体和分段；存档字段仍须校验。 */
-static DOMINO_CODE validatePersistedSegmentsGeneric(const char* entity_name, const void* array_ptr, size_t element_count, size_t element_size,
-                                                    int (*compare_fn)(const void*, const void*), DominoNavGetU8Fn get_status,
-                                                    DominoNavGetU8Fn get_region, DominoNavGetU8Fn get_network_type,
-                                                    const DominoNavDataSegmentVec* segment_list, uint32_t max_segment_entity_count) {
+static void validatePersistedSegmentsGeneric(const char* entity_name, const void* array_ptr, size_t element_count, size_t element_size,
+                                             int (*compare_fn)(const void*, const void*), DominoNavGetU8Fn get_status, DominoNavGetU8Fn get_region,
+                                             DominoNavGetU8Fn get_network_type, const DominoNavDataSegmentVec* segment_list,
+                                             uint32_t max_segment_entity_count) {
     if (element_count > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "loaded %s count exceeds ID map capacity: count=%zu", entity_name,
-                          element_count);
-        return ERR_CAPACITY_EXCEEDED;
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded %s count exceeds ID map capacity: count=%zu", entity_name, element_count);
     }
     if (element_count > 0U && !array_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "loaded %s array is missing: count=%zu", entity_name, element_count);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s array is missing: count=%zu", entity_name, element_count);
     }
 
     const size_t segment_count = kv_size(*segment_list);
     const uint32_t alive_count = segment_count == 0U ? 0U : kv_A(*segment_list, 0U).increment_index;
     if (alive_count > element_count || segment_count > alive_count) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                          "loaded %s segment counts are inconsistent: entities=%zu alive=%" PRIu32 " segments=%zu", entity_name, element_count,
-                          alive_count, segment_count);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s segment counts are inconsistent: entities=%zu alive=%" PRIu32 " segments=%zu",
+                               entity_name, element_count, alive_count, segment_count);
     }
 
     /* 先确认基础段连续覆盖 [0, alive_count)，再用同一边界校验实体状态与分组。 */
@@ -138,10 +133,8 @@ static DOMINO_CODE validatePersistedSegmentsGeneric(const char* entity_name, con
     for (size_t segment_index = 0U; segment_index < segment_count; segment_index++) {
         const DominoNavDataSegment* segment = &kv_A(*segment_list, segment_index);
         if (segment->total_count > max_segment_entity_count) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                              "loaded %s segment exceeds network capacity: segment=%zu count=%" PRIu32 " limit=%" PRIu32, entity_name, segment_index,
-                              segment->total_count, max_segment_entity_count);
-            return ERR_CAPACITY_EXCEEDED;
+            DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded %s segment exceeds network capacity: segment=%zu count=%" PRIu32 " limit=%" PRIu32,
+                                   entity_name, segment_index, segment->total_count, max_segment_entity_count);
         }
         const bool key_not_increasing =
             previous_segment &&
@@ -149,20 +142,17 @@ static DOMINO_CODE validatePersistedSegmentsGeneric(const char* entity_name, con
              (segment->region_index == previous_segment->region_index && segment->road_network_type <= previous_segment->road_network_type));
         if (segment->init_count == 0U || segment->init_index != covered_count || segment->init_count > alive_count - covered_count ||
             segment->increment_index != alive_count || segment->total_count != segment->init_count || key_not_increasing) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                              "loaded %s segment layout is invalid: segment=%zu start=%" PRIu32 " count=%" PRIu32 " covered=%" PRIu32, entity_name,
-                              segment_index, segment->init_index, segment->init_count, covered_count);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA,
+                                   "loaded %s segment layout is invalid: segment=%zu start=%" PRIu32 " count=%" PRIu32 " covered=%" PRIu32,
+                                   entity_name, segment_index, segment->init_index, segment->init_count, covered_count);
         }
 
         covered_count += segment->init_count;
         previous_segment = segment;
     }
     if (covered_count != alive_count) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                          "loaded %s segments do not cover live entities: covered=%" PRIu32 " alive=%" PRIu32, entity_name, covered_count,
-                          alive_count);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s segments do not cover live entities: covered=%" PRIu32 " alive=%" PRIu32, entity_name,
+                               covered_count, alive_count);
     }
 
     const void* previous_entity = nullptr;
@@ -171,16 +161,12 @@ static DOMINO_CODE validatePersistedSegmentsGeneric(const char* entity_name, con
     for (uint32_t index = 0U; index < (uint32_t)element_count; index++) {
         const void* entity = (const uint8_t*)array_ptr + ((size_t)index * element_size);
         if (previous_entity && compare_fn(previous_entity, entity) > 0) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR, "loaded %s entities are not in canonical order: index=%" PRIu32,
-                              entity_name, index);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s entities are not in canonical order: index=%" PRIu32, entity_name, index);
         }
         const bool active = get_status(entity) == 0U;
         if (active != (index < alive_count)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                              "loaded %s status disagrees with segment boundary: index=%" PRIu32 " status=%u alive=%" PRIu32, entity_name, index,
-                              (unsigned)get_status(entity), alive_count);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s status disagrees with segment boundary: index=%" PRIu32 " status=%u alive=%" PRIu32,
+                                   entity_name, index, (unsigned)get_status(entity), alive_count);
         }
         if (active) {
             if (index == segment_end) {
@@ -189,27 +175,20 @@ static DOMINO_CODE validatePersistedSegmentsGeneric(const char* entity_name, con
                 segment_end += segment->init_count;
             }
             if (get_region(entity) != segment->region_index || get_network_type(entity) != segment->road_network_type) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_NAV, DOMINO_LOG_LEVEL_ERROR,
-                                  "loaded %s entity belongs to a different network: index=%" PRIu32 " region=%u network=%u", entity_name, index,
-                                  (unsigned)get_region(entity), (unsigned)get_network_type(entity));
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded %s entity belongs to a different network: index=%" PRIu32 " region=%u network=%u",
+                                       entity_name, index, (unsigned)get_region(entity), (unsigned)get_network_type(entity));
             }
         }
         previous_entity = entity;
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE navPersistenceValidateSegments(void) {
-    DOMINO_CODE result = validatePersistedSegmentsGeneric(
-        "fork road", domino_all_fork_road_list.a, kv_size(domino_all_fork_road_list), sizeof(DominoForkRoad), compareForkRoadByCanonicalOrder,
-        forkRoadGetStatus, forkRoadGetRegion, forkRoadGetNetworkType, &domino_all_fork_road_nav_data_segment_list, MAX_FORK_ROAD_COUNT_PER_NETWORK);
-    if (result != CODE_OK) {
-        return result;
-    }
-    return validatePersistedSegmentsGeneric("road", domino_all_road_list.a, kv_size(domino_all_road_list), sizeof(DominoRoad),
-                                            compareRoadByCanonicalOrder, roadGetStatus, roadGetRegion, roadGetNetworkType,
-                                            &domino_all_road_nav_data_segment_list, UINT32_MAX);
+void navPersistenceValidateSegments(void) {
+    validatePersistedSegmentsGeneric("fork road", domino_all_fork_road_list.a, kv_size(domino_all_fork_road_list), sizeof(DominoForkRoad),
+                                     compareForkRoadByCanonicalOrder, forkRoadGetStatus, forkRoadGetRegion, forkRoadGetNetworkType,
+                                     &domino_all_fork_road_nav_data_segment_list, MAX_FORK_ROAD_COUNT_PER_NETWORK);
+    validatePersistedSegmentsGeneric("road", domino_all_road_list.a, kv_size(domino_all_road_list), sizeof(DominoRoad), compareRoadByCanonicalOrder,
+                                     roadGetStatus, roadGetRegion, roadGetNetworkType, &domino_all_road_nav_data_segment_list, UINT32_MAX);
 }
 
 void navPersistenceCompact(void) {

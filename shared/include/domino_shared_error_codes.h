@@ -83,32 +83,12 @@ typedef enum {
     // 队列错误 (-600 到 -699)
     ERR_QUEUE_EMPTY = -600,
     ERR_QUEUE_FULL = -601,
-    ERR_QUEUE_PRODUCER_STOPPED = -602,  ///< 队列生产端已停止。
-    ERR_QUEUE_CONSUMER_STOPPED = -603,  ///< 队列消费端已停止。
+    ERR_QUEUE_FLUSHING = -602,  ///< 队列处于排空状态；消费返回此结果时表示队列已空。
 
     ERR_COMMON = -998,
     ERR_UNKNOWN = -999
 } DOMINO_CODE;
 
-/** @brief 识别队列/线程握手的同步故障；不包含线程创建、回收或时钟采样失败。 */
-[[nodiscard]] static inline bool dominoErrorCodeIsSyncFailure(DOMINO_CODE code) {
-    switch (code) {
-        case ERR_MUTEX_INIT:
-        case ERR_MUTEX_LOCK:
-        case ERR_MUTEX_UNLOCK:
-        case ERR_CONDITION_INIT:
-        case ERR_CONDITION_WAIT:
-        case ERR_CONDITION_SIGNAL:
-        case ERR_CONDITION_BROADCAST:
-            return true;
-        default:
-            return false;
-    }
-}
-
 [[nodiscard]] const char* dominoErrorCodeToString(DOMINO_CODE err);
-
-/** @brief 非 CODE_OK 时打印错误；is_abort 为 true 时终止进程。 */
-void dominoAssertErrorCode(DOMINO_CODE err, bool is_abort, const char* file, int line);
 
 #endif  // DOMINO_SHARED_ERROR_CODES_H

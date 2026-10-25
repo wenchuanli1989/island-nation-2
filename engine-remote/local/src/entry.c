@@ -1,13 +1,21 @@
 #include "logger/entry.h"
 
 #include "domino_engine_remote_local.h"
+#include "domino_shared_common.h"
 
-int domino_engine_remote_local_run(void) {
-    DOMINO_CODE result = dominoEngineRemoteLocalLoggerInit((DominoLogConfig){0});
-    if (result != CODE_OK) {
-        return result;
-    }
+void dominoEngineRemoteLocalInit(void) {
+    dominoEngineRemoteLocalLoggerInit((DominoLogConfig){0});
+}
 
-    DOMINO_ENGINE_REMOTE_LOCAL_LOG_MSG(DOMINO_LOG_LEVEL_INFO, "domino engine remote local run");
-    return dominoEngineRemoteLocalLoggerExit();
+void dominoEngineRemoteLocalStart(void) {
+    dominoEngineRemoteLocalLoggerStart();
+    DOMINO_PRINT_MESSAGE("domino engine remote local started");
+}
+
+void dominoEngineRemoteLocalStop(void) {
+    dominoEngineRemoteLocalLoggerStop();
+}
+
+void dominoEngineRemoteLocalDestroy(void) {
+    dominoEngineRemoteLocalLoggerDestroy();
 }

@@ -4,8 +4,8 @@
 #include <string.h>
 
 #include "../host/entry.h"
-#include "../logger/entry.h"
 #include "../social/entry.h"
+#include "domino_shared_common.h"
 #include "entry.h"
 #include "klib/khashl.h"
 #include "task/entry.h"
@@ -28,42 +28,32 @@ static bool isBehaviorTerminal(const DominoBehavior* behavior_ptr) {
 }
 
 /** @brief 人物身份及清单容量已校验；检查需求范围和任务 ID 去重。 */
-static DOMINO_CODE validateHumanData(const DominoHumanData* data_ptr) {
+static void validateHumanData(const DominoHumanData* data_ptr) {
     for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
         for (uint8_t previous_index = 0U; previous_index < index; previous_index++) {
             if (data_ptr->task_id_list[previous_index] == data_ptr->task_id_list[index]) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                  "人物任务清单包含重复 ID: human_id=%u, task_id=%u, index=%u", data_ptr->human_id, data_ptr->task_id_list[index],
-                                  index);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物任务清单包含重复 ID: human_id=%u, task_id=%u, index=%u", data_ptr->human_id,
+                                       data_ptr->task_id_list[index], index);
             }
         }
     }
     const uint8_t needs[] = {data_ptr->energy, data_ptr->food, data_ptr->water, data_ptr->hygiene, data_ptr->recreation, data_ptr->social};
     for (size_t index = 0U; index < sizeof(needs) / sizeof(needs[0]); index++) {
         if (needs[index] > DOMINO_HUMAN_NEED_MAX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "人物需求值超出范围: human_id=%u, need_index=%zu, value=%u",
-                              data_ptr->human_id, index, needs[index]);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物需求值超出范围: human_id=%u, need_index=%zu, value=%u", data_ptr->human_id, index,
+                                   needs[index]);
         }
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE dominoHumanStoreInit(void) {
-    if (g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "人物任务存储已初始化，不能重复初始化");
-        return ERR_ALREADY_INITIALIZED;
-    }
+void dominoHumanStoreInit(void) {
     g_task_id_map = humanTaskIDMap_init();
     if (!g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "人物任务 ID 索引分配失败");
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "人物任务 ID 索引分配失败");
     }
-    return CODE_OK;
 }
 
-void dominoHumanStoreExit(void) {
+void dominoHumanStoreDestroy(void) {
     for (size_t index = 0U; index < kv_size(domino_all_task_list); index++) {
         free(kv_A(domino_all_task_list, index).behaviors_ptr);
     }
@@ -74,9 +64,6 @@ void dominoHumanStoreExit(void) {
 }
 
 DominoTask* dominoGetTaskByID(domino_task_id_t task_id) {
-    if (!g_task_id_map) {
-        return nullptr;
-    }
     khint_t map_index = humanTaskIDMap_get(g_task_id_map, task_id);
     return kh_exist(g_task_id_map, map_index) ? &kv_A(domino_all_task_list, kh_val(g_task_id_map, map_index)) : nullptr;
 }
@@ -93,16 +80,12 @@ DominoBehavior* dominoGetBehaviorByTaskIDAndSequenceIndex(domino_task_id_t task_
 static DOMINO_CODE appendTask(DominoTask task) {
     size_t count = kv_size(domino_all_task_list);
     if (count >= HUMAN_STORE_COUNT_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "人物任务池达到容量上限: task_id=%u, count=%zu, limit=%zu",
-                          task.task_id, count, HUMAN_STORE_COUNT_MAX);
         return ERR_CAPACITY_EXCEEDED;
     }
     int absent_flag;
     khint_t map_index = humanTaskIDMap_put(g_task_id_map, task.task_id, &absent_flag);
     if (absent_flag < 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "插入人物任务 ID 索引时分配失败: task_id=%u, count=%zu",
-                          task.task_id, count);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "插入人物任务 ID 索引时分配失败: task_id=%u, count=%zu", task.task_id, count);
     }
     task.execution_version = 1U;
     kh_val(g_task_id_map, map_index) = (uint32_t)count;
@@ -111,47 +94,29 @@ static DOMINO_CODE appendTask(DominoTask task) {
 }
 
 DOMINO_CODE dominoHumanStoreImportTask(const DominoTask* task_ptr) {
-    if (!g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务失败：人物任务存储尚未初始化");
-        return ERR_NOT_INITIALIZED;
-    }
     if (!task_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务参数为空");
         return ERR_NULL_POINTER;
     }
     if (!task_ptr->task_id || !task_ptr->owner_human_id) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务身份无效: task_id=%u, owner_human_id=%u",
-                          task_ptr->task_id, task_ptr->owner_human_id);
         return ERR_INVALID_DATA;
     }
     if (!task_ptr->behaviors_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务缺少行为块: task_id=%u", task_ptr->task_id);
         return ERR_INVALID_DATA;
     }
     if (!task_ptr->behavior_count) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务行为数量为零: task_id=%u", task_ptr->task_id);
         return ERR_INVALID_DATA;
     }
     if (dominoGetTaskByID(task_ptr->task_id)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "导入任务 ID 已存在: task_id=%u", task_ptr->task_id);
         return ERR_ALREADY_EXISTS;
     }
     return appendTask(*task_ptr);
 }
 
 DOMINO_CODE dominoHumanStoreAddValidatedTask(const DominoTask* draft_ptr, DominoHumanData* data_ptr, domino_task_id_t* task_id_ptr) {
-    if (!g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "提交任务失败：人物任务存储尚未初始化");
-        return ERR_NOT_INITIALIZED;
-    }
     if (data_ptr->schedule_revision == UINT32_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "提交任务将溢出人物日程版本: human_id=%u, revision=%u",
-                          data_ptr->human_id, data_ptr->schedule_revision);
         return ERR_OUT_OF_RANGE;
     }
     if (data_ptr->task_count >= DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "人物任务清单达到容量上限: human_id=%u, count=%u, limit=%u",
-                          data_ptr->human_id, data_ptr->task_count, DOMINO_HUMAN_TASK_COUNT_MAX);
         return ERR_CAPACITY_EXCEEDED;
     }
     DominoTask task = *draft_ptr;
@@ -171,32 +136,20 @@ DOMINO_CODE dominoHumanStoreAddValidatedTask(const DominoTask* draft_ptr, Domino
 }
 
 DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id) {
-    if (!g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "回收任务失败：人物任务存储尚未初始化, task_id=%u", task_id);
-        return ERR_NOT_INITIALIZED;
-    }
     const khint_t task_map_index = humanTaskIDMap_get(g_task_id_map, task_id);
     if (!kh_exist(g_task_id_map, task_map_index)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "回收任务不存在: task_id=%u", task_id);
         return ERR_NOT_FOUND;
     }
     const uint32_t task_pool_index = kh_val(g_task_id_map, task_map_index);
     const DominoTask task = kv_A(domino_all_task_list, task_pool_index);
     if (!isTaskTerminal(&task) || task.parent_task_id || task.active_child_task_id || task.pending_child_task_id) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "任务尚未结束或仍有父子关系，不能回收: task_id=%u, status=%u, parent=%u, active_child=%u, pending_child=%u", task_id,
-                          task.status, task.parent_task_id, task.active_child_task_id, task.pending_child_task_id);
         return ERR_GAME_STATE_INVALID;
     }
     DominoHumanData* data_ptr = dominoGetHumanDataByID(task.owner_human_id);
     if (!data_ptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "待回收任务所属人物不存在: task_id=%u, owner_human_id=%u", task_id,
-                          task.owner_human_id);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "待回收任务所属人物不存在: task_id=%u, owner_human_id=%u", task_id, task.owner_human_id);
     }
     if (data_ptr->schedule_revision == UINT32_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "回收任务将溢出人物日程版本: task_id=%u, human_id=%u, revision=%u",
-                          task_id, data_ptr->human_id, data_ptr->schedule_revision);
         return ERR_OUT_OF_RANGE;
     }
     uint8_t task_index = data_ptr->task_count;
@@ -206,17 +159,17 @@ DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id) {
             continue;
         }
         const DominoTask* other_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
+        if (!other_ptr) {
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物任务清单引用不存在的任务: human_id=%u, task_id=%u", data_ptr->human_id,
+                                   data_ptr->task_id_list[index]);
+        }
         if (other_ptr->parent_task_id == task_id || other_ptr->active_child_task_id == task_id || other_ptr->pending_child_task_id == task_id ||
             other_ptr->cancel_target_task_id == task_id) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "待回收任务仍被其他任务引用: task_id=%u, referencing_task_id=%u", task_id, other_ptr->task_id);
             return ERR_GAME_STATE_INVALID;
         }
     }
     if (task_index == data_ptr->task_count) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "待回收任务未登记在所属人物清单中: task_id=%u, human_id=%u",
-                          task_id, data_ptr->human_id);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "待回收任务未登记在所属人物清单中: task_id=%u, human_id=%u", task_id, data_ptr->human_id);
     }
     /* 有效区间保持提交顺序；末尾补零，不让任务池的交换删除改变人物清单顺序。 */
     data_ptr->task_count--;
@@ -242,47 +195,38 @@ DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id) {
 }
 
 /** @brief 本任务已通过局部校验；引用对象只读取标量字段，完整遍历时各自校验。 */
-static DOMINO_CODE validateTaskRelations(const DominoTask* task_ptr, const DominoHumanData* data_ptr) {
+static void validateTaskRelations(const DominoTask* task_ptr, const DominoHumanData* data_ptr) {
     uint8_t channel = task_ptr->channel_index;
     if (task_ptr->status == DOMINO_TASK_STATUS_RUNNING && data_ptr->active_task_id_list[channel] != task_ptr->task_id) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "运行中任务与人物活动槽不匹配: task_id=%u, human_id=%u, channel=%u, active_task_id=%u", task_ptr->task_id,
-                          data_ptr->human_id, channel, data_ptr->active_task_id_list[channel]);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "运行中任务与人物活动槽不匹配: task_id=%u, human_id=%u, channel=%u, active_task_id=%u",
+                               task_ptr->task_id, data_ptr->human_id, channel, data_ptr->active_task_id_list[channel]);
     }
     if ((task_ptr->status == DOMINO_TASK_STATUS_SUSPENDED) != (task_ptr->active_child_task_id != 0U)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "任务挂起状态与活动子任务不匹配: task_id=%u, status=%u, active_child=%u", task_ptr->task_id, task_ptr->status,
-                          task_ptr->active_child_task_id);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务挂起状态与活动子任务不匹配: task_id=%u, status=%u, active_child=%u", task_ptr->task_id,
+                               task_ptr->status, task_ptr->active_child_task_id);
     }
     if (task_ptr->parent_task_id) {
         const DominoTask* parent_ptr = dominoGetTaskByID(task_ptr->parent_task_id);
         if (!parent_ptr || parent_ptr->owner_human_id != task_ptr->owner_human_id || parent_ptr->active_child_task_id != task_ptr->task_id ||
             parent_ptr->channel_index != channel || parent_ptr->status != DOMINO_TASK_STATUS_SUSPENDED ||
             (task_ptr->status != DOMINO_TASK_STATUS_RUNNING && task_ptr->status != DOMINO_TASK_STATUS_SUSPENDED)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "任务父级关系无效：父任务须存在、同属同通道并挂起等待本任务: task_id=%u, parent_task_id=%u", task_ptr->task_id,
-                              task_ptr->parent_task_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务父级关系无效：父任务须存在、同属同通道并挂起等待本任务: task_id=%u, parent_task_id=%u",
+                                   task_ptr->task_id, task_ptr->parent_task_id);
         }
     }
     if (task_ptr->active_child_task_id) {
         const DominoTask* child_ptr = dominoGetTaskByID(task_ptr->active_child_task_id);
         if (!child_ptr || child_ptr->parent_task_id != task_ptr->task_id) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "任务活动子级不存在或未反向引用父任务: task_id=%u, active_child=%u", task_ptr->task_id, task_ptr->active_child_task_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务活动子级不存在或未反向引用父任务: task_id=%u, active_child=%u", task_ptr->task_id,
+                                   task_ptr->active_child_task_id);
         }
     }
     if (task_ptr->pending_child_task_id) {
         const DominoTask* child_ptr = dominoGetTaskByID(task_ptr->pending_child_task_id);
         if (!child_ptr || child_ptr->owner_human_id != task_ptr->owner_human_id || child_ptr->status != DOMINO_TASK_STATUS_PLANNED ||
             child_ptr->parent_task_id || child_ptr->active_child_task_id || child_ptr->channel_index != channel) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "任务待交接子级无效：须同属同通道、未启动且无父子关系: task_id=%u, pending_child=%u", task_ptr->task_id,
-                              task_ptr->pending_child_task_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务待交接子级无效：须同属同通道、未启动且无父子关系: task_id=%u, pending_child=%u",
+                                   task_ptr->task_id, task_ptr->pending_child_task_id);
         }
     }
     uint8_t depth = 1U;
@@ -290,90 +234,68 @@ static DOMINO_CODE validateTaskRelations(const DominoTask* task_ptr, const Domin
     bool cancel_target_is_ancestor = false;  // CHAIN 只匹配父级或更高祖先；取消自身使用 TASK。
     while (ancestor_ptr->parent_task_id) {
         if (++depth > DOMINO_HUMAN_TASK_CHAIN_DEPTH_MAX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "任务祖先链超出深度上限或存在环: task_id=%u, limit=%u",
-                              task_ptr->task_id, DOMINO_HUMAN_TASK_CHAIN_DEPTH_MAX);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务祖先链超出深度上限或存在环: task_id=%u, limit=%u", task_ptr->task_id,
+                                   DOMINO_HUMAN_TASK_CHAIN_DEPTH_MAX);
         }
         ancestor_ptr = dominoGetTaskByID(ancestor_ptr->parent_task_id);
         if (!ancestor_ptr) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "任务祖先链引用不存在的任务: task_id=%u", task_ptr->task_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务祖先链引用不存在的任务: task_id=%u", task_ptr->task_id);
         }
         cancel_target_is_ancestor |= ancestor_ptr->task_id == task_ptr->cancel_target_task_id;
     }
     if (task_ptr->pending_child_task_id && depth == DOMINO_HUMAN_TASK_CHAIN_DEPTH_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "任务待交接子级将超出祖先链深度上限: task_id=%u, pending_child=%u, depth=%u", task_ptr->task_id,
-                          task_ptr->pending_child_task_id, depth);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务待交接子级将超出祖先链深度上限: task_id=%u, pending_child=%u, depth=%u", task_ptr->task_id,
+                               task_ptr->pending_child_task_id, depth);
     }
     if (task_ptr->cancel_target_task_id) {
         /* 本任务为 RUNNING；完整父链校验保证祖先存在、同属本人且为 SUSPENDED。 */
         if ((task_ptr->cancel_scope == DOMINO_TASK_CANCEL_TASK && task_ptr->cancel_target_task_id != task_ptr->task_id) ||
             (task_ptr->cancel_scope == DOMINO_TASK_CANCEL_CHAIN && !cancel_target_is_ancestor)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "任务取消目标与取消范围不匹配: task_id=%u, scope=%u, cancel_target=%u", task_ptr->task_id, task_ptr->cancel_scope,
-                              task_ptr->cancel_target_task_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "任务取消目标与取消范围不匹配: task_id=%u, scope=%u, cancel_target=%u", task_ptr->task_id,
+                                   task_ptr->cancel_scope, task_ptr->cancel_target_task_id);
         }
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE dominoHumanStoreValidate(domino_runtime_ms_t now_ms) {
-    if (!g_task_id_map) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "校验任务失败：人物任务存储尚未初始化");
-        return ERR_NOT_INITIALIZED;
-    }
+void dominoHumanStoreValidate(domino_runtime_ms_t now_ms) {
     size_t listed_task_count = 0U;
     for (size_t human_index = 0U; human_index < kv_size(domino_all_human_data_list); human_index++) {
         const DominoHumanData* data_ptr = &kv_A(domino_all_human_data_list, human_index);
-        DOMINO_CODE code = validateHumanData(data_ptr);
-        if (code != CODE_OK) {
-            return code;
-        }
+        validateHumanData(data_ptr);
         if (data_ptr->needs_updated_at_ms > now_ms) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "人物需求检查点晚于世界校验时刻: human_id=%u, needs_updated_at_ms=%u, now_ms=%u", data_ptr->human_id,
-                              data_ptr->needs_updated_at_ms, now_ms);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物需求检查点晚于世界校验时刻: human_id=%u, needs_updated_at_ms=%u, now_ms=%u",
+                                   data_ptr->human_id, data_ptr->needs_updated_at_ms, now_ms);
         }
         listed_task_count += data_ptr->task_count;
         for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
             const domino_task_id_t task_id = data_ptr->task_id_list[index];
             const DominoTask* task_ptr = dominoGetTaskByID(task_id);
             if (!task_ptr || task_ptr->task_id != task_id || task_ptr->owner_human_id != data_ptr->human_id) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                  "人物任务清单引用缺失或身份归属不一致: human_id=%u, task_id=%u", data_ptr->human_id, task_id);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物任务清单引用缺失或身份归属不一致: human_id=%u, task_id=%u", data_ptr->human_id,
+                                       task_id);
             }
-            code = dominoHumanValidateTaskRecord(task_ptr);
+            const DOMINO_CODE code = dominoHumanValidateTaskRecord(task_ptr);
             if (code != CODE_OK) {
-                return code;
+                DOMINO_EXIT_WITH_ERROR(code, "人物任务记录无效: human_id=%u, task_id=%u", data_ptr->human_id, task_id);
             }
             if ((task_ptr->started_flag && task_ptr->started_at_ms > now_ms) || (isTaskTerminal(task_ptr) && task_ptr->ended_at_ms > now_ms)) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                  "任务有效开始或结束时刻晚于世界校验时刻: task_id=%u, now_ms=%u, started_at_ms=%u, ended_at_ms=%u", task_id, now_ms,
-                                  task_ptr->started_at_ms, task_ptr->ended_at_ms);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA,
+                                       "任务有效开始或结束时刻晚于世界校验时刻: task_id=%u, now_ms=%u, started_at_ms=%u, ended_at_ms=%u", task_id,
+                                       now_ms, task_ptr->started_at_ms, task_ptr->ended_at_ms);
             }
             for (uint8_t behavior_index = 0U; behavior_index < task_ptr->behavior_count; behavior_index++) {
                 const DominoBehavior* behavior_ptr = &task_ptr->behaviors_ptr[behavior_index];
                 if ((behavior_ptr->target_building_id != 0 && !dominoGetBuildingByID(behavior_ptr->target_building_id)) ||
                     (behavior_ptr->progress.started_flag && behavior_ptr->progress.accounted_at_ms > now_ms) ||
                     (isBehaviorTerminal(behavior_ptr) && behavior_ptr->progress.ended_at_ms > now_ms)) {
-                    DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                      "任务行为目标建筑缺失或有效结算/结束时刻晚于世界校验时刻: task_id=%u, behavior_index=%u, building_id=%u, "
-                                      "now_ms=%u, accounted_at_ms=%u, ended_at_ms=%u",
-                                      task_id, behavior_index, behavior_ptr->target_building_id, now_ms, behavior_ptr->progress.accounted_at_ms,
-                                      behavior_ptr->progress.ended_at_ms);
-                    return ERR_INVALID_DATA;
+                    DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA,
+                                           "任务行为目标建筑缺失或有效结算/结束时刻晚于世界校验时刻: task_id=%u, behavior_index=%u, building_id=%u, "
+                                           "now_ms=%u, accounted_at_ms=%u, ended_at_ms=%u",
+                                           task_id, behavior_index, behavior_ptr->target_building_id, now_ms, behavior_ptr->progress.accounted_at_ms,
+                                           behavior_ptr->progress.ended_at_ms);
                 }
             }
-            code = validateTaskRelations(task_ptr, data_ptr);
-            if (code != CODE_OK) {
-                return code;
-            }
+            validateTaskRelations(task_ptr, data_ptr);
         }
         for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
             domino_task_id_t task_id = data_ptr->active_task_id_list[channel];
@@ -383,21 +305,16 @@ DOMINO_CODE dominoHumanStoreValidate(domino_runtime_ms_t now_ms) {
             const DominoTask* task_ptr = dominoGetTaskByID(task_id);
             if (!task_ptr || task_ptr->owner_human_id != data_ptr->human_id || task_ptr->status != DOMINO_TASK_STATUS_RUNNING ||
                 task_ptr->channel_index != channel) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                                  "人物活动槽任务缺失、归属/通道不匹配或未运行: human_id=%u, channel=%u, task_id=%u", data_ptr->human_id, channel,
-                                  task_id);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物活动槽任务缺失、归属/通道不匹配或未运行: human_id=%u, channel=%u, task_id=%u",
+                                       data_ptr->human_id, channel, task_id);
             }
         }
     }
     /* 各人的清单按 owner 隔离且各自去重，计数相等即保证全池任务恰好归属现存人物。 */
     if (listed_task_count != kv_size(domino_all_task_list)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                          "人物清单任务总数与任务池不一致，存在未归属任务: listed_count=%zu, pool_count=%zu", listed_task_count,
-                          kv_size(domino_all_task_list));
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物清单任务总数与任务池不一致，存在未归属任务: listed_count=%zu, pool_count=%zu",
+                               listed_task_count, kv_size(domino_all_task_list));
     }
-    return CODE_OK;
 }
 
 void dominoHumanStoreResetRuntime(void) {

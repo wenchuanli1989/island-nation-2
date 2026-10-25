@@ -1,8 +1,8 @@
 #ifndef DOMINO_ENGINE_LOGGER_MODULE_H
 #define DOMINO_ENGINE_LOGGER_MODULE_H
 
-#include "domino_engine_log.h"
 #include "domino_shared_error_codes.h"
+#include "domino_shared_logger.h"
 
 typedef enum DOMINO_ENGINE_LOG_MODULE {
     DOMINO_ENGINE_LOG_MODULE_CORE = 0,
@@ -17,9 +17,11 @@ typedef enum DOMINO_ENGINE_LOG_MODULE {
 #define DOMINO_ENGINE_LOG_MODULE_COUNT 7
 
 /**
- * @brief ERROR 同步写入 stderr；其他等级交给 engine 日志实例异步处理。
- * @note ERROR 不依赖日志实例初始化，不入队、不上报日志故障，避免覆盖调用方随后传播的原始错误。
- *       使用有界栈缓冲，正文或来源位置超限标记 TRUNCATED；输出失败不重试或递归记录。
+ * @brief 运行阶段所有等级交给日志实例异步处理。
+ * @note ERROR 只表示日志等级，不终止进程；致命错误直接使用 DOMINO_EXIT_WITH_ERROR。
+ *       初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断在调用点使用 DOMINO_PRINT_MESSAGE 直接写 stdout。
+ *       本接口不判断或切换输出阶段。
+ *       调用前须初始化并启动日志实例，只允许在 logger Start 后、Stop 前写入；所有生产者结束后才能 Stop。
  */
 void dominoEngineLog(DOMINO_ENGINE_LOG_MODULE module, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* fmt, ...)
     DOMINO_LOG_PRINTF_ATTR(4, 5);
@@ -28,21 +30,18 @@ void dominoEngineLog(DOMINO_ENGINE_LOG_MODULE module, DOMINO_LOG_LEVEL level, Do
     dominoEngineLog((module), (level), (DominoLogSourceLocation){.file = __FILE__, .line = __LINE__, .func = __func__}, \
                     (fmt)__VA_OPT__(, ) __VA_ARGS__)
 
-/** @brief 已格式化正文入口，ERROR 同步输出规则与 dominoEngineLog 一致。 */
-void dominoEngineLogMsg(DOMINO_ENGINE_LOG_MODULE module, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* msg_ptr);
-
-#define DOMINO_ENGINE_LOG_MSG(module, level, msg_ptr) \
-    dominoEngineLogMsg((module), (level), (DominoLogSourceLocation){.file = __FILE__, .line = __LINE__, .func = __func__}, (msg_ptr))
-
-/**
- * @brief 创建 engine 独立日志实例并注册子模块。
- * @return 成功返回 CODE_OK；重复初始化返回并保存 ERR_ALREADY_INITIALIZED，其他失败返回负值。
- *         初始化或退出出现首错后，后续 Init/Exit 仅返回该错误，不重试。
- * @note 生命周期失败后保活已有资源，由宿主决定何时结束进程。
+/** @brief 准备 engine 独立日志资源并注册子模块，不启动 writer。
+ * @note 调用顺序由引擎保证，包装层不重复校验；shared logger 保留公共边界校验，支持 Init → Stop → Destroy。
  */
-extern DOMINO_CODE dominoLoggerModuleInit(void);
+extern void dominoLoggerModuleInit(void);
 
-/** @brief 停止 engine 日志实例并排空队列；调用前须停止所有 engine 日志生产者，失败立即返回并保留剩余资源。 */
-extern DOMINO_CODE dominoLoggerModuleExit(void);
+/** @brief 在引擎启动阶段创建 writer；每次 Init 后至多启动一次，不支持 Stop 后重启。 */
+extern void dominoLoggerModuleStart(void);
+
+/** @brief 全部日志生产者结束后排空日志并 join writer、刷新输出；仅 Init 时跳过 join，保留资源。 */
+extern void dominoLoggerModuleStop(void);
+
+/** @brief 引擎先完成 Stop，再调用本接口关闭文件并释放日志资源；不停止或 join writer，致命错误直接终止。 */
+extern void dominoLoggerModuleDestroy(void);
 
 #endif

@@ -156,65 +156,67 @@ typedef uint32_t object_id_t;
 
 ### 3.1 返回值约定
 
-- **成功返回0或正值**，**失败返回负值或特定错误码**
-- 使用统一的错误码定义
+- 业务与控制接口成功返回 0 或正值，拒绝请求、查询未命中、队列为空或正常排空结束等仍返回约定结果；使用项目的 `DOMINO_CODE`，不按负结果码统一终止进程。
+- 致命错误在初始化、开始、停止、冻结、解冻、销毁和运行阶段都通过 `DOMINO_EXIT_WITH_ERROR` 直接输出 stderr，并由 `common.c` 中的公共方法执行 `exit(EXIT_FAILURE)`，允许标准退出处理。致命出口不进入日志队列、不等待日志排空或 join。
+- 没有可恢复业务结果的生命周期接口返回 `void`；不保存实例首错或跨线程传播致命错误，保留正常启动就绪、命令完成、退出通知、join 和资源所有权。
+- 公共通用工具保留头文件约定的输入校验、输出状态和返回结果，不因当前调用方已校验而删除独立调用边界。内部辅助函数复用调用方已确认且仍有效的条件，不重复检查、清零或维护可直接推导的计数；成功调用会完整写入的局部输出无需预清零。实际 IO、分配和格式化失败仍须检查，文件状态在磁盘操作后按需重新读取。
+- 项目自有模块的生命周期方法统一使用 Init／Start／Stop／Destroy，不保留旧名或兼容别名；只提供实际需要的阶段，无独立线程的子模块无需空的 Start／Stop。
+- 引擎对外生命周期入口串行且严格校验顺序及调用线程：Init 仅接受未初始化，Start 仅接受已初始化，Stop 接受已初始化或运行中，Destroy 仅接受已停止。重复调用、未初始化操作、未 Stop 就 Destroy、Stop 后直接 Start 均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。受引擎编排的内部模块和辅助调用链遵循资源有效的契约，不重复检查已由引擎保证的模块、索引或固定队列初始化条件，不维护仅为这些重复校验存在的状态或查询接口；无线程模块只需 Init／Destroy。可直接调用的公共业务入口仍负责访问资格及输入检查。业务参数、实体与任务事实、版本、容量及时间范围校验，以及线程就绪、业务完成、队列排空和真实资源失败检查仍保留。shared logger／queue 是独立公共接口，继续保留各自的生命周期边界校验；引擎日志包装层不额外维护状态或重复检查。 shared 的公共调用路径集中校验参数与实例状态，内部辅助函数依赖已建立的前置条件，不重复检查；条件等待会释放锁，唤醒后的排空状态、容量和唤醒版本等动态条件仍须在锁内重新检查。
+- 线程模块统一拆分 Init／Start／Stop／Destroy：Init 准备固定资源，不创建线程；静态模块的首次空状态由静态初值建立，后续由 Destroy 复位，不在 Init 重复清空；通用 queue／logger 首次对象须零初始化，Init 先校验生命周期再建立内部资源；Start 只使用已有资源启动线程；引擎 Stop 仅在运行过时调用 human／timer Stop 并 join、结算；仅 Init 时跳过这些调用，两条路径均调用 shared logger Stop 关闭入队并刷新；Destroy 负责保存、释放资源并立即复位实例状态：容器指针／数量／容量、索引指针和状态字段恢复为空或初始值，不把旧状态留给下一次 Init 清理。time 的内存快照只能在存档完成后清空，不能改变文件中的累计时间。引擎先停止全部业务写入再统一结算，最后停止 logger。业务数据按需扩容及序列化临时分配不属于固定运行资源。
+- 运行阶段的非致命错误及正常日志走日志模块，按模块文件、实例默认文件、stdout 的顺序选择已配置的输出目标；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。 阶段按操作所属路径区分：停止操作自身直接输出，业务线程最后一批操作仍使用运行日志；先 join 全部业务线程，再排空并停止 logger，最后销毁资源。由掌握业务语义的边界记录一次，通用工具保留结果，不逐层重复打印；错误日志级别本身不决定是否退出。
 
 ```c
-// ✅ 正确：定义错误码
-typedef enum {
-    CODE_OK = 0,
-    ERR_INVALID_PARAM = -1,
-    ERR_MEMORY_ALLOC = -2,
-    ERR_NETWORK = -3,
-    ERR_NOT_FOUND = -4
-} ERROR_CODE;
+#include <stdlib.h>
 
-int create_player(const char* name, Player** out_player) {
-    if (!name || !out_player) {
+#include "domino_shared_common.h"
+
+// ✅ 正确：无效业务请求保留结果，实际分配失败直接退出。
+DOMINO_CODE createPlayer(const char* name_str, Player** out_player_ptr) {
+    if (name_str == nullptr || out_player_ptr == nullptr) {
         return ERR_INVALID_PARAM;
     }
-    
-    Player* player = malloc(sizeof(Player));
-    if (!player) {
-        return ERR_MEMORY_ALLOC;
+
+    Player* player_ptr = malloc(sizeof(*player_ptr));
+    if (player_ptr == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate player");
     }
-    
-    *out_player = player;
+
+    *out_player_ptr = player_ptr;
     return CODE_OK;
 }
 ```
 
 ### 3.2 错误检查
 
-- **所有可能失败的函数调用都要检查返回值**
-- 使用`goto`进行资源清理（Linux内核风格）
+- 检查有业务或控制结果的函数返回值，并按调用场景判断拒绝请求、继续正常流程或直接致命退出；仅成功或退出的 `void` 接口不再包裹错误传播。
+- 正常销毁和可恢复操作使用 `goto` 集中清理已取得的资源。致命错误直接退出，不额外建立失败清理、回滚或跨线程通知链。
+- 以下示例读取可选输入文件，普通 IO 失败可由调用方处理；存档加载或保存等不能继续运行的场景应在其业务边界转为致命错误。
 
 ```c
-// ✅ 正确：使用goto清理资源
-int setup_server(int port) {
-    int server_fd = -1;
-    int client_fd = -1;
-    
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        goto error;
-    }
-    
-    client_fd = accept(server_fd, NULL, NULL);
-    if (client_fd < 0) {
-        goto error;
-    }
-    
-    return CODE_OK;
+#include <stdio.h>
 
-error:
-    if (client_fd >= 0) {
-        close(client_fd);
+#include "domino_shared_error_codes.h"
+
+// ✅ 正确：可恢复读取失败保留具体原因，并关闭本次拥有的文件。
+DOMINO_CODE readOptionalFile(const char* path_str, void* buffer_ptr, size_t buffer_size) {
+    if (path_str == nullptr || buffer_ptr == nullptr || buffer_size == 0) {
+        return ERR_INVALID_PARAM;
     }
-    if (server_fd >= 0) {
-        close(server_fd);
+    FILE* file_ptr = fopen(path_str, "rb");
+    if (file_ptr == nullptr) {
+        return ERR_FILE_OPEN;
     }
-    return ERR_NETWORK;
+    DOMINO_CODE result = CODE_OK;
+    if (fread(buffer_ptr, 1, buffer_size, file_ptr) != buffer_size) {
+        result = ERR_FILE_READ;
+        goto cleanup;
+    }
+
+cleanup:
+    if (fclose(file_ptr) != 0 && result == CODE_OK) {
+        result = ERR_FILE_CLOSE;
+    }
+    return result;
 }
 ```
 
@@ -222,7 +224,7 @@ error:
 
 - 使用`assert()`检查**不应该发生**的情况（开发阶段）
 - **不要**用断言检查用户输入或外部数据
-- 生产环境可以禁用断言（`NDEBUG`）
+- 生产环境可以禁用断言（`NDEBUG`）；正式运行必须处理的致命错误要显式检查并调用公共退出方法，不能仅依赖断言。
 
 ```c
 #include <assert.h>
@@ -248,17 +250,19 @@ int validate_user_input(const char* input) {
 
 ### 4.1 内存分配失败策略
 
-- **遵循现有接口契约，保持处理简单。** 项目自有代码和第三方库调用都保留必要的空指针／返回值检查，沿用自然的错误传播和已有资源清理；不刻意终止程序，也不强求继续运行，不为分配失败新增重试、降级或复杂回滚。
-- 优先使用 `kv_resize`、`kv_push` 等公开容器接口维护存储。不为统一失败策略新增 `abort()`／`exit()` 或自定义致命分配器；库已有的终止行为无需刻意绕过，也不推广为全局要求。
-- 保留大小计算溢出检查，不用未检查空指针导致的未定义行为代替错误处理。业务容量、参数、格式、IO 错误和零长度请求按各自契约处理。
+- **实际内存分配失败或分配大小溢出直接打印 stderr 并 exit。** 保留必要的空指针、返回值和乘法溢出检查，不通过多层错误返回或实例首错状态传播，不新增重试、降级、提前占位或复杂回滚。
+- 优先使用 `kv_resize`、`kv_push` 等公开容器接口维护存储。`lib/` 下第三方库代码保持原样，包括 `kvec` 原有分配失败终止行为和第三方断言；项目自有分配检查使用公共退出方法，不通过操作容器内部字段绕开公开接口。
+- 业务容量、参数、格式、IO 错误和零长度请求根据各自语义保留可恢复结果；不能把实际分配失败混同于容量拒绝，也不能用未检查空指针导致的未定义行为代替错误处理。
 
 ```c
 #include <stdlib.h>
 
-// ✅ 正确：检查分配结果并沿用函数的错误返回契约。
-Player* player = malloc(sizeof(*player));
-if (!player) {
-    return ERR_MEMORY_ALLOC;
+#include "domino_shared_common.h"
+
+// ✅ 正确：在实际分配点检查结果，直接报告致命错误。
+Player* player_ptr = malloc(sizeof(*player_ptr));
+if (player_ptr == nullptr) {
+    DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate player");
 }
 ```
 
@@ -296,36 +300,46 @@ strcpy(buffer, source);  // 可能溢出
 #include <stdint.h>
 #include <threads.h>
 
-// ✅ 正确：线程安全的计数器
+#include "domino_shared_common.h"
+
+// ✅ 正确：同步故障直接退出，业务计数容量仍可返回给调用方。
 static uint64_t counter_count = 0;
 static mtx_t counter_mutex;
 
-/** @brief 控制线程在启动工作线程前调用一次；失败时不能使用或销毁该锁。 */
-int initCounter(void) {
-    return mtx_init(&counter_mutex, mtx_plain) == thrd_success ? 0 : -1;
+/** @brief 控制线程在启动工作线程前调用一次；初始化失败直接退出。 */
+void initCounter(void) {
+    if (mtx_init(&counter_mutex, mtx_plain) != thrd_success) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MUTEX_INIT, "failed to initialize counter mutex");
+    }
 }
 
-/** @brief 读取计数器；成功返回 0，失败返回 -1。 */
-int getCounter(uint64_t* count_ptr) {
-    if (count_ptr == nullptr || mtx_lock(&counter_mutex) != thrd_success) {
-        return -1;
+/** @brief 读取计数器；空输出指针返回业务校验结果，同步故障直接退出。 */
+DOMINO_CODE getCounter(uint64_t* count_ptr) {
+    if (count_ptr == nullptr) {
+        return ERR_NULL_POINTER;
+    }
+    if (mtx_lock(&counter_mutex) != thrd_success) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MUTEX_LOCK, "failed to lock counter mutex");
     }
     *count_ptr = counter_count;
-    return mtx_unlock(&counter_mutex) == thrd_success ? 0 : -1;
+    if (mtx_unlock(&counter_mutex) != thrd_success) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MUTEX_UNLOCK, "failed to unlock counter mutex");
+    }
+    return CODE_OK;
 }
 
-/** @brief 递增计数器；成功返回 0，锁操作失败或计数耗尽时返回 -1。 */
-int incrementCounter(void) {
+/** @brief 递增有界业务计数；容量已满时返回 ERR_CAPACITY_EXCEEDED，同步故障直接退出。 */
+DOMINO_CODE incrementCounter(void) {
     if (mtx_lock(&counter_mutex) != thrd_success) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_MUTEX_LOCK, "failed to lock counter mutex");
     }
-    int result = -1;
+    DOMINO_CODE result = ERR_CAPACITY_EXCEEDED;
     if (counter_count < UINT64_MAX) {
         counter_count++;
-        result = 0;
+        result = CODE_OK;
     }
     if (mtx_unlock(&counter_mutex) != thrd_success) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_MUTEX_UNLOCK, "failed to unlock counter mutex");
     }
     return result;
 }
@@ -389,7 +403,7 @@ int getPlayerCount(void) {
  * @brief 创建新玩家对象
  * @param name 玩家名称（不能为空，长度1-63字符）
  * @param x, y, z 初始位置坐标
- * @return 成功返回玩家指针，失败返回NULL
+ * @return 成功返回玩家指针；名称无效返回 nullptr，实际分配失败直接报错退出。
  * @note 调用者负责使用destroy_player()释放内存
  */
 Player* create_player(const char* name, float x, float y, float z);
@@ -571,7 +585,7 @@ void clear_password(char* password, size_t len) {
 
 ## 时间语义规范
 
-- 业务时刻和时长统一使用 `domino_runtime_ms_t`（`uint32_t`），表示 32 位累计未冻结现实毫秒。`dominoTimeGetRuntimeMs(&now_ms)` 返回状态码，成功时输出 `runtime_ns / 1000000`，换算结果超出 `UINT32_MAX` 毫秒时返回 `ERR_OUT_OF_RANGE` 且不改写输出；不应用游戏日历倍率。冻结期间累计基准不增长，存档保存该基准，加载后继续累计。
+- 业务时刻和时长统一使用 `domino_runtime_ms_t`（`uint32_t`），表示 32 位累计未冻结现实毫秒。`dominoTimeGetRuntimeMs(&now_ms)` 返回 `void`，正常完成时输出 `runtime_ns / 1000000`；空指针、采样失败、时钟倒退或换算结果超出 `UINT32_MAX` 毫秒时直接打印 stderr 并 exit，不应用游戏日历倍率。冻结期间累计基准不增长，存档保存该基准，加载后继续累计。
 - `0` 与 `UINT32_MAX` 均合法；相加前检查 `delta_ms <= UINT32_MAX - base_ms`，相减前确认先后关系，禁止回绕、截断、饱和或归零。约 49.71 个未冻结现实日（按当前日历约 248.55 个游戏年）的累计范围已被接受，不得据此或跨存档累计自行改用、建议改用 64 位业务毫秒。
 - time 内部采样和存档基准使用 64 位纳秒保留精度；64 位 UTC 墙上时间戳用于日志及文件命名，消息／计时器 ID 也可为 64 位。这些类型不能当作业务毫秒类型的依据；任务、timer 和收益结算须使用经过范围检查的 32 位毫秒入口。
 - timer 延迟与到期时刻、任务持续时间、NPC AI 的处理节奏、阈值时间和收益结算全部使用现实时间单位。游戏日期及日内时分只由显示层按倍率换算，不能作为另一条业务计时轴。

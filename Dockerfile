@@ -1,5 +1,6 @@
 # Domino游戏服务器开发环境Docker镜像
-FROM ubuntu:24.04
+# glibc 2.43 提供 timespec_get(TIME_MONOTONIC)。
+FROM ubuntu:26.04
 
 ARG LLVM_VERSION=22
 
@@ -10,11 +11,11 @@ RUN apt-get update && apt-get install -y ca-certificates gpg wget
 
 # CMake 源
 RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc  | gpg --dearmor > /usr/share/keyrings/kitware-archive-keyring.gpg 
-RUN echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' > /etc/apt/sources.list.d/kitware.list
+RUN echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ resolute main' > /etc/apt/sources.list.d/kitware.list
 
 # llvm 源
 RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key  | gpg --dearmor > /usr/share/keyrings/llvm-archive-keyring.gpg
-RUN echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.list
+RUN echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.list
 
 # 安装基础工具和开发依赖
 RUN apt-get update && apt-get install -y \

@@ -29,14 +29,14 @@ typedef uint8_t domino_space_area_id_t;
 typedef struct {
     /* 计数器保存下一候选 ID，随根 meta 持久化；允许回绕，分配时跳过 0。独立对齐以减少伪共享。 */
     alignas(128) _Atomic domino_human_id_t human_increment_id;
-    alignas(128) _Atomic domino_task_id_t task_increment_id;
+    alignas(128) _Atomic domino_task_id_t task_increment_id;  // ID可回绕
     alignas(128) _Atomic domino_org_id_t org_increment_id;
     alignas(128) _Atomic domino_country_id_t country_increment_id;
     alignas(128) _Atomic domino_city_id_t city_increment_id;
     alignas(128) _Atomic domino_island_id_t island_increment_id;
     alignas(128) _Atomic domino_building_id_t building_increment_id;
     alignas(128) _Atomic domino_fork_road_id_t fork_road_increment_id;
-    alignas(128) _Atomic domino_asset_id_t asset_increment_id;
+    alignas(128) _Atomic domino_asset_id_t asset_increment_id;  // ID可回绕
     alignas(128) _Atomic domino_movable_object_id_t movable_object_increment_id;
     alignas(128) _Atomic domino_name_id_t name_increment_id;
     alignas(128) _Atomic domino_description_id_t description_increment_id;
@@ -58,16 +58,18 @@ typedef struct {
 
 typedef struct {
     /* regions.json 只保存 g_domino_region_list 的有效前缀。 */
-    alignas(128) _Atomic int32_t human_count;
-    alignas(128) _Atomic int32_t org_count;
+    alignas(128) _Atomic uint32_t human_count;
+    alignas(128) _Atomic uint32_t org_count;
 
-    alignas(128) _Atomic int32_t country_count;
-    alignas(128) _Atomic int32_t city_count;
+    alignas(128) _Atomic uint32_t country_count;
+    alignas(128) _Atomic uint32_t city_count;
 
-    alignas(128) _Atomic int32_t island_count;
-    alignas(128) _Atomic int32_t building_count;
-    alignas(128) _Atomic int32_t asset_count;
-    alignas(128) _Atomic int32_t fork_road_count;
+    alignas(128) _Atomic uint32_t island_count;
+    alignas(128) _Atomic uint32_t building_count;
+    alignas(128) _Atomic uint32_t asset_count;
+    alignas(128) _Atomic uint32_t fork_road_count;
+
+    alignas(128) _Atomic uint32_t movable_object_count;
 
     domino_type_t type;
     domino_status_t status;

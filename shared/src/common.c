@@ -1,8 +1,8 @@
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 
-#include <dirent.h>
 #include <errno.h>
-#include <inttypes.h>
+#include <ftw.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +14,54 @@
 #include "domino_shared_common.h"
 #include "domino_shared_error_codes.h"
 
+[[noreturn]] void dominoExitWithErrorAt(DOMINO_CODE code, const char* file_str, int line, const char* function_str, const char* fmt, ...) {
+    (void)fprintf(stderr, "[ERROR][%s:%d:%s] ", file_str, line, function_str);
+    va_list arg_list;
+    va_start(arg_list, fmt);
+    (void)vfprintf(stderr, fmt, arg_list);
+    va_end(arg_list);
+    (void)fprintf(stderr, " (%s, code=%d)\n", dominoErrorCodeToString(code), (int)code);
+    exit(EXIT_FAILURE);
+}
+
+void dominoPrintMessageAt(const char* file_str, int line, const char* function_str, const char* fmt, ...) {
+    if (fmt == nullptr) {
+        return;
+    }
+    (void)fprintf(stdout, "[%s:%d:%s] ", file_str != nullptr ? file_str : "?", line > 0 ? line : 0, function_str != nullptr ? function_str : "?");
+    va_list arg_list;
+    va_start(arg_list, fmt);
+    (void)vfprintf(stdout, fmt, arg_list);
+    va_end(arg_list);
+    (void)fputc('\n', stdout);
+    (void)fflush(stdout);
+}
+
 uint64_t dominoGetPid(void) {
     return (uint64_t)getpid();
+}
+
+FILE* dominoOpenAppendFile(const char* file_path) {
+    if (file_path == nullptr || file_path[0] == '\0') {
+        return nullptr;
+    }
+    FILE* file_ptr = fopen(file_path, "ab");
+    if (file_ptr == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_FILE_OPEN, "file open failed: %s", file_path);
+    }
+    return file_ptr;
+}
+
+void dominoFlushAndCloseFile(FILE* file_ptr) {
+    if (file_ptr == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_NULL_POINTER, "file close requires an open output file");
+    }
+    if (fflush(file_ptr) != 0) {
+        DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "file flush failed");
+    }
+    if (fclose(file_ptr) != 0) {
+        DOMINO_EXIT_WITH_ERROR(ERR_FILE_CLOSE, "file close failed");
+    }
 }
 
 int dominoFlushFile(FILE* file_ptr) {
@@ -37,47 +83,46 @@ DOMINO_CODE dominoAtomicWriteFile(const char* path, const void* data, size_t len
     if (path[0] == '\0' || len == 0U) {
         return ERR_INVALID_PARAM;
     }
-    uint64_t pid = dominoGetPid();
-    uint64_t wall_timestamp_ms;  // UTC 时间戳仅用于文件命名，不是业务累计时钟。
-    DOMINO_CODE result = dominoWallTimeMsChecked(&wall_timestamp_ms);
-    if (result != CODE_OK) {
-        return result;
-    }
-
+    const char tmp_suffix[] = ".tmp-XXXXXX";
     size_t path_len = strlen(path);
-    if (path_len > SIZE_MAX - 65U) {
-        return ERR_MEMORY_OVERFLOW;
+    if (path_len > SIZE_MAX - sizeof(tmp_suffix)) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "atomic file temporary path size overflows size_t");
     }
-    size_t tmp_cap = path_len + 64U + 1U;
+    size_t tmp_cap = path_len + sizeof(tmp_suffix);
     char tmp_path[tmp_cap];
+    memcpy(tmp_path, path, path_len);
+    memcpy(tmp_path + path_len, tmp_suffix, sizeof(tmp_suffix));
 
-    int written = snprintf(tmp_path, tmp_cap, "%s.tmp-%" PRIu64 "-%" PRIu64, path, wall_timestamp_ms, pid);
-    if (written < 0) {
-        return ERR_STRING_FORMAT;
-    }
-    if ((size_t)written >= tmp_cap) {
-        return ERR_BUFFER_TOO_SMALL;
-    }
-
-    FILE* file_ptr = fopen(tmp_path, "wb");
-    if (!file_ptr) {
+    int file_fd = mkstemp(tmp_path);
+    if (file_fd < 0) {
         return ERR_FILE_OPEN;
     }
+    FILE* file_ptr = fdopen(file_fd, "wb");
+    if (!file_ptr) {
+        (void)close(file_fd);
+        (void)remove(tmp_path);
+        return ERR_FILE_OPEN;
+    }
+    DOMINO_CODE code = CODE_OK;
     if (fwrite(data, 1, len, file_ptr) != len) {
-        return ERR_FILE_WRITE;
+        code = ERR_FILE_WRITE;
+        goto close_file;
     }
     if (dominoFlushFile(file_ptr) != 0) {
-        return ERR_FILE_FLUSH;
+        code = ERR_FILE_FLUSH;
+        goto close_file;
     }
-    if (fclose(file_ptr) != 0) {
-        return ERR_FILE_CLOSE;
+close_file:
+    if (fclose(file_ptr) != 0 && code == CODE_OK) {
+        code = ERR_FILE_CLOSE;
     }
-
-    if (dominoRename(tmp_path, path) != 0) {
-        return ERR_FILE_RENAME;
+    if (code == CODE_OK && dominoRename(tmp_path, path) != 0) {
+        code = ERR_FILE_RENAME;
     }
-
-    return CODE_OK;
+    if (code != CODE_OK) {
+        (void)remove(tmp_path);
+    }
+    return code;
 }
 
 DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t parent_cap, char* base, size_t base_cap) {
@@ -86,10 +131,6 @@ DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t par
     }
 
     size_t len = strlen(path);
-    if (len == 0U) {
-        return ERR_INVALID_PARAM;
-    }
-
     while (len > 0U && path[len - 1U] == '/') {
         len--;
     }
@@ -113,7 +154,7 @@ DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t par
         parent_source = ".";
         parent_len = 1U;
         base_offset = 0U;
-    } else if (sep_index == 0U && path[0] == '/') {
+    } else if (sep_index == 0U) {
         parent_len = 1U;
         base_offset = 1U;
     } else {
@@ -161,17 +202,15 @@ DOMINO_CODE dominoMkdirRecursive(const char* path) {
         }
         char saved_char = path_buffer[char_index];
         path_buffer[char_index] = '\0';
-        if (path_buffer[0] != '\0' && mkdir(path_buffer, 0755) != 0 && errno != EEXIST) {
-            path_buffer[char_index] = saved_char;
+        // 非空路径且 char_index >= 1，当前前缀一定非空。
+        if (mkdir(path_buffer, 0755) != 0 && errno != EEXIST) {
             return ERR_DIRECTORY_CREATE;
         }
         struct stat path_stat;
         if (stat(path_buffer, &path_stat) != 0) {
-            path_buffer[char_index] = saved_char;
             return ERR_FILE_STAT;
         }
         if (!S_ISDIR(path_stat.st_mode)) {
-            path_buffer[char_index] = saved_char;
             return ERR_PATH_TYPE;
         }
         path_buffer[char_index] = saved_char;
@@ -181,42 +220,18 @@ DOMINO_CODE dominoMkdirRecursive(const char* path) {
 
 uint64_t dominoWallTimeMs(void) {
     struct timespec wall_time;
-    if (timespec_get(&wall_time, TIME_UTC) != 0) {
-        return ((uint64_t)wall_time.tv_sec * 1000ULL) + ((uint64_t)wall_time.tv_nsec / 1000000ULL);
-    }
-    return ((uint64_t)time(nullptr)) * 1000ULL;
-}
-
-DOMINO_CODE dominoWallTimeMsChecked(uint64_t* wall_timestamp_ms_ptr) {
-    if (wall_timestamp_ms_ptr == nullptr) {
-        return ERR_NULL_POINTER;
-    }
-    struct timespec wall_time;
     if (timespec_get(&wall_time, TIME_UTC) != TIME_UTC) {
-        return ERR_CLOCK_READ;
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "UTC clock sampling failed");
     }
-    *wall_timestamp_ms_ptr = ((uint64_t)wall_time.tv_sec * 1000ULL) + ((uint64_t)wall_time.tv_nsec / 1000000ULL);
-    return CODE_OK;
+    return ((uint64_t)wall_time.tv_sec * 1000ULL) + ((uint64_t)wall_time.tv_nsec / 1000000ULL);
 }
 
 uint64_t dominoMonotonicTimeNs(void) {
-    struct timespec time_spec = {0};
-    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) != 0) {
-        return 0;
+    struct timespec time_spec;
+    if (timespec_get(&time_spec, TIME_MONOTONIC) != TIME_MONOTONIC) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "monotonic clock sampling failed");
     }
     return ((uint64_t)time_spec.tv_sec * 1000000000ULL) + (uint64_t)time_spec.tv_nsec;
-}
-
-DOMINO_CODE dominoMonotonicTimeNsChecked(uint64_t* monotonic_ns_ptr) {
-    if (monotonic_ns_ptr == nullptr) {
-        return ERR_NULL_POINTER;
-    }
-    struct timespec time_spec;
-    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) != 0) {
-        return ERR_CLOCK_READ;
-    }
-    *monotonic_ns_ptr = ((uint64_t)time_spec.tv_sec * 1000000000ULL) + (uint64_t)time_spec.tv_nsec;
-    return CODE_OK;
 }
 
 __attribute__((hot)) DOMINO_CODE dominoFormatUtcTimestampNow(char* out_ptr, size_t out_len) {
@@ -228,9 +243,9 @@ __attribute__((hot)) DOMINO_CODE dominoFormatUtcTimestampNow(char* out_ptr, size
     }
     out_ptr[0] = '\0';
 
-    struct timespec time_spec = {0};
-    if (clock_gettime(CLOCK_REALTIME, &time_spec) != 0) {
-        return ERR_CLOCK_READ;
+    struct timespec time_spec;
+    if (timespec_get(&time_spec, TIME_UTC) != TIME_UTC) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "log UTC clock sampling failed");
     }
 
     time_t sec = (time_t)time_spec.tv_sec;
@@ -239,13 +254,14 @@ __attribute__((hot)) DOMINO_CODE dominoFormatUtcTimestampNow(char* out_ptr, size
         return ERR_STRING_FORMAT;
     }
 
-    char base[32] = {0};  // "YYYY-MM-DDTHH:MM:SS"
-    if (strftime(base, sizeof(base), "%Y-%m-%dT%H:%M:%S", &tm_utc) == 0U) {
-        return ERR_BUFFER_TOO_SMALL;
+    // tm_year 从 1900 年起计数；加法前限定年份为 0000～9999。
+    if (tm_utc.tm_year < -1900 || tm_utc.tm_year > 8099) {
+        return ERR_OUT_OF_RANGE;
     }
 
-    long millis = time_spec.tv_nsec / 1000000L;
-    int written = snprintf(out_ptr, out_len, "%s.%03ldZ", base, millis);
+    long millisecond_ms = time_spec.tv_nsec / 1000000L;
+    int written = snprintf(out_ptr, out_len, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ", tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
+                           tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, millisecond_ms);
     if (written < 0) {
         out_ptr[0] = '\0';
         return ERR_STRING_FORMAT;
@@ -257,66 +273,12 @@ __attribute__((hot)) DOMINO_CODE dominoFormatUtcTimestampNow(char* out_ptr, size
     return CODE_OK;
 }
 
-uint8_t* dominoReadFileBytes(const char* path, size_t* length, DOMINO_CODE* result) {
-    if (!path || !length) {
-        *result = ERR_NULL_POINTER;
-        return nullptr;
+DOMINO_CODE dominoReadFileBytes(const char* path, uint8_t** data_ptr, size_t* length_ptr) {
+    if (!data_ptr || !length_ptr) {
+        return ERR_NULL_POINTER;
     }
-    *length = 0;
-    if (path[0] == '\0') {
-        *result = ERR_INVALID_PARAM;
-        return nullptr;
-    }
-    *result = CODE_OK;
-    FILE* file_ptr = fopen(path, "rb");
-    if (!file_ptr) {
-        *result = ERR_FILE_OPEN;
-        return nullptr;
-    }
-    if (fseek(file_ptr, 0, SEEK_END) != 0) {
-        *result = ERR_FILE_READ;
-        return nullptr;
-    }
-    long size = ftell(file_ptr);
-    if (size < 0) {
-        *result = ERR_FILE_READ;
-        return nullptr;
-    }
-    if (size == 0) {
-        *result = fclose(file_ptr) == 0 ? CODE_OK : ERR_FILE_CLOSE;
-        return nullptr;
-    }
-
-    if (fseek(file_ptr, 0, SEEK_SET) != 0) {
-        *result = ERR_FILE_READ;
-        return nullptr;
-    }
-    uint8_t* buf = (uint8_t*)malloc((size_t)size);
-    if (!buf) {
-        *result = ERR_MEMORY_ALLOC;
-        return nullptr;
-    }
-    size_t read_n = fread(buf, 1, (size_t)size, file_ptr);
-    /* 短读视为失败，避免返回截断内容 */
-    if (read_n != (size_t)size) {
-        *result = ERR_FILE_READ;
-        return nullptr;
-    }
-    if (fclose(file_ptr) != 0) {
-        *result = ERR_FILE_CLOSE;
-        return nullptr;
-    }
-    *length = (size_t)size;
-    *result = CODE_OK;
-    return buf;
-}
-
-DOMINO_CODE dominoRemovePathRecursive(const char* path) {
-    typedef struct DominoRemovePathNode {
-        char path[4096];
-        uint8_t children_done_flag;
-    } DominoRemovePathNode;
-
+    *data_ptr = nullptr;
+    *length_ptr = 0;
     if (!path) {
         return ERR_NULL_POINTER;
     }
@@ -324,114 +286,110 @@ DOMINO_CODE dominoRemovePathRecursive(const char* path) {
         return ERR_INVALID_PARAM;
     }
 
-    size_t stack_cap = 16U;
-    size_t stack_len = 1U;
-    DominoRemovePathNode* stack_ptr = (DominoRemovePathNode*)malloc(stack_cap * sizeof(*stack_ptr));
-    if (!stack_ptr) {
-        return ERR_MEMORY_ALLOC;
+    FILE* file_ptr = fopen(path, "rb");
+    if (!file_ptr) {
+        return ERR_FILE_OPEN;
+    }
+    DOMINO_CODE code = CODE_OK;
+    uint8_t* file_buf = nullptr;
+    if (fseek(file_ptr, 0, SEEK_END) != 0) {
+        code = ERR_FILE_READ;
+        goto close_file;
+    }
+    long file_size = ftell(file_ptr);
+    if (file_size < 0) {
+        code = ERR_FILE_READ;
+        goto close_file;
+    }
+    if (file_size == 0) {
+        return fclose(file_ptr) == 0 ? CODE_OK : ERR_FILE_CLOSE;
     }
 
-    int written = snprintf(stack_ptr[0].path, sizeof(stack_ptr[0].path), "%s", path);
-    if (written < 0) {
-        return ERR_STRING_FORMAT;
+    if (fseek(file_ptr, 0, SEEK_SET) != 0) {
+        code = ERR_FILE_READ;
+        goto close_file;
     }
-    if ((size_t)written >= sizeof(stack_ptr[0].path)) {
-        return ERR_BUFFER_TOO_SMALL;
+    file_buf = (uint8_t*)malloc((size_t)file_size);
+    if (!file_buf) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "file read buffer allocation failed");
     }
-    stack_ptr[0].children_done_flag = 0U;
-
-    while (stack_len > 0U) {
-        size_t node_index = stack_len - 1U;
-        DominoRemovePathNode* node_ptr = &stack_ptr[node_index];
-
-        struct stat _stat;
-        if (lstat(node_ptr->path, &_stat) != 0) {
-            if (errno == ENOENT) {
-                stack_len--;
-                continue;
-            }
-            return ERR_FILE_STAT;
-        }
-
-        if (!S_ISDIR(_stat.st_mode)) {
-            if (unlink(node_ptr->path) != 0) {
-                return ERR_FILE_REMOVE;
-            }
-            stack_len--;
-            continue;
-        }
-
-        if (node_ptr->children_done_flag != 0U) {
-            if (rmdir(node_ptr->path) != 0) {
-                return ERR_FILE_REMOVE;
-            }
-            stack_len--;
-            continue;
-        }
-
-        node_ptr->children_done_flag = 1U;
-
-        DIR* dir_ptr = opendir(node_ptr->path);
-        if (!dir_ptr) {
-            return ERR_DIRECTORY_OPEN;
-        }
-
-        for (;;) {
-            errno = 0;
-            struct dirent* entry_ptr = readdir(dir_ptr);
-            if (!entry_ptr) {
-                if (errno != 0) {
-                    return ERR_DIRECTORY_READ;
-                }
-                break;
-            }
-            if (strcmp(entry_ptr->d_name, ".") == 0 || strcmp(entry_ptr->d_name, "..") == 0) {
-                continue;
-            }
-
-            if (stack_len == stack_cap) {
-                if (stack_cap > SIZE_MAX / sizeof(*stack_ptr) / 2U) {
-                    return ERR_MEMORY_OVERFLOW;
-                }
-                size_t new_stack_cap = stack_cap * 2U;
-                DominoRemovePathNode* new_stack_ptr = (DominoRemovePathNode*)realloc(stack_ptr, new_stack_cap * sizeof(*stack_ptr));
-                if (!new_stack_ptr) {
-                    return ERR_MEMORY_ALLOC;
-                }
-                stack_ptr = new_stack_ptr;
-                stack_cap = new_stack_cap;
-                node_ptr = &stack_ptr[node_index];
-            }
-
-            written = snprintf(stack_ptr[stack_len].path, sizeof(stack_ptr[stack_len].path), "%s/%s", node_ptr->path, entry_ptr->d_name);
-            if (written < 0) {
-                return ERR_STRING_FORMAT;
-            }
-            if ((size_t)written >= sizeof(stack_ptr[stack_len].path)) {
-                return ERR_BUFFER_TOO_SMALL;
-            }
-            stack_ptr[stack_len].children_done_flag = 0U;
-            stack_len++;
-        }
-        if (closedir(dir_ptr) != 0) {
-            return ERR_DIRECTORY_CLOSE;
-        }
+    /* 短读视为失败，避免返回截断内容。 */
+    if (fread(file_buf, 1, (size_t)file_size, file_ptr) != (size_t)file_size) {
+        code = ERR_FILE_READ;
+        goto close_file;
     }
-
-    free(stack_ptr);
+close_file:
+    if (fclose(file_ptr) != 0 && code == CODE_OK) {
+        code = ERR_FILE_CLOSE;
+    }
+    if (code != CODE_OK) {
+        free(file_buf);
+        return code;
+    }
+    *data_ptr = file_buf;
+    *length_ptr = (size_t)file_size;
     return CODE_OK;
 }
 
-int dominoPathExists(const char* path, bool directory_only) {
-    if (path == NULL || path[0] == '\0') {
-        return 0;
+/** @brief 按后序遍历删除当前路径；非零错误码使 nftw 立即停止。 */
+static int removePathEntry(const char* path, const struct stat* stat_ptr, int type_flag, struct FTW* walk_ptr) {
+    (void)stat_ptr;
+    (void)walk_ptr;
+
+    if (type_flag == FTW_NS) {
+        return ERR_FILE_STAT;
     }
-    struct stat _stat;
-    if (stat(path, &_stat) != 0) {
-        return 0;
+    if (type_flag == FTW_DNR) {
+        return ERR_DIRECTORY_OPEN;
     }
-    if (directory_only) {
-        return S_ISDIR(_stat.st_mode) ? 1 : 0;
+    if (remove(path) != 0 && errno != ENOENT) {
+        return ERR_FILE_REMOVE;
     }
-    return (S_ISREG(_stat.st_mode) || S_ISDIR(_stat.st_mode)) ? 1 : 0;
+    return CODE_OK;
+}
+
+/** @brief 删除有效路径；入口已检查非空并去除非根路径的末尾分隔符。 */
+static DOMINO_CODE removePath(const char* path) {
+    struct stat path_stat;
+    if (lstat(path, &path_stat) != 0) {
+        return errno == ENOENT ? CODE_OK : ERR_FILE_STAT;
+    }
+    // 复用 lstat 类型：非目录直接删除，也避免 nftw 跟随根路径上的目录符号链接。
+    if (!S_ISDIR(path_stat.st_mode)) {
+        return remove(path) == 0 || errno == ENOENT ? CODE_OK : ERR_FILE_REMOVE;
+    }
+
+    // 先删除子项，再删除目录；不跟随符号链接，最多同时打开 16 个目录。
+    int result = nftw(path, removePathEntry, 16, FTW_DEPTH | FTW_PHYS);
+    if (result == -1) {
+        if (errno == ENOMEM) {
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "directory traversal allocation failed");
+        }
+        return ERR_DIRECTORY_READ;
+    }
+    // 回调只返回 CODE_OK 或小于 -1 的错误码，与 nftw 自身的失败区分。
+    return (DOMINO_CODE)result;
+}
+
+DOMINO_CODE dominoRemovePathRecursive(const char* path) {
+    if (!path) {
+        return ERR_NULL_POINTER;
+    }
+    if (path[0] == '\0') {
+        return ERR_INVALID_PARAM;
+    }
+
+    size_t path_len = strlen(path);
+    while (path_len > 0U && path[path_len - 1U] == '/') {
+        path_len--;
+    }
+    if (path_len == 0U || path[path_len] == '\0') {
+        return removePath(path);
+    }
+
+    // 尾斜杠会让 lstat 解析目录链接的目标；先移除，保持只删除链接本身的约定。
+    char normalized_path[path_len + 1U];
+    memcpy(normalized_path, path, path_len);
+    normalized_path[path_len] = '\0';
+    return removePath(normalized_path);
 }

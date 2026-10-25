@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 
 DominoGlobalIncrementID g_domino_global_increment_id;
 DominoRegion g_domino_region_list[DOMINO_MAX_REGION_COUNT];
@@ -15,7 +15,7 @@ DominoMovableObjectIDMap* dominoMovableObjectIdMap;
 
 uint32_t g_domino_region_count = 0;
 
-/** @brief 在线程启动前或停止后清空世界固定状态，原子成员逐项复位。 */
+/** @brief 销毁时清空世界固定状态，原子成员逐项复位。 */
 static void dominoHostResetWorldState(void) {
     g_domino_region_count = 0;
 
@@ -35,14 +35,15 @@ static void dominoHostResetWorldState(void) {
 
     for (uint32_t region_index = 0; region_index < (uint32_t)DOMINO_MAX_REGION_COUNT; region_index++) {
         DominoRegion* region_ptr = &g_domino_region_list[region_index];
-        atomic_store_explicit(&region_ptr->human_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->org_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->country_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->city_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->island_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->building_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->asset_count, 0, memory_order_relaxed);
-        atomic_store_explicit(&region_ptr->fork_road_count, 0, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->human_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->org_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->country_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->city_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->island_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->building_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->asset_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->fork_road_count, 0U, memory_order_relaxed);
+        atomic_store_explicit(&region_ptr->movable_object_count, 0U, memory_order_relaxed);
         region_ptr->type = 0;
         region_ptr->status = 0;
     }
@@ -64,30 +65,25 @@ DominoMovableObject* dominoGetMovableObjectByID(domino_movable_object_id_t movab
     return nullptr;
 }
 
-DOMINO_CODE dominoHostModuleInit(void) {
-    dominoHostResetWorldState();
-
-    kv_init(domino_all_island_list);
-    kv_init(domino_all_movable_object_list);
+void dominoHostModuleInit(void) {
     dominoIslandIdMap = dominoIslandIdMap_init();
     if (!dominoIslandIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoIslandIdMap (code=%d)", ERR_MEMORY_ALLOC);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoIslandIdMap");
     }
     dominoMovableObjectIdMap = dominoMovableObjectIdMap_init();
     if (!dominoMovableObjectIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HOST, DOMINO_LOG_LEVEL_ERROR, "failed to allocate dominoMovableObjectIdMap (code=%d)",
-                          ERR_MEMORY_ALLOC);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoMovableObjectIdMap");
     }
-
-    return CODE_OK;
 }
 
-void dominoHostModuleExit(void) {
+void dominoHostModuleDestroy(void) {
     dominoMovableObjectIdMap_destroy(dominoMovableObjectIdMap);
+    dominoMovableObjectIdMap = nullptr;
     dominoIslandIdMap_destroy(dominoIslandIdMap);
+    dominoIslandIdMap = nullptr;
     kv_destroy(domino_all_movable_object_list);
+    kv_init(domino_all_movable_object_list);
     kv_destroy(domino_all_island_list);
+    kv_init(domino_all_island_list);
     dominoHostResetWorldState();
 }

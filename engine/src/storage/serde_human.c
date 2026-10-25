@@ -1,11 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "../host/entry.h"
 #include "../human/entry.h"
-#include "../logger/entry.h"
 #include "../social/entry.h"
+#include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
 #include "serde_registry.h"
@@ -18,25 +16,25 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "random_state", human_data->random_state) ||
         !yyjson_mut_obj_add_uint(doc, obj, "schedule_revision", human_data->schedule_revision) ||
         !yyjson_mut_obj_add_uint(doc, obj, "needs_updated_at_ms", human_data->needs_updated_at_ms)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
     /* 只保存有效 ID，保持提交顺序；数组长度即 task_count。 */
     yyjson_mut_val* task_ids = yyjson_mut_obj_add_arr(doc, obj, "task_id_list");
     if (!task_ids) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
     for (size_t index = 0; index < human_data->task_count; index++) {
         if (!yyjson_mut_arr_add_uint(doc, task_ids, human_data->task_id_list[index])) {
-            return nullptr;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
         }
     }
     yyjson_mut_val* slots = yyjson_mut_obj_add_arr(doc, obj, "active_task_id_list");
     if (!slots) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
     for (size_t index = 0; index < DOMINO_HUMAN_TASK_CHANNEL_COUNT; index++) {
         if (!yyjson_mut_arr_add_uint(doc, slots, human_data->active_task_id_list[index])) {
-            return nullptr;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
         }
     }
 
@@ -77,20 +75,20 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "org_info", human_data->org_info) ||
         !yyjson_mut_obj_add_uint(doc, obj, "hold_asset_list_count", human_data->hold_asset_list_count) ||
         !yyjson_mut_obj_add_uint(doc, obj, "own_asset_list_count", human_data->own_asset_list_count)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_val(doc, obj, "own_asset_id_list",
                                 serdeWriteU32Array(doc, human_data->own_asset_id_list, DOMINO_MAX_ASSET_COUNT_PER_HUMAN)) ||
         !yyjson_mut_obj_add_val(doc, obj, "hold_asset_id_list",
                                 serdeWriteU32Array(doc, human_data->hold_asset_id_list, DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN))) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "partner_id", human_data->partner_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "father_id", human_data->father_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "mother_id", human_data->mother_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_val(doc, obj, "child_id_list", serdeWriteU32Array(doc, human_data->child_id_list, DOMINO_MAX_CHILD_COUNT_PER_FAMILY)) ||
@@ -102,18 +100,18 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_val(doc, obj, "friend_id_list", serdeWriteU32Array(doc, human_data->friend_id_list, DOMINO_MAX_FRIEND_COUNT_PER_HUMAN)) ||
         !yyjson_mut_obj_add_val(doc, obj, "colleague_id_list",
                                 serdeWriteU32Array(doc, human_data->colleague_id_list, DOMINO_MAX_COLLEAGUE_COUNT_PER_HUMAN))) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "death_time", human_data->death_time) ||
         !yyjson_mut_obj_add_uint(doc, obj, "last_active_time", human_data->last_active_time)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_country_id", human_data->last_active_country_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "last_active_city_id", human_data->last_active_city_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "last_active_building_id", human_data->last_active_building_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "birth_country_id", human_data->birth_country_id) ||
@@ -122,14 +120,14 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "death_country_id", human_data->death_country_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_city_id", human_data->death_city_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_building_id", human_data->death_building_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_val(doc, obj, "recent_contact_id_list",
                                 serdeWriteU32Array(doc, human_data->recent_contact_id_list, DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT)) ||
         !yyjson_mut_obj_add_val(doc, obj, "recent_visited_address_id_list",
                                 serdeWriteU32Array(doc, human_data->recent_visited_address_id_list, DOMINO_MAX_RECENT_VISITED_ADDRESS_COUNT))) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_region_index", human_data->last_active_region_index) ||
@@ -139,13 +137,13 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "recent_contact_id_list_head_index", human_data->recent_contact_id_list_head_index) ||
         !yyjson_mut_obj_add_uint(doc, obj, "recent_visited_address_list_count", human_data->recent_visited_address_list_count) ||
         !yyjson_mut_obj_add_uint(doc, obj, "recent_visited_address_id_list_head_index", human_data->recent_visited_address_id_list_head_index)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
+    serdeWriteNameDescription(doc, obj, human_data->name_id, human_data->description_id);
     if (!yyjson_mut_obj_add_strcpy(doc, obj, "id_card", human_data->id_card) ||
-        !serdeWriteNameDescription(doc, obj, human_data->name_id, human_data->description_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "generation", human_data->generation)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_space_id", human_data->last_active_space_id) ||
@@ -154,7 +152,7 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "birth_area_id", human_data->birth_area_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_space_id", human_data->death_space_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_area_id", human_data->death_area_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "skin_color", human_data->skin_color) ||
@@ -163,7 +161,7 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "face_shape", human_data->face_shape) ||
         !yyjson_mut_obj_add_uint(doc, obj, "body_shape", human_data->body_shape) || !yyjson_mut_obj_add_uint(doc, obj, "voice", human_data->voice) ||
         !yyjson_mut_obj_add_uint(doc, obj, "height", human_data->height) || !yyjson_mut_obj_add_uint(doc, obj, "weight", human_data->weight)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "hat", human_data->hat) || !yyjson_mut_obj_add_uint(doc, obj, "hair", human_data->hair) ||
@@ -173,41 +171,34 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "sock", human_data->sock) || !yyjson_mut_obj_add_uint(doc, obj, "glove", human_data->glove) ||
         !yyjson_mut_obj_add_uint(doc, obj, "ring", human_data->ring) || !yyjson_mut_obj_add_uint(doc, obj, "bracelet", human_data->bracelet) ||
         !yyjson_mut_obj_add_uint(doc, obj, "belt", human_data->belt) || !yyjson_mut_obj_add_uint(doc, obj, "bag", human_data->bag)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     return obj;
 }
 
 /** @brief 新的持久化状态必须显式提供合法的无符号数，禁止缺省为零或窄化截断。 */
-static DOMINO_CODE readHumanUnsigned(yyjson_val* object, const char* key, uint64_t maximum, uint64_t* value_ptr) {
+static void readHumanUnsigned(yyjson_val* object, const char* key, uint64_t maximum, uint64_t* value_ptr) {
     yyjson_val* value = yyjson_obj_get(object, key);
     if (!yyjson_is_uint(value)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human field must be an unsigned integer: field=%s", key);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human field must be an unsigned integer: field=%s", key);
     }
     uint64_t parsed = yyjson_get_uint(value);
     if (parsed > maximum) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
-                          "Human field exceeds its allowed range: field=%s value=%llu maximum=%llu", key, (unsigned long long)parsed,
-                          (unsigned long long)maximum);
-        return ERR_OUT_OF_RANGE;
+        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human field exceeds its allowed range: field=%s value=%llu maximum=%llu", key,
+                               (unsigned long long)parsed, (unsigned long long)maximum);
     }
     *value_ptr = parsed;
-    return CODE_OK;
 }
 
-#define HUMAN_READ_UINT(object, record, field, maximum)                                      \
-    do {                                                                                     \
-        uint64_t parsed_value;                                                               \
-        DOMINO_CODE read_result = readHumanUnsigned(object, #field, maximum, &parsed_value); \
-        if (read_result != CODE_OK) {                                                        \
-            return read_result;                                                              \
-        }                                                                                    \
-        (record)->field = (typeof((record)->field))parsed_value;                             \
+#define HUMAN_READ_UINT(object, record, field, maximum)            \
+    do {                                                           \
+        uint64_t parsed_value;                                     \
+        readHumanUnsigned(object, #field, maximum, &parsed_value); \
+        (record)->field = (typeof((record)->field))parsed_value;   \
     } while (0)
 
-static int deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data) {
+static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data) {
     memset(out_human_data, 0, sizeof(DominoHumanData));
 
     HUMAN_READ_UINT(obj, out_human_data, human_id, UINT32_MAX);
@@ -216,41 +207,38 @@ static int deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data
     HUMAN_READ_UINT(obj, out_human_data, needs_updated_at_ms, UINT32_MAX);
     yyjson_val* task_ids = yyjson_obj_get(obj, "task_id_list");
     if (!yyjson_is_arr(task_ids)) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human task IDs must be an array: human_id=%u", out_human_data->human_id);
     }
     if (yyjson_arr_size(task_ids) > DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human task count exceeds capacity: human_id=%u count=%zu",
-                          out_human_data->human_id, yyjson_arr_size(task_ids));
-        return ERR_CAPACITY_EXCEEDED;
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%zu", out_human_data->human_id,
+                               yyjson_arr_size(task_ids));
     }
     out_human_data->task_count = (uint8_t)yyjson_arr_size(task_ids);
     for (size_t index = 0; index < out_human_data->task_count; index++) {
         yyjson_val* task_id = yyjson_arr_get(task_ids, index);
         if (!yyjson_is_uint(task_id) || yyjson_get_uint(task_id) == 0) {
-            return -1;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human task ID must be a nonzero unsigned integer: human_id=%u index=%zu",
+                                   out_human_data->human_id, index);
         }
         if (yyjson_get_uint(task_id) > UINT32_MAX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
-                              "Human task ID exceeds uint32 range: human_id=%u index=%zu value=%llu", out_human_data->human_id, index,
-                              (unsigned long long)yyjson_get_uint(task_id));
-            return ERR_OUT_OF_RANGE;
+            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human task ID exceeds uint32 range: human_id=%u index=%zu value=%llu", out_human_data->human_id,
+                                   index, (unsigned long long)yyjson_get_uint(task_id));
         }
         out_human_data->task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
     }
     yyjson_val* slots = yyjson_obj_get(obj, "active_task_id_list");
     if (!yyjson_is_arr(slots) || yyjson_arr_size(slots) != DOMINO_HUMAN_TASK_CHANNEL_COUNT) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human active task IDs must contain one slot per channel: human_id=%u", out_human_data->human_id);
     }
     for (size_t index = 0; index < DOMINO_HUMAN_TASK_CHANNEL_COUNT; index++) {
         yyjson_val* task_id = yyjson_arr_get(slots, index);
         if (!yyjson_is_uint(task_id)) {
-            return -1;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human active task ID must be an unsigned integer: human_id=%u channel=%zu",
+                                   out_human_data->human_id, index);
         }
         if (yyjson_get_uint(task_id) > UINT32_MAX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
-                              "Human active task ID exceeds uint32 range: human_id=%u channel=%zu value=%llu", out_human_data->human_id, index,
-                              (unsigned long long)yyjson_get_uint(task_id));
-            return ERR_OUT_OF_RANGE;
+            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human active task ID exceeds uint32 range: human_id=%u channel=%zu value=%llu",
+                                   out_human_data->human_id, index, (unsigned long long)yyjson_get_uint(task_id));
         }
         out_human_data->active_task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
     }
@@ -342,10 +330,7 @@ static int deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data
         (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_visited_address_id_list_head_index"));
 
     serdeReadStr(obj, "id_card", out_human_data->id_card, sizeof(out_human_data->id_card));
-    DOMINO_CODE name_result = serdeReadNameDescription(obj, &out_human_data->name_id, &out_human_data->description_id);
-    if (name_result != CODE_OK) {
-        return name_result;
-    }
+    serdeReadNameDescription(obj, &out_human_data->name_id, &out_human_data->description_id);
     out_human_data->generation = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "generation"));
 
     out_human_data->last_active_space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_space_id"));
@@ -378,7 +363,6 @@ static int deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data
     out_human_data->bracelet = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "bracelet"));
     out_human_data->belt = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "belt"));
     out_human_data->bag = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "bag"));
-    return 0;
 }
 
 /** @brief 序列化已完成引用及绑定指针预检的同索引 Human/Data；调用期间实体主表保持不变。 */
@@ -386,47 +370,47 @@ static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* hu
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
 
     if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human->human_id) || !yyjson_mut_obj_add_uint(doc, obj, "status", human->status)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     domino_movable_object_id_t movable_object_id = human->movable_object_id;
     if (!yyjson_mut_obj_add_uint(doc, obj, "movable_object_id", movable_object_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
     if (movable_object_id == 0) {
         if (!yyjson_mut_obj_add_sint(doc, obj, "position_x", human->position_info.x) ||
             !yyjson_mut_obj_add_sint(doc, obj, "position_y", human->position_info.y) ||
             !yyjson_mut_obj_add_sint(doc, obj, "position_z", human->position_info.z)) {
-            return nullptr;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
         }
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "space_id", human->space_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "space_area_id", human->space_area_id)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "region_index", human->region_index)) {
-        return nullptr;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     yyjson_mut_val* data = serializeHumanData(doc, human_data);
-    if (!data || !yyjson_mut_obj_add_val(doc, obj, "data", data)) {
-        return nullptr;
+    if (!yyjson_mut_obj_add_val(doc, obj, "data", data)) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     return obj;
 }
 
 /** @brief 仅解析局部值，成功后由加载循环同步提交 Human 与 Data。 */
-static int deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHumanData* out_human_data) {
+static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHumanData* out_human_data) {
     memset(out_human, 0, sizeof(DominoHuman));
     if (!yyjson_is_obj(obj)) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human record must be an object");
     }
     HUMAN_READ_UINT(obj, out_human, human_id, UINT32_MAX);
     if (out_human->human_id == 0) {
-        return -1;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human ID must be nonzero");
     }
     out_human->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     HUMAN_READ_UINT(obj, out_human, movable_object_id, UINT32_MAX);
@@ -440,92 +424,70 @@ static int deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHuman
     out_human->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
 
     yyjson_val* data = yyjson_obj_get(obj, "data");
-    int data_result = yyjson_is_obj(data) ? deserializeHumanData(data, out_human_data) : -1;
-    if (data_result != 0 || out_human->human_id != out_human_data->human_id) {
-        return data_result != 0 ? data_result : -1;
+    if (!yyjson_is_obj(data)) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human data must be an object: human_id=%u", out_human->human_id);
     }
-    return 0;
+    deserializeHumanData(data, out_human_data);
+    if (out_human->human_id != out_human_data->human_id) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human data ID disagrees with owner: human_id=%u data_human_id=%u", out_human->human_id,
+                               out_human_data->human_id);
+    }
 }
 
 #undef HUMAN_READ_UINT
 
-/** @brief 哈希插入成功后按需追加同索引 Human/Data；失败立即上报。 */
-static DOMINO_CODE loadOneHuman(yyjson_val* entity_value) {
+/** @brief 哈希插入成功后按需追加同索引 Human/Data；失败直接终止。 */
+static void loadOneHuman(yyjson_val* entity_value) {
     DominoHuman human = {0};
     DominoHumanData data = {0};
-    int deserialize_result = deserializeHuman(entity_value, &human, &data);
-    if (deserialize_result != 0) {
-        if (deserialize_result == -1) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Invalid human record in save data");
-        }
-        return deserialize_result == -1 ? ERR_INVALID_DATA : (DOMINO_CODE)deserialize_result;
-    }
+    deserializeHuman(entity_value, &human, &data);
     int absent;
     khint_t map_slot = dominoHumanIdMap_put(dominoHumanIdMap, human.human_id, &absent);
     if (absent < 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot allocate human ID map entry: human_id=%u",
-                          human.human_id);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human ID map entry: human_id=%u", human.human_id);
     }
     if (absent == 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Duplicate human in save data: human_id=%u", human.human_id);
-        return ERR_ALREADY_EXISTS;
+        DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate human in save data: human_id=%u", human.human_id);
     }
     size_t index = kv_size(domino_all_human_list);
     kv_push(DominoHuman, domino_all_human_list, human);
     kv_push(DominoHumanData, domino_all_human_data_list, data);
     kh_val(dominoHumanIdMap, map_slot) = (uint32_t)index;
-    return CODE_OK;
 }
 
 /** @brief 加载期检查 ID 引用；保存期同时复用查询结果检查已绑定指针。 */
-static DOMINO_CODE validateHumanReferences(bool check_bindings_flag) {
-    if (!dominoHumanIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot validate human references before initialization");
-        return ERR_NOT_INITIALIZED;
-    }
+static void validateHumanReferences(bool check_bindings_flag) {
     if (domino_all_human_list.n != domino_all_human_data_list.n || domino_all_human_list.n != kh_size(dominoHumanIdMap)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human table counts disagree: humans=%zu data=%zu mapped=%u",
-                          domino_all_human_list.n, domino_all_human_data_list.n, kh_size(dominoHumanIdMap));
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human table counts disagree: humans=%zu data=%zu mapped=%u", domino_all_human_list.n,
+                               domino_all_human_data_list.n, kh_size(dominoHumanIdMap));
     }
     for (size_t index = 0; index < domino_all_human_list.n; index++) {
         const DominoHuman* human = &domino_all_human_list.a[index];
         const DominoHumanData* data = &domino_all_human_data_list.a[index];
         if (human->human_id == 0 || data->human_id != human->human_id || dominoGetHumanByID(human->human_id) != human ||
             (check_bindings_flag && human->data != data)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Invalid human data or binding: index=%zu human_id=%u", index,
-                              human->human_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human data or binding: index=%zu human_id=%u", index, human->human_id);
         }
         if (data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human task count exceeds capacity: human_id=%u count=%u",
-                              human->human_id, data->task_count);
-            return ERR_CAPACITY_EXCEEDED;
+            DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%u", human->human_id,
+                                   data->task_count);
         }
         if (human->movable_object_id != 0) {
             const DominoMovableObject* movable_object = dominoGetMovableObjectByID(human->movable_object_id);
             if (!movable_object || (check_bindings_flag && human->movable_object != movable_object)) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
-                                  "Invalid human movable-object reference: human_id=%u movable_object_id=%u", human->human_id,
-                                  human->movable_object_id);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human movable-object reference: human_id=%u movable_object_id=%u", human->human_id,
+                                       human->movable_object_id);
             }
         }
         if (data->current_building_id != 0 && !dominoGetBuildingByID(data->current_building_id)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR,
-                              "Invalid human building reference: human_id=%u building_id=%u", human->human_id, data->current_building_id);
-            return ERR_INVALID_DATA;
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human building reference: human_id=%u building_id=%u", human->human_id,
+                                   data->current_building_id);
         }
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE serdeSaveHuman(const char* save_path) {
-    DOMINO_CODE result = validateHumanReferences(true);
-    if (result != CODE_OK) {
-        return result;
-    }
+void serdeSaveHuman(const char* save_path) {
+    validateHumanReferences(true);
     /* 预检已确认数量等于使用 32 位计数的 ID map。 */
     uint32_t total = (uint32_t)domino_all_human_list.n;
     uint32_t shard_count = storageEntityShardCount(total, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA);
@@ -537,99 +499,57 @@ DOMINO_CODE serdeSaveHuman(const char* save_path) {
         }
         yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
         if (!doc) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot allocate human JSON document: shard=%u", shard);
-            return ERR_MEMORY_ALLOC;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON document: shard=%u", shard);
         }
         yyjson_mut_val* root = yyjson_mut_obj(doc);
         if (!root) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot allocate human JSON root: shard=%u", shard);
-            return ERR_MEMORY_ALLOC;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON root: shard=%u", shard);
         }
         yyjson_mut_val* entities = yyjson_mut_arr(doc);
         if (!entities || !yyjson_mut_obj_add_str(doc, root, "type", "human") || !yyjson_mut_obj_add_uint(doc, root, "shard_id", shard) ||
             !yyjson_mut_obj_add_val(doc, root, "entities", entities)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot allocate human shard fields: shard=%u", shard);
-            return ERR_MEMORY_ALLOC;
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human shard fields: shard=%u", shard);
         }
         yyjson_mut_doc_set_root(doc, root);
         for (uint32_t index = start; index < start + count; index++) {
             yyjson_mut_val* object = serializeHuman(doc, &domino_all_human_list.a[index], &domino_all_human_data_list.a[index]);
-            if (!object) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot serialize human JSON record: human_id=%u",
-                                  domino_all_human_list.a[index].human_id);
-                return ERR_MEMORY_ALLOC;
-            }
             if (!yyjson_mut_arr_append(entities, object)) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot append human JSON record: shard=%u", shard);
-                return ERR_MEMORY_ALLOC;
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot append human JSON record: shard=%u", shard);
             }
         }
-        result = storageWriteShardFile("human", shard, save_path, doc);
-        if (result != CODE_OK) {
-            return result;
-        }
+        storageWriteShardFile("human", shard, save_path, doc);
         yyjson_mut_doc_free(doc);
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count) {
-    if (!dominoHumanIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot load humans before initialization");
-        return ERR_NOT_INITIALIZED;
-    }
-    if (domino_all_human_list.n != 0 || domino_all_human_data_list.n != 0 || kh_size(dominoHumanIdMap) != 0) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Cannot load humans into nonempty tables");
-        return ERR_GAME_STATE_INVALID;
-    }
+void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count) {
     if (shard_count != storageEntityShardCount(total_count, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human shard count disagrees with total: total=%u shards=%u",
-                          total_count, shard_count);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human shard count disagrees with total: total=%u shards=%u", total_count, shard_count);
     }
-    DOMINO_CODE result = storageValidateLoadCount(total_count, sizeof(DominoHuman));
-    if (result != CODE_OK) {
-        return result;
-    }
-    result = storageValidateLoadCount(total_count, sizeof(DominoHumanData));
-    if (result != CODE_OK) {
-        return result;
-    }
+    storageValidateLoadCount(total_count, sizeof(DominoHuman));
+    storageValidateLoadCount(total_count, sizeof(DominoHumanData));
     for (uint32_t shard = 0; shard < shard_count; shard++) {
-        yyjson_doc* doc = storageReadShardFile("human", shard, save_path, &result);
-        if (result != CODE_OK) {
-            return result;
-        }
+        yyjson_doc* doc = storageReadShardFile("human", shard, save_path);
         yyjson_val* entities = serdeValidateShardRoot(yyjson_doc_get_root(doc), "human", shard);
-        if (!entities) {
-            return ERR_INVALID_DATA;
-        }
         size_t index;
         size_t count;
         yyjson_val* entity;
         yyjson_arr_foreach(entities, index, count, entity) {
             if (domino_all_human_list.n >= total_count) {
-                DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human records exceed declared total: total=%u shard=%u",
-                                  total_count, shard);
-                return ERR_INVALID_DATA;
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human records exceed declared total: total=%u shard=%u", total_count, shard);
             }
-            result = loadOneHuman(entity);
-            if (result != CODE_OK) {
-                return result;
-            }
+            loadOneHuman(entity);
         }
         yyjson_doc_free(doc);
     }
     if (domino_all_human_list.n != total_count) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_STORAGE, DOMINO_LOG_LEVEL_ERROR, "Human record count disagrees with total: expected=%u actual=%zu",
-                          total_count, domino_all_human_list.n);
-        return ERR_INVALID_DATA;
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human record count disagrees with total: expected=%u actual=%zu", total_count,
+                               domino_all_human_list.n);
     }
-    return CODE_OK;
 }
 
-DOMINO_CODE serdeValidateHumanReferences(void) {
-    return validateHumanReferences(false);
+void serdeValidateHumanReferences(void) {
+    validateHumanReferences(false);
 }
 
 void serdeBindHumanReferences(void) {

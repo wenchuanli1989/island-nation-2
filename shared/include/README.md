@@ -1,6 +1,6 @@
 # shared 公共头文件说明
 
-`shared/include` 只放跨模块可见的类型、错误码和通用工具声明。实体数组、ID map、模块生命周期函数等运行时状态由 `engine/src/*/entry.h` 暴露给 engine 内部使用，不属于 shared 的职责。
+`shared/include` 只放跨模块可见的类型、错误码、通用工具及日志／队列接口。实体数组、ID map、模块生命周期函数等运行时状态由 `engine/src/*/entry.h` 暴露给 engine 内部使用，不属于 shared 的职责。
 
 ## 文件职责
 
@@ -8,7 +8,10 @@
 |------|------|
 | `domino_shared_types.h` | 基础 ID、名称/描述、坐标类型，32 位现实毫秒类型 `domino_runtime_ms_t`，以及核心世界设计约定。 |
 | `domino_shared_error_codes.h` | 统一 `DOMINO_CODE` 错误码和错误码字符串转换。 |
-| `domino_shared_common.h` | Linux 当前实现下的时间、路径、文件读写、原子写入和递归删除工具。 |
+| `domino_shared_lifecycle.h` | shared logger 使用的未初始化、已初始化、已启动、已停止状态枚举；引擎内部模块不据此重复维护阶段。 |
+| `domino_shared_logger.h` | 多实例异步日志及满队列等待。 |
+| `domino_shared_queue.h` | 通用 FIFO、非阻塞／阻塞入队、批量消费、控制唤醒和版本变化等待；不依赖业务消息定义。 |
+| `domino_shared_common.h` | 直接打印消息、打印致命错误并 exit 的公共方法，以及 Linux 当前实现下的时间、路径和文件工具。 |
 | `domino_shared_host.h` | 地域、岛屿、运动物体、全局自增 ID 结构。 |
 | `domino_shared_human.h` | 64 字节人物核心实体 `DominoHuman` 和 4096 字节扩展属性 `DominoHumanData`。 |
 | `domino_shared_social.h` | 组织、建筑、城市、国家、资产及其扩展 data。 |
@@ -32,6 +35,90 @@
 ## 当前实现边界
 
 - 当前跨平台封装仍以 Linux 实现为主，`domino_shared_common.h` 中的路径、rename、fsync、递归删除等函数未完整覆盖 Windows/macOS 差异。
+- `dominoWallTimeMs()` 与 `dominoMonotonicTimeNs()` 直接返回采样值，采样失败直接打印 stderr 并 exit，不通过结果码传播；它们分别用于存档命名和 time 内部采样，不能代替 32 位业务毫秒接口。
 - `domino_shared_nav.h` 中 `dominoAddRoad()` 与 `dominoRemoveRoad()` 已在 engine nav 模块实现；`dominoUpdateRoadWeight()` 与 `dominoBlockRoad()` 当前只是预留声明。
 - 物理、个体智能、群体智能和超级智能阶段仍是模拟流水线的设计目标；当前运行逻辑由消息消费主循环和 human 行为规划工作线程承载。
 - 任务模型和最小 AI 存档已接入；当前受限睡眠执行器已接通自主睡眠、计时唤醒及存档续接，普通暂停只在批次边界等待，退出在线程结束后统一结算；通用需求决策和三通道执行仍待实现。
+
+## 通用工具边界
+
+`domino_shared_common.h` 的路径、文件、时间格式化和诊断函数可独立调用，按各自头文件契约处理输入、输出和失败结果，不依赖引擎生命周期或全局初始化状态。内部操作直接使用前序校验建立的条件，不重复检查非空路径、分隔符等不变量；实际采样、格式化、容量、分配和 IO 失败仍须处理。
+
+`dominoReadFileBytes()` 在两个输出指针均有效时先将结果置为 nullptr／0，空文件成功返回这组值；文件 IO 失败仍保留这组输出并清理本次资源。`dominoPrintMessageAt()` 保留空格式串无操作、缺失来源输出问号的约定。调用方按业务语义处理通用工具的可恢复结果，工具不逐层重复打印。
+
+`dominoRemovePathRecursive()` 先忽略非根路径的末尾斜杠，再复用 `lstat()` 的类型结果：非目录（包括根符号链接）直接删除，真实目录才交给 `nftw` 后序遍历；目录内的符号链接也只删除链接本身，不进入目标。没有末尾斜杠的路径直接交给内部删除步骤，不复制路径；全部由斜杠组成的根路径保持原样。
+
+## 多实例日志
+
+`DominoLogger` 的存储由调用方提供。engine、client-hub、engine-remote/local 和 engine-remote/server 各自持有实例；每个实例独立配置队列容量、默认级别和可选默认日志文件，模块可通过 `DominoLogModule.file_path` 指定自己的文件。实例统一管理 writer、模块表、文件和 seq。
+
+调用方通过自己的可变参数包装函数将参数传给 `dominoLogVa`，包装函数负责配对调用 `va_start` 和 `va_end`。
+
+```c
+#include <stdarg.h>
+
+#include "domino_shared_logger.h"
+
+static void logServiceMessage(DominoLogger* logger_ptr, domino_log_module_id_t module_id, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc,
+                              const char* fmt, ...) DOMINO_LOG_PRINTF_ATTR(5, 6);
+
+/** @brief 调用方的日志包装示例，将可变参数转发给 shared 日志服务。 */
+static void logServiceMessage(DominoLogger* logger_ptr, domino_log_module_id_t module_id, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc,
+                              const char* fmt, ...) {
+    va_list arg_list;
+    va_start(arg_list, fmt);
+    dominoLogVa(logger_ptr, module_id, level, loc, fmt, arg_list);
+    va_end(arg_list);
+}
+
+void logWithTwoServices(void) {
+    DominoLogger first_logger = {0};
+    DominoLogger second_logger = {0};
+    const DominoLogModule first_modules[] = {
+        {.module_id = 0U, .name = "core"},
+        {.module_id = 1U, .name = "nav", .file_path = "first-nav.log"},
+    };
+    const DominoLogModule second_modules[] = {{.module_id = 0U, .name = "core"}};
+    dominoLogInit((DominoLogConfig){.file_path = "first.log"}, first_modules, sizeof(first_modules) / sizeof(first_modules[0]), &first_logger);
+    dominoLogInit((DominoLogConfig){.file_path = "second.log"}, second_modules, sizeof(second_modules) / sizeof(second_modules[0]), &second_logger);
+    dominoLogStart(&first_logger);
+    dominoLogStart(&second_logger);
+
+    const DominoLogSourceLocation loc = {.file = __FILE__, .line = __LINE__, .func = __func__};
+    logServiceMessage(&first_logger, 0U, DOMINO_LOG_LEVEL_INFO, loc, "%s", "first service");
+    logServiceMessage(&first_logger, 1U, DOMINO_LOG_LEVEL_ERROR, loc, "%s", "nonfatal navigation error");
+    dominoLogStop(&first_logger);
+    dominoLogDestroy(&first_logger);
+    logServiceMessage(&second_logger, 0U, DOMINO_LOG_LEVEL_INFO, loc, "%s", "second service continues");
+    dominoLogStop(&second_logger);
+    dominoLogDestroy(&second_logger);
+}
+```
+
+- 初始化先校验完整模块列表，再分配队列、以追加模式打开配置的文件并解析模块状态，不启动 writer；返回后不借用模块数组或文件路径。Start 单独创建 writer，成功后才允许记录日志。首次对象必须零初始化（静态对象、`={0}` 或 `calloc`）；Init 仅接受未初始化状态，重复调用在创建资源前直接致命退出。Init 基于空对象创建资源，不再重复整体清零；Destroy 清空对象，完成后可直接再次 Init。
+- 模块 ID 和名称在实例内必须唯一；名称必须非空且在固定数组内以 NUL 结尾。`module_count = 0` 时允许空列表；模块 `min_level = 0` 在初始化时解析为配置的默认等级，默认等级只用于本次 Init，实例只保存解析后的模块等级，显式等级独立生效。
+- 每条日志只写一个目标：模块 `file_path` 优先，其次实例 `DominoLogConfig.file_path`，两者都未配置时写 stdout；nullptr 和空字符串都表示未配置。所有等级（包括非致命 ERROR）遵循同一规则，日志内容不写 stderr，也不同时复制到默认文件或控制台。示例中 core 写 `first.log`，nav 写 `first-nav.log`。
+- 实例内直接复用 `DominoLogModule`，初始化时由 logger 维护其 `output_ptr`，writer 通过队列元素的 `module_index` 取用。调用方无需设置 `output_ptr`，传入值会被忽略；实例副本不保留配置路径，`file_path` 保持 nullptr。文件由 logger 统一打开和关闭；指定的文件打开、写入、刷新或关闭失败时直接走公共致命退出路径。
+- `buffer_size = 0` 使用默认容量 10240；容量不得超过 `UINT32_MAX`，保留分配大小溢出检查。日志队列固定容量，满载时本次日志调用向所属模块的同一输出流同步提示一次并刷新，然后用 `dominoThreadQueueProduceBlocking()` 等待直到入队，不丢日志、不定时轮询。提示不再次入队；writer 消费后通过 `not_full` 唤醒等待者。
+- 致命错误统一使用 `DOMINO_EXIT_WITH_ERROR(code, fmt, ...)`：宏捕获调用位置，`common.c` 的 `dominoExitWithErrorAt()` 直接打印 stderr，然后执行 `exit(EXIT_FAILURE)`，允许退出回调和标准 I/O 刷新。诊断不进入日志队列，诊断本身失败不递归报错。
+- 运行阶段非致命错误和正常日志进入异步日志；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE(fmt, ...)` 直接写 stdout。宏捕获调用位置，`common.c` 的 `dominoPrintMessageAt()` 打印来源和完整正文。共用业务工具只返回可恢复结果，由掌握业务语义的调用边界选择输出；日志层不维护阶段标志或进行阶段分流。直接输出不截断、不入队、不退出，输出失败也不递归报错。日志等级只表达严重程度，不决定是否终止；ERROR 日志同样可以是可恢复的业务失败。
+- 日志不再维护故障回调、首错状态或错误查询接口；`Init`／`Start`／`Stop`／`Destroy` 返回 void。致命错误会结束整个宿主进程，队列中的剩余日志不保证写出。
+- 同一实例支持多个生产者；初始化后模块表只读。对象地址和存储必须保持有效，直至销毁返回，期间不得复制、移动或直接修改成员。
+- `dominoLogVa()` 统一完成空指针、格式指针和等级过滤，模块查找辅助函数只按模块 ID 和最小等级匹配。只有通过过滤的日志才检查 STARTED 状态；内部格式化、入队和 writer 使用已确定的模块下标，不重复校验入口条件。日志四阶段状态、序号、线程标识及截断信息仍各自承担生命周期或输出职责。
+- 生命周期由调用方串行管理为 Init → Start → Stop → Destroy；也支持 Init → Stop → Destroy。Stop 前须停止并等待所有生产者；Stop 调用 `dominoThreadQueueBeginFlush()` 拒绝新消息，已 Start 时唤醒 writer 并 join 等待排空，仅 Init 时跳过 join；随后刷新各模块文件、实例默认文件及被使用的 stdout，保留队列和文件。每次 Init 后至多 Start 一次并调用一次 Stop；Stop 后不支持重新 Start，必须 Destroy 后重新 Init。实例使用 `DominoModuleLifecycleState` 区分未初始化、已初始化、已启动、已停止；有效日志在未 Start 或 Stop 后写入直接致命退出，不会入队或等待。空实例、非法等级和未匹配／被等级过滤的模块继续丢弃；其他实例继续正常运行。
+- Destroy 要求 Stop 已完成，只关闭各模块文件和实例默认文件、销毁队列并清空对象，不内部停止或 join writer。继承的默认文件只关闭一次；stdout 不关闭，日志服务不刷新 stderr。Stop 的刷新使用 fflush，不承诺磁盘 fsync。销毁后可在原地址重新初始化；空指针、未初始化、重复 Stop／Destroy、未 Stop 就 Destroy 和 Stop 后 Start 均直接输出 stderr 并退出。
+- stdout 由进程共享，实例之间没有全局输出顺序；文件输出需要隔离时为各实例和模块设置不同路径。tid 是进程内分配并在线程局部缓存的数字标识。
+
+## 通用线程队列
+
+接口和生命周期约定见 `shared/include/domino_shared_queue.h`。首次队列对象须零初始化，Init 拒绝已初始化对象；Destroy 拒绝空指针、未初始化和重复销毁。队列没有自己的线程，全部使用者停止访问后即可 Init → Destroy，无需虚构 Start／Stop。BeginFlush、WakeAll 仍保留各自的通知与排空语义。队列按固定元素大小复制数据，只维护首字段 ID；
+engine 业务消息定义保留在 `engine/src/queue/thread_message.h`，调用方按需显式包含，日志不依赖这些业务类型。
+`domino-shared` 导出标准线程链接依赖，macOS 的 TinyCThread 依赖也由 shared 统一传递。
+
+队列通过 `initialized` 明确表示实例是否已初始化，供公共入口在加锁前检查；Init 完整建立资源后置为 true，Destroy 清空对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会随扩容变化，均不承担初始化状态判断。Init 使用调用方的零对象或 Destroy 已清空的对象，不重复整体清零。Produce／ProduceBlocking 共用一处参数与初始化校验，Consume 复用 ConsumeBatch；不为内部等待、扩容或复制辅助步骤重复添加边界检查。条件等待会释放锁，唤醒后仍须重新检查 `flushing_flag`、元素数、容量或 `wake_epoch`；两个等待者计数共同用于区分等待类型并选择通知；`waiter_count` 同时用于销毁前检查是否仍有等待者，均须保留。
+
+队列用一个 `flushing_flag` 表示排空状态。`dominoThreadQueueBeginFlush()` 在锁内设置该状态、推进唤醒版本并通知全部等待者；进入后不提供恢复，销毁并重新 Init 才可再次生产。
+排空状态下，Produce 和 ProduceBlocking 拒绝新消息并返回 `ERR_QUEUE_FLUSHING`；Consume 和 ConsumeBatch 继续返回已有消息，排空后才返回此结果；Wait 立即返回此结果，不保证队列已空。BeginFlush 不消费消息或等待线程退出，调用方仍负责载荷释放、线程 join 和销毁顺序。
+队列 `Init`、`BeginFlush`、`Destroy` 返回 void；任何阶段的分配、同步、ID 耗尽故障都直接打印 stderr 并 exit。
+参数错误、非阻塞满队列、空队列和排空状态仍是调用方处理的结果；队列不自行决定业务日志等级。
+运行期间通过 `WakeAll` 通知业务状态变化，不改变 `flushing_flag`；唤醒版本、条件等待和 join 协议继续承担正常生命周期同步。

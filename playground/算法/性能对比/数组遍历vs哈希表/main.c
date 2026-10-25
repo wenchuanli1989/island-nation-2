@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "domino_shared_common.h"
 #include "khash.h"
 
 /* 64 字节值类型 */
@@ -24,7 +25,9 @@ KHASH_MAP_INIT_INT64(u64_v4000, Val4000)
 
 static double now(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "读取性能计时失败");
+    }
     return ts.tv_sec + ts.tv_nsec * 1e-9;
 }
 
@@ -37,6 +40,9 @@ static void fill_u64_v64(khash_t(u64_v64) * h, uint64_t* keys) {
         keys[i] = k;
         int ret;
         khiter_t it = kh_put(u64_v64, h, (khint64_t)k, &ret);
+        if (ret < 0) {
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配 64 字节值哈希表存储失败");
+        }
         memset(&kh_value(h, it), (int)(k & 0xff), sizeof(Val64));
     }
 }
@@ -47,6 +53,9 @@ static void fill_u64_v4000(khash_t(u64_v4000) * h, uint64_t* keys) {
         keys[i] = k;
         int ret;
         khiter_t it = kh_put(u64_v4000, h, (khint64_t)k, &ret);
+        if (ret < 0) {
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配 4000 字节值哈希表存储失败");
+        }
         memset(&kh_value(h, it), (int)(k & 0xff), sizeof(Val4000));
     }
 }
@@ -98,18 +107,23 @@ int main(void) {
     uint64_t* keys = malloc(N * sizeof(uint64_t));
     uint64_t* test_keys = malloc(LOOKUPS * sizeof(uint64_t));
     if (!keys || !test_keys) {
-        fprintf(stderr, "malloc failed\n");
-        return 1;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配性能测试键数组失败");
     }
 
     /* 值类型 64 字节 */
     khash_t(u64_v64)* h64 = kh_init(u64_v64);
+    if (h64 == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配 64 字节值哈希表失败");
+    }
     fill_u64_v64(h64, keys);
     pick_test_keys(keys, test_keys, LOOKUPS);
     double t64 = bench_u64_v64(h64, test_keys, LOOKUPS);
 
     /* 值类型 4000 字节 */
     khash_t(u64_v4000)* h4000 = kh_init(u64_v4000);
+    if (h4000 == nullptr) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "分配 4000 字节值哈希表失败");
+    }
     fill_u64_v4000(h4000, keys);
     pick_test_keys(keys, test_keys, LOOKUPS);
     double t4000 = bench_u64_v4000(h4000, test_keys, LOOKUPS);

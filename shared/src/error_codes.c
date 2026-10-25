@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "domino_shared_error_codes.h"
 
 [[nodiscard]] const char* dominoErrorCodeToString(DOMINO_CODE err) {
@@ -129,25 +126,12 @@
             return "队列为空";
         case ERR_QUEUE_FULL:
             return "队列已满";
-        case ERR_QUEUE_PRODUCER_STOPPED:
-            return "队列生产端已停止";
-        case ERR_QUEUE_CONSUMER_STOPPED:
-            return "队列消费端已停止";
+        case ERR_QUEUE_FLUSHING:
+            return "队列处于排空状态";
         case ERR_COMMON:
             return "通用错误";
         case ERR_UNKNOWN:
         default:
             return "未知错误";
-    }
-}
-
-void dominoAssertErrorCode(DOMINO_CODE err, bool is_abort, const char* file, int line) {
-    if (err != CODE_OK) {
-        const char* err_str = dominoErrorCodeToString(err);
-        (void)fprintf(stderr, "[%s:%d] 错误码 %d (%s)\n", file, line, (int)err, err_str);
-
-        if (is_abort) {
-            abort();
-        }
     }
 }

@@ -4,5 +4,6 @@ add_executable(domino-engine-remote-server
 )
 
 target_link_libraries(domino-engine-remote-server
+    domino-shared
     domino-engine
 )

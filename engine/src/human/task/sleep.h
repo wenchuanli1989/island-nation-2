@@ -12,6 +12,7 @@
  * now_ms 使用同一世界累计未冻结现实毫秒，调用顺序不得倒退，0 与 UINT32_MAX 均可作为时刻。
  * approved_sleep_building_id 由可信调用方确认睡眠许可；内核仅复核非零 ID、建筑存在、人物确实同楼及行为目标一致。
  * 首版只执行无父子／停止关系的单行为睡眠，允许选择任一通道，但不与其他活动任务并行。
+ * 参数、资格和记录校验仅返回业务结果，由调用方决定诊断和错误处理；分配失败在检测处直接终止进程。
  */
 
 /** @brief 从值快照构造单行为睡眠草案，不读取世界、不分配任务 ID、不修改需求或日程。
@@ -22,7 +23,7 @@
  * @param snapshot_ms 计划开始的累计未冻结现实毫秒。
  * @param draft_out_ptr 成功时写入无 ID 的 PLANNED 草案；调用方不得以仍持有行为块的草案作为输出。
  * @return CODE_OK 成功；空输出返回 ERR_NULL_POINTER；非法 ID/通道返回 ERR_INVALID_PARAM；精力值或到期时刻越界返回
- * ERR_OUT_OF_RANGE；未达到睡眠触发条件返回 ERR_GAME_STATE_INVALID；分配失败返回 ERR_MEMORY_ALLOC。
+ * ERR_OUT_OF_RANGE；未达到睡眠触发条件返回 ERR_GAME_STATE_INVALID；分配失败直接打印致命错误并终止进程。
  * @note 成功后调用方独占行为块，须提交转移或释放；失败保持输出不变。
  * 本函数仅校验值输入，不证明人物、建筑、授权或通道目前仍有效。
  */
@@ -38,7 +39,7 @@ DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, domino_bu
  * @param task_id_out_ptr 成功时写入新任务 ID；失败保持原值。
  * @return CODE_OK 成功；版本、地点、活动槽或精力条件变化返回 ERR_GAME_STATE_INVALID；已有未终结睡眠返回
  * ERR_ALREADY_EXISTS；建筑不存在返回 ERR_NOT_FOUND；提交时刻早于草案采样返回 ERR_INVALID_PARAM；任务容量耗尽返回
- * ERR_CAPACITY_EXCEEDED；其他参数、记录、时间或分配错误直接传播。
+ * ERR_CAPACITY_EXCEEDED；其他参数、记录或时间错误直接传播；分配失败直接打印致命错误并终止进程。
  * @note 跨线程草案须先由调用方核对规划请求身份与当前授权。这里只重验睡眠所需事实，三个活动槽须为空。
  * 失败不修改世界且草案仍拥有行为块；成功后 store 接管，draft_ptr->behaviors_ptr 清空。任务取号允许留下空洞。
  * 晚到草案不补算过去收益，真正启动仍按当时需求重新估时。
@@ -54,7 +55,7 @@ DOMINO_CODE dominoHumanCommitSleepTaskDraft(DominoTask* draft_ptr, DominoHumanDa
  * @param task_id_out_ptr 成功时写入新任务 ID；失败保持原值。
  * @return CODE_OK 成功；空参数返回 ERR_NULL_POINTER；非法通道/授权或倒退时刻返回 ERR_INVALID_PARAM；资格改变返回
  * ERR_GAME_STATE_INVALID；已有未终结睡眠返回 ERR_ALREADY_EXISTS；建筑不存在返回 ERR_NOT_FOUND；任务容量耗尽返回
- * ERR_CAPACITY_EXCEEDED；记录损坏、时间范围或分配错误直接传播。
+ * ERR_CAPACITY_EXCEEDED；记录损坏或时间范围错误直接传播；分配失败直接打印致命错误并终止进程。
  * @note 要求三个活动槽均为空，且本人没有未终结的睡眠任务；不自动回收终态任务。
  * 行为块仅在 store 接收成功后转移所有权；失败不修改人物、需求或任务清单。
  */

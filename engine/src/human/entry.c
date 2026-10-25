@@ -1,7 +1,8 @@
 #include "entry.h"
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 #include "executor.h"
+#include "planner.h"
 #include "store.h"
 
 DominoHumanVec domino_all_human_list;
@@ -34,29 +35,31 @@ static void releaseHumanEntities(void) {
     kv_init(domino_all_human_data_list);
 }
 
-DOMINO_CODE dominoHumanModuleInit(void) {
-    kv_init(domino_all_human_list);
-    kv_init(domino_all_human_data_list);
+void dominoHumanModuleInit(void) {
     dominoHumanIdMap = dominoHumanIdMap_init();
     if (!dominoHumanIdMap) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR, "cannot allocate human ID map");
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot allocate human ID map");
     }
 
-    DOMINO_CODE result = dominoHumanStoreInit();
-    if (result != CODE_OK) {
-        return result;
-    }
-    result = dominoHumanExecutionInit();
-    if (result != CODE_OK) {
-        return result;
-    }
-
-    return CODE_OK;
+    dominoHumanStoreInit();
+    dominoHumanExecutionInit();
 }
 
-void dominoHumanModuleExit(void) {
-    dominoHumanExecutionExit();
-    dominoHumanStoreExit();
+void dominoHumanModuleStart(void) {
+    /* time 仍冻结；执行器就绪后再启动规划线程，全部就绪后由引擎解冻。 */
+    dominoHumanExecutionStart();
+    dominoHumanPlannerStart();
+}
+
+void dominoHumanModuleStop(void) {
+    /* 执行器最后一批仍可提交规划；先结束生产者，再 join 规划线程。 */
+    dominoHumanExecutionStop();
+    dominoHumanPlannerStop();
+}
+
+void dominoHumanModuleDestroy(void) {
+    dominoHumanPlannerDestroy();
+    dominoHumanExecutionDestroy();
+    dominoHumanStoreDestroy();
     releaseHumanEntities();
 }

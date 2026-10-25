@@ -10,7 +10,7 @@
 
 ```
 domino/
-├── shared/              # 公共类型、错误码、文件/时间/路径工具
+├── shared/              # 公共类型、错误码、日志、线程队列及文件/时间/路径工具
 ├── engine/              # 本地引擎核心，包含 common/host/human/nav/social/storage/time/logger
 ├── engine-remote/       # 远程引擎桥接层目录，当前仍处于骨架阶段
 │   ├── local/           # 计划用于本地代理远程 engine
@@ -19,26 +19,51 @@ domino/
 └── playground/          # 算法实验和子系统原型验证
 ```
 
+client-hub 与 engine-remote/local 当前仍只管理各自的日志资源，公开入口也统一为四阶段：
+
+| 模块 | 初始化 | 启动 | 停止 | 销毁 |
+| --- | --- | --- | --- | --- |
+| client-hub | `dominoClientHubInit()` | `dominoClientHubStart()` | `dominoClientHubStop()` | `dominoClientHubDestroy()` |
+| engine-remote/local | `dominoEngineRemoteLocalInit()` | `dominoEngineRemoteLocalStart()` | `dominoEngineRemoteLocalStop()` | `dominoEngineRemoteLocalDestroy()` |
+
+调用方按 Init → Start → Stop → Destroy 管理顺序；仅 Init 的实例也须先 Stop 再 Destroy。Start 只启动线程，Stop 排空日志并 join，Destroy 释放资源；销毁后可重新 Init。这些骨架入口尚未代管 engine 的生命周期，原有一次性运行入口已移除。
+
+引擎对外 Init／Start／Stop／Destroy 严格检查以下状态转换及调用线程，并保留 STARTING／STOPPING／DESTROYING 等协调状态。重复或错序调用在操作资源前直接输出 stderr 并退出，不静默返回，不依赖 assert。受引擎编排的内部模块和辅助调用链遵循资源有效的前置条件，不重复检查已由引擎保证的模块、索引或固定队列初始化条件，也不维护仅为这些重复检查存在的状态或查询接口。可直接调用的公共业务入口仍校验自身访问资格与输入，例如公开道路增删接口保留初始化资格检查。
+
+| 方法 | 允许的进入状态 | 成功后的状态 |
+| --- | --- | --- |
+| Init | 未初始化 | 已初始化 |
+| Start | 已初始化 | 运行中 |
+| Stop | 已初始化或运行中 | 已停止 |
+| Destroy | 已停止 | 未初始化 |
+
+仅 Init 的引擎 Stop 跳过 human／timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 InitBefore → InitAfter → DestroyBefore → DestroyAfter 调用；time 无独立 Init，由引擎保证在客户端 DESTROYING 路径中复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
+
 ### 当前引擎生命周期
 
 `dominoEngineInit(launch_config)` 按固定顺序初始化模块：
 
 ```text
-logger -> common -> host -> nav(before) -> social -> human -> time(before) -> storage(load) -> nav(after) -> time(after)
+logger -> main queues -> common -> host -> nav(before) -> social -> human -> timer -> storage(load) -> nav(after)
 ```
 
-- `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，查询、读取或解析失败均返回错误。
+- `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，其他查询、读取或解析失败均打印 stderr 并退出进程。
 - `launch_config.storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载使用存档自身声明的校验策略。
-- 每次 `dominoEngineInit()` 都先建立空世界基线，再从当前 `storage_path` 覆盖加载；上一轮成功 Exit 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
+- Init 准备日志文件、主循环双向队列、human 执行／规划队列与运行映射表、timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
+- 每次 `dominoEngineInit()` 使用静态初值或上一轮 Destroy 已恢复的空世界基线，再从当前 `storage_path` 加载；上一轮成功 Destroy 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
-`dominoEngineRun()` 由客户端准备主循环消息队列和运行通知，在时钟保持冻结时直接调用 human Start 完成启动校验并建立执行／规划线程，再启动 timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行；原本等待中的线程保持等待，恢复或退出时再唤醒。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围并返回错误码。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
+`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行；原本等待中的线程保持等待，恢复或退出时再唤醒。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
-运行中的世界经客户端调用 `dominoEngineExit()` 进入 `STOPPING`，先发布退出标志、冻结时钟并校验退出时刻 T，再直接唤醒主循环和全部业务线程；已经暂停的世界无需解冻。主循环和各业务线程完成当前有限批次后退出，主循环不再协调停钟或收尾。客户端依次 join 主循环、human 执行／规划线程和 timer，再将人物结算到 T 并清理队列；相关线程停止前，其投递目标和 timer 登记入口保持有效。随后客户端释放运行资源，准备 nav 派生状态、事务式保存存档，最后按依赖逆序释放世界模块，日志保持到保存完成后才关闭。普通暂停不遍历人物结算。仅 Init、未 Run 的世界也可直接保存退出。成功 Exit 回到未初始化状态，允许同进程建立新世界。
+所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行／规划线程和 timer，再将人物结算到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
 
-Init／Run／Exit、Freeze／Thaw 的生命周期状态、参数校验和资源步骤返回错误时，子模块直接向上传递并记录实例首错；队列满和后台运行故障同样进入 `FAILED` 并唤醒等待者。不执行失败清理、回滚或重试，也不由引擎主动 `abort()`／`exit()`。`FAILED` 后唯一允许调用的引擎接口是只读的 `dominoEngineGetLifecycleError()`；宿主报告错误并结束进程，在此之前残留线程可能访问的资源须保持有效，失败实例不可重用，不保证违规重复调用其他 API 会返回已记录错误。保存失败同样如此，磁盘事务由后续新进程加载时恢复。`lib/` 中库函数的既有终止行为保留，允许其内部触发 `abort()`，不转换成生命周期错误；其他内存分配失败按接口契约传播，具体规则见 [`CODING_STANDARDS.md`](CODING_STANDARDS.md#41-内存分配失败策略)。
+Init／Start／Stop／Destroy、Freeze／Thaw 等生命周期接口返回 `void`。无论处于初始化、开始、停止、冻结、解冻、销毁还是运行阶段，致命错误都通过 `DOMINO_EXIT_WITH_ERROR` 直接输出到 stderr，再由 `common.c` 中的公共方法执行 `exit(EXIT_FAILURE)`；标准退出处理仍可执行。不再维护实例首错、`FAILED` 生命周期状态或跨线程故障传播。正常启动就绪、生命周期状态、通知、join 和资源释放顺序继续保留；失败退出不进入正常保存或清理流程。保存失败由后续新进程按磁盘事务恢复。`lib/` 下第三方库代码保持原样，其原有终止行为保留，不纳入项目自有模块的退出实现改造。
 
-Init／Exit 调用链不经运行期日志队列记录生命周期诊断，原错误直接上抛，由宿主报告；logger 关闭排空、刷新或关闭文件失败同样上抛并停止后续释放。正常运行期日志仍遵循原有错误策略。
+业务资格拒绝、查询未命中、队列为空及正常排空结束仍按接口返回业务或控制结果，不统一视为致命错误。运行阶段的非致命错误和正常日志通过日志模块输出；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。日志级别不决定是否退出，致命错误必须显式调用公共退出方法。所有等级日志按模块文件、实例默认文件、stdout 的顺序选择唯一输出目标，日志内容不写 stderr；日志队列满时向当前模块的同一输出流同步提示一次并刷新，再通过条件变量等待直到入队。业务队列仍非阻塞入队，内部运行链路无法继续交付必要消息时直接报错退出。logger 在 Init 中以追加模式打开文件并准备队列，Start 创建 writer，Stop 排空队列、join writer 并刷新输出，Destroy 关闭所拥有的文件并释放队列，调用方显式管理顺序；stdout 只刷新、不关闭。
+
+首次 Init 使用静态初值，再次 Init 使用上一轮 Destroy 已复位的空状态；Init 只创建资源、绑定本轮配置和加载数据，不重复清空全局容器、世界计数或模块结构。time 无独立 Init 重置或提前采样，加载只恢复累计基准，Start 解冻时才建立单调起点。通用 queue／logger 首次对象须以静态初值、`={0}` 或 `calloc` 零初始化，Init 在创建资源前检测重复调用；Destroy 后可直接再次 Init。
+
+Destroy 返回前，common、host、social 等模块的容器指针、数量、容量及索引指针均已清空，timer 的线程句柄存储和唤醒状态随模块整体复位；引擎配置、路径及线程句柄存储也恢复初始值。世界保存和容器释放完成后调用 `dominoTimeModuleDestroy()`，把内存中的累计基准、单调采样起点及快照版本归零，保持冻结。不依赖下一次 Init 覆盖旧状态，也不改动已保存的累计时间；再次加载同一存档时继续恢复原基准。
 
 ### 数据与存档
 
@@ -56,7 +81,7 @@ Init／Exit 调用链不经运行期日志队列记录生命周期诊断，原�
 
 `lib/klib/` 只保留 Domino 当前使用的 `kvec.h` 和 `khashl.h`。官方基线为 [attractivechaos/klib](https://github.com/attractivechaos/klib) master，2026-06-04 对比到 commit `97a0fcb790b43b9e5da8994f4671021fec036f19`；官方源码见 [`kvec.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/kvec.h) 和 [`khashl.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/khashl.h)。本仓库版本属于随仓维护版：保留官方数据结构、宏接口和核心算法，只围绕 Domino 的高频内存访问、错误可诊断性和静态检查要求做窄范围补丁。
 
-- `kvec.h`：`kv_*` 扩容通过 `kv_realloc_array()` 检查大小溢出，并在分配失败时输出诊断后 `abort()`。生命周期、存档和运行期均使用原有公开接口，保留库内部的终止行为，不额外增加可失败接口或绕过层。数组布局、增长策略和原公开宏接口保持不变。
+- `kvec.h`：`kv_*` 扩容通过 `kv_realloc_array()` 检查大小溢出，并在分配失败时输出诊断后 `abort()`。`lib/` 下第三方库代码保持原样；生命周期、存档和运行期均使用原有公开接口，保留库内部的终止行为，不额外增加可失败接口或绕过层。数组布局、增长策略和原公开宏接口保持不变。
 - `khashl.h`：保留官方 `r30` 的开放寻址、75% 默认负载因子、Fibonacci hashing、bucket 布局和使用方式。本地只补强错误传播和边界保护：`KHASHL_SET_INIT`/`KHASHL_MAP_INIT` 生成的 `prefix##_resize()` 返回底层 resize 结果；收缩分支先保存 `Krealloc()` 返回值，失败时返回 `-1`，避免直接覆盖原 `keys` 指针；`kh_exist()` 增加 `x < kh_end(h)` 判断，降低错误迭代器导致越界读的风险。
 - 静态分析适配：两个头文件包裹 `NOLINTBEGIN`/`NOLINTEND`，屏蔽 klib 宏内部短变量名和多声明风格对 clang-tidy 的噪声，避免第三方宏风格污染项目质量检查。
 - 后续同步原则：从官方 klib 更新时优先保留上述本地补丁；如果官方已经覆盖同类修正，再移除本地重复补丁，保持差异可解释、可审计。
@@ -69,16 +94,17 @@ Init／Exit 调用链不经运行期日志队列记录生命周期诊断，原�
 
 ### 环境要求
 
-- CMake 4.2+
-- Clang（C23）
+- Linux 目标环境：Ubuntu 26.04 LTS，glibc 2.43+；时间采样依赖 `timespec_get` 的 `TIME_UTC` 和 `TIME_MONOTONIC`。
+- CMake 4.2.1+
+- Clang 22（C23）；编译器支持 C23 不代表系统 C 库已提供 `TIME_MONOTONIC`。
 - Docker / Docker Compose（可选，用于远程开发）
 
 ---
 
 ### macOS 本地调试（当前 Intel Mac）
 
-本地适配范围为默认引擎 Playground 的 Debug；其他构建和分析模式仍使用 Linux/Docker。
-使用系统 Clang、CMake 4.2.1+，在仓库根目录执行：
+本地调试入口保留，范围为默认引擎 Playground 的 Debug。当前时间采样要求 SDK 和运行库支持 `timespec_get(TIME_MONOTONIC)`；缺少该能力的 macOS 环境使用上述 Linux/Docker 环境。
+满足此条件时，使用支持 C23 的 Clang、CMake 4.2.1+，在仓库根目录执行：
 
 ```bash
 ./scripts/build.sh macos-debug
@@ -131,6 +157,8 @@ VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击`
 ---
 
 ### 开发环境（Docker + VSCode Remote）
+
+镜像基于 Ubuntu 26.04 LTS（glibc 2.43），LLVM 22 和 Kitware 软件源均使用 `resolute` 发行版。
 
 1. 启动开发环境：`./setup-dev.sh`
 2. 连接 VSCode：

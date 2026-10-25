@@ -1,13 +1,21 @@
 #include "logger/entry.h"
 
 #include "domino_client_hub.h"
+#include "domino_shared_common.h"
 
-int domino_client_hub_run(void) {
-    DOMINO_CODE result = dominoClientHubLoggerInit((DominoLogConfig){0});
-    if (result != CODE_OK) {
-        return result;
-    }
+void dominoClientHubInit(void) {
+    dominoClientHubLoggerInit((DominoLogConfig){0});
+}
 
-    DOMINO_CLIENT_HUB_LOG_MSG(DOMINO_LOG_LEVEL_INFO, "domino client hub run");
-    return dominoClientHubLoggerExit();
+void dominoClientHubStart(void) {
+    dominoClientHubLoggerStart();
+    DOMINO_PRINT_MESSAGE("domino client hub started");
+}
+
+void dominoClientHubStop(void) {
+    dominoClientHubLoggerStop();
+}
+
+void dominoClientHubDestroy(void) {
+    dominoClientHubLoggerDestroy();
 }

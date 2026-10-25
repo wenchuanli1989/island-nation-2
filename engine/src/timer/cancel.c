@@ -1,96 +1,84 @@
+#include "../queue/thread_message.h"
 #include "internal.h"
 
-/** @brief 调用方持请求锁；在队列锁内按登记 ID 和业务队列查找并标记请求。 */
-static DOMINO_CODE cancelQueuedTimer(DominoThreadQueue* queue_ptr, domino_timer_id_t timer_id, DominoThreadQueue* event_queue_ptr,
-                                     bool* found_out_ptr) {
-    checkThreadResult(mtx_lock(&queue_ptr->mutex), ERR_MUTEX_LOCK, "mtx_lock");
-    DOMINO_CODE code = ERR_NOT_FOUND;
-    *found_out_ptr = false;
-    bool command_flag = queue_ptr == &g_domino_timer.command_queue;
+/**
+ * @brief 在固定命令队列中按登记 ID 标记取消；找到返回 true，未找到返回 false。
+ * @pre 调用方持有 request_mutex。
+ */
+static bool cancelTimerCommand(domino_timer_id_t timer_id) {
+    DominoThreadQueue* queue_ptr = &g_domino_timer.command_queue;
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&queue_ptr->mutex), ERR_MUTEX_LOCK, "mtx_lock");
+    bool found_flag = false;
+    DominoTimer* items_ptr = queue_ptr->items_ptr;
     uint32_t index = queue_ptr->head;
     for (uint32_t i = 0U; i < queue_ptr->count; ++i) {
-        void* item_ptr = (uint8_t*)queue_ptr->items_ptr + (size_t)index * queue_ptr->item_size;
-        DominoTimer* timer_ptr = nullptr;
-        if (command_flag) {
-            timer_ptr = item_ptr;
-        } else {
-            DominoThreadMessage* message_ptr = item_ptr;
-            if (message_ptr->items_type == DOMINO_THREAD_MESSAGE_TIMER) {
-                if (message_ptr->items_ptr == nullptr || message_ptr->items_size != sizeof(DominoTimer)) {
-                    code = ERR_INVALID_MESSAGE;
-                    break;
-                }
-                timer_ptr = message_ptr->items_ptr;
-            }
-        }
-        if (timer_ptr != nullptr && (command_flag ? timer_ptr->id : timer_ptr->timer_id) == timer_id &&
-            timer_ptr->event_queue_ptr == event_queue_ptr) {
-            *found_out_ptr = true;
-            if (!timer_ptr->cancelled_flag) {
-                timer_ptr->cancelled_flag = true;
-                code = CODE_OK;
-            }
+        DominoTimer* timer_ptr = &items_ptr[index];
+        if (timer_ptr->timer_id == timer_id) {
+            timer_ptr->cancelled_flag = true;
+            found_flag = true;
             break;
         }
         if (++index == queue_ptr->capacity) {
             index = 0U;
         }
     }
-    checkThreadResult(mtx_unlock(&queue_ptr->mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
-    if (code == ERR_INVALID_MESSAGE) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器时遇到无效 TIMER 消息: 载荷为空或大小不匹配");
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&queue_ptr->mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
+    return found_flag;
+}
+
+/**
+ * @brief 在指定业务队列中按类型和登记 ID 标记取消；找到返回 true，未找到返回 false。
+ * @pre 调用方持有 request_mutex，且已确认队列初始化并存储 DominoThreadMessage。
+ */
+static bool cancelTimerEvent(DominoThreadQueue* event_queue_ptr, domino_timer_id_t timer_id) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&event_queue_ptr->mutex), ERR_MUTEX_LOCK, "mtx_lock");
+    bool found_flag = false;
+    DominoThreadMessage* items_ptr = event_queue_ptr->items_ptr;
+    uint32_t index = event_queue_ptr->head;
+    for (uint32_t i = 0U; i < event_queue_ptr->count; ++i) {
+        DominoThreadMessage* message_ptr = &items_ptr[index];
+        if (message_ptr->type == DOMINO_THREAD_MESSAGE_TIMER && message_ptr->payload.timer.timer_id == timer_id) {
+            message_ptr->payload.timer.cancelled_flag = true;
+            found_flag = true;
+            break;
+        }
+        if (++index == event_queue_ptr->capacity) {
+            index = 0U;
+        }
     }
-    return code;
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&event_queue_ptr->mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
+    return found_flag;
 }
 
 DOMINO_CODE dominoTimerCancel(domino_timer_id_t timer_id, DominoThreadQueue* event_queue_ptr) {
-    if (!g_domino_timer.initialized_flag) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器失败: 计时器模块未初始化");
-        return ERR_NOT_INITIALIZED;
-    }
-    const DOMINO_CODE failure_code = dominoEngineGetLifecycleError();
-    if (failure_code != CODE_OK) {
-        return failure_code;
-    }
     if (timer_id == 0U) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器失败: timer_id 为 0");
         return ERR_INVALID_PARAM;
     }
     if (event_queue_ptr == nullptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器失败: 业务队列指针为空");
         return ERR_NULL_POINTER;
     }
-    if (!event_queue_ptr->initialized) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器失败: 业务队列未初始化");
-        return ERR_NOT_INITIALIZED;
-    }
     if (event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "取消计时器失败: 业务队列元素大小错误: item_size=%zu",
-                          event_queue_ptr->item_size);
         return ERR_INVALID_PARAM;
     }
-    checkThreadResult(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
-    bool found_flag;
-    DOMINO_CODE code = cancelQueuedTimer(&g_domino_timer.command_queue, timer_id, event_queue_ptr, &found_flag);
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
+    bool found_flag = cancelTimerCommand(timer_id);
     if (found_flag) {
         goto unlock;
     }
     for (uint32_t i = 1U; i <= g_domino_timer.heap.count; ++i) {
         DominoTimer* timer_ptr = &g_domino_timer.heap.events_ptr[i];
-        if (timer_ptr->timer_id == timer_id && timer_ptr->event_queue_ptr == event_queue_ptr) {
-            if (!timer_ptr->cancelled_flag) {
-                timer_ptr->cancelled_flag = true;
-                code = CODE_OK;
-            }
+        if (timer_ptr->timer_id == timer_id) {
+            timer_ptr->cancelled_flag = true;
+            found_flag = true;
             goto unlock;
         }
     }
-    code = cancelQueuedTimer(event_queue_ptr, timer_id, event_queue_ptr, &found_flag);
+    found_flag = cancelTimerEvent(event_queue_ptr, timer_id);
 unlock:
-    if (code == CODE_OK) {
+    if (found_flag) {
         g_domino_timer.wake_pending_flag = true;
-        checkThreadResult(cnd_signal(&g_domino_timer.wake_condition), ERR_CONDITION_SIGNAL, "cnd_signal");
+        DOMINO_REQUIRE_THREAD_SUCCESS(cnd_signal(&g_domino_timer.wake_condition), ERR_CONDITION_SIGNAL, "cnd_signal");
     }
-    checkThreadResult(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
-    return code;
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
+    return found_flag ? CODE_OK : ERR_NOT_FOUND;
 }

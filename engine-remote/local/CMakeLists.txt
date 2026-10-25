@@ -12,5 +12,6 @@ target_include_directories(domino-engine-remote-local PUBLIC
 )
 
 target_link_libraries(domino-engine-remote-local PUBLIC
+    domino-shared
     domino-engine
 )

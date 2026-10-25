@@ -17,23 +17,25 @@ extern char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX];
 extern DominoEngineLaunchConfig g_domino_engine_launch_config;
 
 /** @brief 判断当前线程是否为 Init 登记的客户端线程。
- * @pre 调用方已校验接口允许的生命周期状态，确保本次 Init 已成功且尚未完成 Exit。
+ * @pre 调用方已校验接口允许的生命周期状态，确保本次 Init 已成功且尚未完成 Destroy。
  */
 extern bool dominoEngineIsClientThread(void);
 
-/** @brief 查询正常退出请求；业务线程仅在批次边界观察，当前批次仍可向存活队列投递。 */
-extern bool dominoEngineIsStopRequested(void);
-
-/** @brief 保存本次实例首个失败并唤醒主循环及客户端消息等待者；可由任意工作线程调用。
- * @note 不记录日志、不取得业务模块锁、不 join 或释放资源；后续业务入口拒绝继续运行。
+/** @brief 查询生命周期是否处于 STOPPING；业务线程仅在批次边界观察，当前批次仍可向存活队列投递。
+ * @note 运行过的实例在业务线程 join、人物结算和日志排空后进入 STOPPED；仅 Init 的实例跳过所有 join 和结算，logger 关闭入队并刷新。
+ * 资源留到 Destroy 释放；其他生命周期状态均返回 false。
  */
-extern DOMINO_CODE dominoEngineReportFailure(DOMINO_CODE code);
+extern bool dominoEngineIsStopping(void);
+
+/** @brief 查询是否处于 RUNNING，供已通过引擎访问检查的业务入口选择同步处理或线程投递。 */
+extern bool dominoEngineIsRunning(void);
 
 /**
  * @brief 引擎工作线程向客户端发送消息。
+ * @pre 引擎已准备客户端收件队列，并在全部投递线程 join 前保持队列有效；本接口不重复校验生命周期。
  * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
- * @return 入队成功返回 CODE_OK；队列满等传输错误终结实例，不等待空位。
+ * @note 队列满等传输故障直接打印致命错误并退出进程，不等待空位。
  */
-extern DOMINO_CODE dominoLoopProduceToMain(DominoEngineMessage* message_ptr);
+extern void dominoLoopProduceToMain(DominoEngineMessage* message_ptr);
 
 #endif

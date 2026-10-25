@@ -1,9 +1,9 @@
-#include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <unistd.h>
 
 #include "domino_engine.h"
+#include "domino_shared_common.h"
 
 int main(int argc, char* argv[]) {
     (void)argc;
@@ -11,39 +11,28 @@ int main(int argc, char* argv[]) {
     // dominoEnginePlayground(argc, argv);
     char cwd[1024] = {0};
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
-        printf("当前目录路径: %s\n", cwd);
+        DOMINO_PRINT_MESSAGE("当前目录路径: %s", cwd);
     } else {
-        (void)fprintf(stderr, "获取当前目录失败\n");
-        return 1;
+        DOMINO_EXIT_WITH_ERROR(ERR_SYSTEM, "获取当前目录失败");
     }
     char runtime_sandbox_path[1024] = {0};
     int path_len = snprintf(runtime_sandbox_path, sizeof(runtime_sandbox_path), "%s/runtime/sandbox", cwd);
-    if (path_len < 0 || (size_t)path_len >= sizeof(runtime_sandbox_path)) {
-        (void)fprintf(stderr, "沙盒目录路径过长\n");
-        return 1;
+    if (path_len < 0) {
+        DOMINO_EXIT_WITH_ERROR(ERR_STRING_FORMAT, "沙盒目录路径格式化失败");
     }
-    printf("沙盒目录路径: %s\n", runtime_sandbox_path);
-    DOMINO_CODE init_rc = dominoEngineInit((DominoEngineLaunchConfig){
+    if ((size_t)path_len >= sizeof(runtime_sandbox_path)) {
+        DOMINO_EXIT_WITH_ERROR(ERR_BUFFER_TOO_SMALL, "沙盒目录路径过长");
+    }
+    DOMINO_PRINT_MESSAGE("沙盒目录路径: %s", runtime_sandbox_path);
+    dominoEngineInit((DominoEngineLaunchConfig){
         .storage_path = runtime_sandbox_path,
         .storage_integrity_verify = 0,
     });
-    if (init_rc != CODE_OK) {
-        (void)fprintf(stderr, "dominoEngineInit failed: %d\n", init_rc);
-        return 1;
-    }
 
     DominoEngineClientData client_data;
 
-    DOMINO_CODE run_rc = dominoEngineRun(&client_data);
-    if (run_rc != CODE_OK) {
-        (void)fprintf(stderr, "dominoEngineRun failed: %d\n", run_rc);
-        return 1;
-    }
-    printf("runtime data: game_date_time_ns=%" PRIu64 "\n", client_data.game_date_time_ns);
-    DOMINO_CODE exit_rc = dominoEngineExit();
-    if (exit_rc != CODE_OK) {
-        (void)fprintf(stderr, "dominoEngineExit failed: %d\n", exit_rc);
-        return 1;
-    }
+    dominoEngineStart(&client_data);
+    dominoEngineStop();
+    dominoEngineDestroy();
     return 0;
 }

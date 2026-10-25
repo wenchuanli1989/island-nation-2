@@ -4,47 +4,39 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
-#include "../logger/entry.h"
+#include "domino_shared_common.h"
 
 static inline bool isEarlier(const DominoTimer* left_ptr, const DominoTimer* right_ptr) {
     return left_ptr->due_ms < right_ptr->due_ms || (left_ptr->due_ms == right_ptr->due_ms && left_ptr->timer_id < right_ptr->timer_id);
 }
 
-static DOMINO_CODE growHeap(DominoTimerHeap* heap_ptr) {
+static void growHeap(DominoTimerHeap* heap_ptr) {
     if (heap_ptr->capacity > UINT32_MAX / 2U) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆扩容超出元素容量范围: capacity=%" PRIu32,
-                          heap_ptr->capacity);
-        return ERR_CAPACITY_EXCEEDED;
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "计时器堆扩容超出元素容量范围: capacity=%" PRIu32, heap_ptr->capacity);
     }
     uint32_t new_capacity = heap_ptr->capacity == 0U ? 128U : heap_ptr->capacity * 2U;
     // 索引 0 不存放元素，分配时额外预留一个位置。
     if ((size_t)new_capacity >= SIZE_MAX / sizeof(DominoTimer)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆分配大小溢出: capacity=%" PRIu32, new_capacity);
-        return ERR_MEMORY_OVERFLOW;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "计时器堆分配大小溢出: capacity=%" PRIu32, new_capacity);
     }
     DominoTimer* events_ptr = realloc(heap_ptr->events_ptr, ((size_t)new_capacity + 1U) * sizeof(*events_ptr));
     if (events_ptr == nullptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "计时器堆内存分配失败: capacity=%" PRIu32, new_capacity);
-        return ERR_MEMORY_ALLOC;
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "计时器堆内存分配失败: capacity=%" PRIu32, new_capacity);
     }
     heap_ptr->events_ptr = events_ptr;
     heap_ptr->capacity = new_capacity;
-    return CODE_OK;
 }
 
-void dominoTimerHeapExit(DominoTimerHeap* heap_ptr) {
+void dominoTimerHeapDestroy(DominoTimerHeap* heap_ptr) {
     free(heap_ptr->events_ptr);
     *heap_ptr = (DominoTimerHeap){0};
 }
 
-DOMINO_CODE dominoTimerHeapPush(DominoTimerHeap* heap_ptr, const DominoTimer* timer_ptr) {
+void dominoTimerHeapPush(DominoTimerHeap* heap_ptr, const DominoTimer* timer_ptr) {
     // 扩容或上浮前复制输入，避免输入恰好引用堆内元素时指针失效。
     DominoTimer timer = *timer_ptr;
     if (heap_ptr->count == heap_ptr->capacity) {
-        DOMINO_CODE code = growHeap(heap_ptr);
-        if (code != CODE_OK) {
-            return code;
-        }
+        growHeap(heap_ptr);
     }
     uint32_t index = ++heap_ptr->count;
     while (index > 1U) {
@@ -56,7 +48,6 @@ DOMINO_CODE dominoTimerHeapPush(DominoTimerHeap* heap_ptr, const DominoTimer* ti
         index = parent_index;
     }
     heap_ptr->events_ptr[index] = timer;
-    return CODE_OK;
 }
 
 const DominoTimer* dominoTimerHeapPeek(const DominoTimerHeap* heap_ptr) {

@@ -3,7 +3,6 @@
 #include <inttypes.h>
 #include <stdatomic.h>
 
-#include "../logger/entry.h"
 #include "domino_shared_common.h"
 
 /** @brief 底层以 64 位纳秒保留采样精度；业务时刻和时长始终使用 domino_runtime_ms_t。 */
@@ -21,7 +20,8 @@ typedef struct DominoTimeCache {
     _Atomic bool frozen;
 } DominoTimeCache;
 
-static DominoTimeCache g_domino_time_cache = {0};
+/** @brief 首次使用及 Destroy 后均为空的冻结快照；加载仅恢复累计基准，解冻时才建立单调起点。 */
+static DominoTimeCache g_domino_time_cache = {.frozen = true};
 
 /** @brief 发布快照并关闭写入窗口；调用方已将 sequence 置为奇数，且持有唯一写入权。 */
 static void publishTimeCache(const DominoTimeSnapshot* next_ptr) {
@@ -71,91 +71,60 @@ void dominoSetRuntimeDateTimeBase(uint64_t base_ns) {
     writeTimeCache(&snapshot);
 }
 
-void dominoTimeModuleInitBefore(void) {
-    const DominoTimeSnapshot snapshot = {
-        .session_start_monotonic_ns = 0,
-        .runtime_datetime_base_ns = 0,
-        .frozen = true,
-    };
-    writeTimeCache(&snapshot);
+void dominoTimeModuleDestroy(void) {
+    atomic_store_explicit(&g_domino_time_cache.session_start_monotonic_ns, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_time_cache.runtime_datetime_base_ns, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_time_cache.frozen, true, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_time_cache.sequence, 0U, memory_order_relaxed);
 }
 
-DOMINO_CODE dominoTimeModuleInitAfter(void) {
-    DominoTimeSnapshot snapshot = readTimeCache();
-    DOMINO_CODE result = dominoMonotonicTimeNsChecked(&snapshot.session_start_monotonic_ns);
-    if (result != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "初始化时间采样失败: code=%d", result);
-        return result;
-    }
-    snapshot.frozen = true;
-    writeTimeCache(&snapshot);
-    return CODE_OK;
-}
-
-/** @brief 只计算时间，不记录日志；冻结发布窗口内调用时不得访问其他模块。 */
-static DOMINO_CODE calculateRuntimeNs(const DominoTimeSnapshot* snapshot_ptr, uint64_t now_monotonic_ns, uint64_t* runtime_ns_ptr) {
+/** @brief 计算累计纳秒；单调时钟倒退或累计值溢出时直接终止进程。 */
+static uint64_t calculateRuntimeNs(const DominoTimeSnapshot* snapshot_ptr, uint64_t now_monotonic_ns) {
     if (now_monotonic_ns < snapshot_ptr->session_start_monotonic_ns) {
-        return ERR_CLOCK_READ;
+        DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "单调时钟倒退: sampled_ns=%" PRIu64 ", start_ns=%" PRIu64, now_monotonic_ns,
+                               snapshot_ptr->session_start_monotonic_ns);
     }
     const uint64_t elapsed_real_ns = now_monotonic_ns - snapshot_ptr->session_start_monotonic_ns;
     if (elapsed_real_ns > UINT64_MAX - snapshot_ptr->runtime_datetime_base_ns) {
-        return ERR_OUT_OF_RANGE;
+        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "累计纳秒溢出: base_ns=%" PRIu64 ", elapsed_ns=%" PRIu64, snapshot_ptr->runtime_datetime_base_ns,
+                               elapsed_real_ns);
     }
-    *runtime_ns_ptr = snapshot_ptr->runtime_datetime_base_ns + elapsed_real_ns;
-    return CODE_OK;
+    return snapshot_ptr->runtime_datetime_base_ns + elapsed_real_ns;
 }
 
-DOMINO_CODE dominoTimeModuleFreeze(void) {
+void dominoTimeModuleFreeze(void) {
     DominoTimeSnapshot snapshot = readTimeCache();
     if (snapshot.frozen) {
-        return CODE_OK;
+        return;
     }
-    /* 奇数窗口只做时钟采样与缓存写入；失败也先关闭窗口，再记录日志。 */
+    /* 先关闭读窗口再采样，避免读者接受比冻结基准更晚的业务时刻。
+     * 致命错误直接 exit；退出回调不得重入引擎 API。 */
     atomic_fetch_or(&g_domino_time_cache.sequence, 1);
-    uint64_t now_monotonic_ns = 0;
-    DOMINO_CODE code = dominoMonotonicTimeNsChecked(&now_monotonic_ns);
-    if (code == CODE_OK) {
-        code = calculateRuntimeNs(&snapshot, now_monotonic_ns, &snapshot.runtime_datetime_base_ns);
-    }
-    if (code == CODE_OK) {
-        snapshot.session_start_monotonic_ns = now_monotonic_ns;
-        snapshot.frozen = true;
-    }
+    uint64_t now_monotonic_ns = dominoMonotonicTimeNs();
+    snapshot.runtime_datetime_base_ns = calculateRuntimeNs(&snapshot, now_monotonic_ns);
+    snapshot.session_start_monotonic_ns = now_monotonic_ns;
+    snapshot.frozen = true;
     publishTimeCache(&snapshot);
-    if (code != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR,
-                          "冻结时间失败，采样不可用或累计纳秒越界: sampled_ns=%" PRIu64 ", start_ns=%" PRIu64 ", code=%d", now_monotonic_ns,
-                          snapshot.session_start_monotonic_ns, code);
-    }
-    return code;
 }
 
-DOMINO_CODE dominoTimeModuleThaw(void) {
+void dominoTimeModuleThaw(void) {
     DominoTimeSnapshot snapshot = readTimeCache();
     if (!snapshot.frozen) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "解冻时间失败: 时钟未冻结");
-        return ERR_GAME_STATE_INVALID;
+        DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "解冻时间失败: 时钟未冻结");
     }
 
-    DOMINO_CODE code = dominoMonotonicTimeNsChecked(&snapshot.session_start_monotonic_ns);
-    if (code != CODE_OK) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "解冻时间采样失败: code=%d", code);
-        return code;
-    }
+    snapshot.session_start_monotonic_ns = dominoMonotonicTimeNs();
     snapshot.frozen = false;
     writeTimeCache(&snapshot);
-
-    return CODE_OK;
 }
 
 __attribute__((hot)) bool dominoTimeModuleIsFrozen(void) {
     return readTimeCache().frozen;
 }
 
-__attribute__((hot)) DOMINO_CODE dominoTimeModuleGetDateTimeNow(uint64_t* runtime_ns_ptr) {
+__attribute__((hot)) void dominoTimeModuleGetDateTimeNow(uint64_t* runtime_ns_ptr) {
     if (runtime_ns_ptr == nullptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "读取累计纳秒失败: 输出指针为空");
-        return ERR_NULL_POINTER;
+        DOMINO_EXIT_WITH_ERROR(ERR_NULL_POINTER, "读取累计纳秒失败: 输出指针为空");
     }
     while (true) {
         uint64_t before = atomic_load(&g_domino_time_cache.sequence);
@@ -165,47 +134,33 @@ __attribute__((hot)) DOMINO_CODE dominoTimeModuleGetDateTimeNow(uint64_t* runtim
 
         DominoTimeSnapshot snapshot = loadTimeCacheFields();
         uint64_t monotonic_now_ns = 0;
-        DOMINO_CODE code = CODE_OK;
         /* 时钟采样纳入版本校验，避免并发冻结后仍按旧状态计算更晚的时间。 */
         if (!snapshot.frozen) {
-            code = dominoMonotonicTimeNsChecked(&monotonic_now_ns);
+            monotonic_now_ns = dominoMonotonicTimeNs();
         }
 
         uint64_t after = atomic_load(&g_domino_time_cache.sequence);
         if (before != after) {
             continue;
         }
-        if (code == CODE_OK && snapshot.frozen) {
+        if (snapshot.frozen) {
             *runtime_ns_ptr = snapshot.runtime_datetime_base_ns;
-            return CODE_OK;
+            return;
         }
-        if (code == CODE_OK) {
-            code = calculateRuntimeNs(&snapshot, monotonic_now_ns, runtime_ns_ptr);
-        }
-        if (code != CODE_OK) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR,
-                              "读取累计纳秒失败，采样不可用或累计值越界: sampled_ns=%" PRIu64 ", start_ns=%" PRIu64 ", code=%d", monotonic_now_ns,
-                              snapshot.session_start_monotonic_ns, code);
-        }
-        return code;
+        *runtime_ns_ptr = calculateRuntimeNs(&snapshot, monotonic_now_ns);
+        return;
     }
 }
 
-__attribute__((hot)) DOMINO_CODE dominoTimeGetRuntimeMs(domino_runtime_ms_t* runtime_ms_ptr) {
+__attribute__((hot)) void dominoTimeGetRuntimeMs(domino_runtime_ms_t* runtime_ms_ptr) {
     if (runtime_ms_ptr == nullptr) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "读取业务毫秒失败: 输出指针为空");
-        return ERR_NULL_POINTER;
+        DOMINO_EXIT_WITH_ERROR(ERR_NULL_POINTER, "读取业务毫秒失败: 输出指针为空");
     }
     uint64_t runtime_ns;
-    DOMINO_CODE code = dominoTimeModuleGetDateTimeNow(&runtime_ns);
-    if (code != CODE_OK) {
-        return code;
-    }
-    // 先校验完整毫秒范围，包含 UINT32_MAX 毫秒内的亚毫秒部分；失败时保持输出原值。
+    dominoTimeModuleGetDateTimeNow(&runtime_ns);
+    // 先校验完整毫秒范围，包含 UINT32_MAX 毫秒内的亚毫秒部分；不截断、回绕、饱和或归零。
     if (runtime_ns >= (UINT64_C(1) + UINT32_MAX) * UINT64_C(1000000)) {
-        DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "累计时间超出 32 位业务毫秒范围: runtime_ns=%" PRIu64, runtime_ns);
-        return ERR_OUT_OF_RANGE;
+        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "累计时间超出 32 位业务毫秒范围: runtime_ns=%" PRIu64, runtime_ns);
     }
     *runtime_ms_ptr = (domino_runtime_ms_t)(runtime_ns / UINT64_C(1000000));
-    return CODE_OK;
 }
