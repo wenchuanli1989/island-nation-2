@@ -99,7 +99,7 @@ void logWithTwoServices(void) {
 - 模块 ID 和名称在实例内必须唯一；名称必须非空且在固定数组内以 NUL 结尾。`module_count = 0` 时允许空列表；模块 `min_level = 0` 在初始化时解析为配置的默认等级，默认等级只用于本次 Init，实例只保存解析后的模块等级，显式等级独立生效。
 - 每条日志只写一个目标：模块 `file_path` 优先，其次实例 `DominoLogConfig.file_path`，两者都未配置时写 stdout；nullptr 和空字符串都表示未配置。所有等级（包括非致命 ERROR）遵循同一规则，日志内容不写 stderr，也不同时复制到默认文件或控制台。示例中 core 写 `first.log`，nav 写 `first-nav.log`。
 - 实例内直接复用 `DominoLogModule`，初始化时由 logger 维护其 `output_ptr`，writer 通过队列元素的 `module_index` 取用。调用方无需设置 `output_ptr`，传入值会被忽略；实例副本不保留配置路径，`file_path` 保持 nullptr。文件由 logger 统一打开和关闭；指定的文件打开、写入、刷新或关闭失败时直接走公共致命退出路径。
-- `buffer_size = 0` 使用默认容量 10240；容量不得超过 `UINT32_MAX`，保留分配大小溢出检查。日志队列固定容量，满载时本次日志调用向所属模块的同一输出流同步提示一次并刷新，然后用 `dominoThreadQueueProduceBlocking()` 等待直到入队，不丢日志、不定时轮询。提示不再次入队；writer 消费后通过 `not_full` 唤醒等待者。
+- `buffer_size = 0` 使用默认容量 10240；容量不得超过 `UINT32_MAX`，保留分配大小溢出检查。日志队列固定容量，满载时本次日志调用向所属模块的同一输出流同步提示一次并刷新，然后用 `dominoThreadQueueProduce(..., true)` 等待直到入队，不丢日志、不定时轮询。提示不再次入队；writer 消费后通过 `not_full` 唤醒等待者。
 - 致命错误统一使用 `DOMINO_EXIT_WITH_ERROR(code, fmt, ...)`：宏捕获调用位置，`common.c` 的 `dominoExitWithErrorAt()` 直接打印 stderr，然后执行 `exit(EXIT_FAILURE)`，允许退出回调和标准 I/O 刷新。诊断不进入日志队列，诊断本身失败不递归报错。
 - 运行阶段非致命错误和正常日志进入异步日志；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE(fmt, ...)` 直接写 stdout。宏捕获调用位置，`common.c` 的 `dominoPrintMessageAt()` 打印来源和完整正文。共用业务工具只返回可恢复结果，由掌握业务语义的调用边界选择输出；日志层不维护阶段标志或进行阶段分流。直接输出不截断、不入队、不退出，输出失败也不递归报错。日志等级只表达严重程度，不决定是否终止；ERROR 日志同样可以是可恢复的业务失败。
 - 日志不再维护故障回调、首错状态或错误查询接口；`Init`／`Start`／`Stop`／`Destroy` 返回 void。致命错误会结束整个宿主进程，队列中的剩余日志不保证写出。
@@ -115,10 +115,10 @@ void logWithTwoServices(void) {
 engine 业务消息定义保留在 `engine/src/queue/thread_message.h`，调用方按需显式包含，日志不依赖这些业务类型。
 `domino-shared` 导出标准线程链接依赖，macOS 的 TinyCThread 依赖也由 shared 统一传递。
 
-队列通过 `initialized` 明确表示实例是否已初始化，供公共入口在加锁前检查；Init 完整建立资源后置为 true，Destroy 清空对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会随扩容变化，均不承担初始化状态判断。Init 使用调用方的零对象或 Destroy 已清空的对象，不重复整体清零。Produce／ProduceBlocking 共用一处参数与初始化校验，Consume 复用 ConsumeBatch；不为内部等待、扩容或复制辅助步骤重复添加边界检查。条件等待会释放锁，唤醒后仍须重新检查 `flushing_flag`、元素数、容量或 `wake_epoch`；两个等待者计数共同用于区分等待类型并选择通知；`waiter_count` 同时用于销毁前检查是否仍有等待者，均须保留。
+队列通过 `initialized` 明确表示实例是否已初始化，供公共入口在加锁前检查；Init 完整建立资源后置为 true，Destroy 清空对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会随扩容变化，均不承担初始化状态判断。Init 使用调用方的零对象或 Destroy 已清空的对象，不重复整体清零。Produce 通过第三个参数 `blocking` 选择是否等待空位，两种模式共用一处参数与初始化校验，Consume 复用 ConsumeBatch；不为内部等待、扩容或复制辅助步骤重复添加边界检查。条件等待会释放锁，唤醒后仍须重新检查 `flushing_flag`、元素数、容量或 `wake_epoch`；两个等待者计数共同用于区分等待类型并选择通知；`waiter_count` 同时用于销毁前检查是否仍有等待者，均须保留。
 
 队列用一个 `flushing_flag` 表示排空状态。`dominoThreadQueueBeginFlush()` 在锁内设置该状态、推进唤醒版本并通知全部等待者；进入后不提供恢复，销毁并重新 Init 才可再次生产。
-排空状态下，Produce 和 ProduceBlocking 拒绝新消息并返回 `ERR_QUEUE_FLUSHING`；Consume 和 ConsumeBatch 继续返回已有消息，排空后才返回此结果；Wait 立即返回此结果，不保证队列已空。BeginFlush 不消费消息或等待线程退出，调用方仍负责载荷释放、线程 join 和销毁顺序。
+排空状态下，Produce 的两种模式均拒绝新消息并返回 `ERR_QUEUE_FLUSHING`；Consume 和 ConsumeBatch 继续返回已有消息，排空后才返回此结果；Wait 立即返回此结果，不保证队列已空。BeginFlush 不消费消息或等待线程退出，调用方仍负责载荷释放、线程 join 和销毁顺序。
 队列 `Init`、`BeginFlush`、`Destroy` 返回 void；任何阶段的分配、同步、ID 耗尽故障都直接打印 stderr 并 exit。
 参数错误、非阻塞满队列、空队列和排空状态仍是调用方处理的结果；队列不自行决定业务日志等级。
 运行期间通过 `WakeAll` 通知业务状态变化，不改变 `flushing_flag`；唤醒版本、条件等待和 join 协议继续承担正常生命周期同步。

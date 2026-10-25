@@ -53,7 +53,7 @@ static DOMINO_CODE validateTimerRequest(const DominoTimer* timer_ptr) {
 
 /** @brief 按值提交已校验的请求；调用方已填写绝对截止点。 */
 static void submitTimerRequest(DominoTimer* timer_ptr) {
-    DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_timer.command_queue, timer_ptr);
+    DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_timer.command_queue, timer_ptr, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "提交计时器登记命令失败");
     }

@@ -661,7 +661,7 @@ static DOMINO_CODE submitCommand(HumanExecutionCommand command, domino_task_id_t
     command.request_id = ++g_execution.command_request_id;
     DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_COMMAND, .payload.command = command};
     g_execution.command_pending_flag = true;
-    code = dominoThreadQueueProduce(&g_execution.inbox, &message);
+    code = dominoThreadQueueProduce(&g_execution.inbox, &message, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot deliver human command human=%" PRIu32 " request=%" PRIu64, command.human_id, command.request_id);
     }

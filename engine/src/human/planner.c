@@ -90,7 +90,7 @@ static void processRequest(DominoThreadMessage* message_ptr) {
     DominoHumanPlanEnvelope* envelope_ptr = &message_ptr->payload.plan;
     buildPlan(envelope_ptr);
     message_ptr->type = DOMINO_THREAD_MESSAGE_AI_RESULT;
-    const DOMINO_CODE code = dominoThreadQueueProduce(g_planner.result_queue_ptr, message_ptr);
+    const DOMINO_CODE code = dominoThreadQueueProduce(g_planner.result_queue_ptr, message_ptr, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot deliver plan result human=%" PRIu32 " request=%" PRIu64, envelope_ptr->request.human_id,
                                envelope_ptr->request.request_id);
@@ -158,7 +158,7 @@ void dominoHumanPlannerSubmit(const DominoHumanPlanRequest* request_ptr) {
                                request_ptr->human_id, request_ptr->request_id, request_ptr->reasons);
     }
     DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_AI_REQUEST, .payload.plan = {.request = *request_ptr}};
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &message);
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &message, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id, request_ptr->request_id);
     }

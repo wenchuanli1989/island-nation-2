@@ -30,7 +30,7 @@ DominoThreadMessage message = {
     .type = DOMINO_THREAD_MESSAGE_COMMAND,
     .payload.command = command,
 };
-DOMINO_CODE code = dominoThreadQueueProduce(&worker_inbox, &message);
+DOMINO_CODE code = dominoThreadQueueProduce(&worker_inbox, &message, false);
 if (code != CODE_OK) {
     // 由所属模块按业务语义处理投递失败。
 }
@@ -47,7 +47,7 @@ AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独
 消息保留 FIFO；抢占、紧急提升和任务选择由接收模块处理。
 暂停、恢复和退出状态由所属模块维护，使用原子变量或模块自己的锁同步；普通冻结和恢复不要求业务线程回执。
 
-业务消息使用 `dominoThreadQueueProduce()`，不等待空位：队列满时按需扩容，达到最大容量后立即返回 `ERR_QUEUE_FULL`。日志满载后使用独立的 `dominoThreadQueueProduceBlocking()` 等待空位并入队。
+业务消息使用 `dominoThreadQueueProduce(..., false)`，不等待空位：队列满时按需扩容，达到最大容量后立即返回 `ERR_QUEUE_FULL`。日志满载后使用 `dominoThreadQueueProduce(..., true)` 等待空位并入队。
 非阻塞仅指不等待消费者腾出容量，入队仍需取得队列互斥锁。队列的容量、参数及排空状态等结果仍通过返回值报告；分配和同步原语故障直接打印 stderr 并 exit。
 所属模块根据业务语义处理返回值：可以拒绝尚未接受的请求，必要运行消息无法交付时直接致命退出，不维护首错或等待故障传播。
 
@@ -57,7 +57,7 @@ AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独
 需要响应控制状态的模块使用 `Snapshot → 检查状态和消息 → Wait`。
 队列自身只有 Init → Destroy 两个生命周期入口。首次局部对象须以 `DominoThreadQueue queue = {0};` 初始化，动态对象须使用 `calloc` 或等价零初始化，静态对象自然满足；成功 Destroy 后可直接再次 Init。Init 拒绝已初始化对象，Destroy 拒绝空指针、未初始化对象和重复销毁。两者返回 `void`，阶段、参数、分配或同步错误通过 `DOMINO_EXIT_WITH_ERROR` 直接打印 stderr 并 exit，不向调用方逐层传播。
 
-公共入口通过 `initialized` 明确判断实例是否已初始化；Init 完整建立资源后置为 true，Destroy 清空整个对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会在扩容中改变，均不承担初始化状态判断。Init 基于调用方或上轮 Destroy 提供的空对象建立资源，不重复整体清零。Produce／ProduceBlocking 共享一次参数及初始化检查，Consume 委托 ConsumeBatch；内部等待、扩容和复制步骤依赖已建立的前置条件。等待期间锁会释放，唤醒后的排空状态、元素数、容量及版本检查仍必须保留。
+公共入口通过 `initialized` 明确判断实例是否已初始化；Init 完整建立资源后置为 true，Destroy 清空整个对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会在扩容中改变，均不承担初始化状态判断。Init 基于调用方或上轮 Destroy 提供的空对象建立资源，不重复整体清零。Produce 的两种模式共享一次参数及初始化检查，Consume 委托 ConsumeBatch；内部等待、扩容和复制步骤依赖已建立的前置条件。等待期间锁会释放，唤醒后的排空状态、元素数、容量及版本检查仍必须保留。
 
 - 每次成功 `Produce` 都在队列锁内推进本队列的唤醒版本并通知等待者，包含 timer 投递 TIMER 消息的路径。
 - 入队失败和出队不推进版本；出队后若存在等待空位的生产者，广播 `not_full`。
@@ -101,7 +101,7 @@ Snapshot/Wait/WakeAll 使用队列内部锁，正常完成时先释放锁再返�
 
 | 接口 | 排空状态下的行为 |
 | --- | --- |
-| `Produce`／`ProduceBlocking` | 返回 `ERR_QUEUE_FLUSHING`，不修改消息或分配 ID；等待空位的生产者被唤醒后也返回此结果 |
+| `Produce` | 两种模式均返回 `ERR_QUEUE_FLUSHING`，不修改消息或分配 ID；等待空位的生产者被唤醒后也返回此结果 |
 | `Consume`／`ConsumeBatch` | 继续按 FIFO 返回已有消息；队列为空时返回 `ERR_QUEUE_FLUSHING`，不再等待 |
 | `Wait` | 立即返回 `ERR_QUEUE_FLUSHING`，此结果不表示消息已经取完 |
 

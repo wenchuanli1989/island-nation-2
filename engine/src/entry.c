@@ -152,7 +152,7 @@ DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
         }
         return code;
     }
-    const DOMINO_CODE result = dominoThreadQueueProduce(&g_domino_to_main_loop_queue, message_ptr);
+    const DOMINO_CODE result = dominoThreadQueueProduce(&g_domino_to_main_loop_queue, message_ptr, false);
     if (result != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(result, "failed to enqueue an engine message");
     }
@@ -180,7 +180,7 @@ DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocki
 }
 
 void dominoLoopProduceToMain(DominoEngineMessage* message_ptr) {
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_from_main_loop_queue, message_ptr);
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_from_main_loop_queue, message_ptr, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "failed to enqueue a client message");
     }

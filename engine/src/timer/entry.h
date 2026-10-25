@@ -60,7 +60,7 @@ void dominoTimerNotifyTimeChanged(void);
  * @return 请求实际入队时返回 CODE_OK 并写回 timer_id；请求或队列指针为空返回 ERR_NULL_POINTER；
  *         已取消请求或队列元素大小不匹配返回 ERR_INVALID_PARAM；delay_ms 与当前时刻之和超过 UINT32_MAX 毫秒返回 ERR_OUT_OF_RANGE。
  *         非空请求被拒绝时 timer_id 为 0，不提交命令；业务结果不在 timer 内打印，由调用边界按语义决定是否记录。
- * @note 入队成功后取得 request_mutex 记录唤醒通知，可能等待命令批次、堆操作或取消扫描；无需等待该请求入堆即可按 ID 取消。
+ * @note 入队成功后取得 request_mutex 发出唤醒信号，可能等待命令批次、堆操作或取消扫描；无需等待该请求入堆即可按 ID 取消。
  * @note 命令提交、后台入堆或到期事件投递失败均打印到 stderr 并 exit；队列满、停止、内存不足及 ID 耗尽不重试。
  *       业务时钟采样失败或累计时间超出 32 位毫秒范围同样直接终止进程，不使用越界时间或回绕值。
  * @note time 冻结或引擎退出请求发布后，正在结束的业务批次仍允许登记和取消；生命周期控制方须保持 timer 资源有效。

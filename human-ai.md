@@ -199,7 +199,7 @@ flowchart LR
 
 请求和结果均使用消息内嵌的 `payload.plan` envelope，队列按值复制整条消息，无需为 envelope 分配或释放内存。`DRAFT` 的行为数组为另行分配的独占块，入队成功才移交所有权。接收者处理后统一调用 `dominoHumanPlannerReleaseMessage()` 释放未接管行为并清空消息；投递失败时行为块仍由发送者拥有，当前必要消息投递故障直接终止进程。已提交的行为块从草案转移到任务后，草案清空指针、不再拥有它。后续增加路线时也须明确独占及移交规则；队列中的指针不能指向全局 `kvec` 内部元素。
 
-所有跨线程 AI 消息统一封装为 `DominoThreadMessage`，其首字段 `uint64_t id` 由两参数的 `dominoThreadQueueProduce(queue_ptr, item_ptr)` 回写并覆盖；业务关联 ID 保存在载荷中。业务消息使用的 Produce 不等待容量，队列达到最大容量返回 `ERR_QUEUE_FULL`，必要消息无法交付时由所属模块直接打印 stderr 并 exit；日志满载后使用独立的 ProduceBlocking 等待空位。消费可复用 `dominoThreadQueueConsumeBatch()`，它只等待至少一项，不等待凑满批次。
+所有跨线程 AI 消息统一封装为 `DominoThreadMessage`，其首字段 `uint64_t id` 由 `dominoThreadQueueProduce(queue_ptr, item_ptr, blocking)` 回写并覆盖；业务关联 ID 保存在载荷中。业务消息使用 `blocking = false`，不等待容量，队列达到最大容量返回 `ERR_QUEUE_FULL`，必要消息无法交付时由所属模块直接打印 stderr 并 exit；日志满载后使用 `blocking = true` 等待空位。消费可复用 `dominoThreadQueueConsumeBatch()`，它只等待至少一项，不等待凑满批次。
 
 ### 4.4 满载、紧急提升与空闲等待
 

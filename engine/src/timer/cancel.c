@@ -76,7 +76,6 @@ DOMINO_CODE dominoTimerCancel(domino_timer_id_t timer_id, DominoThreadQueue* eve
     found_flag = cancelTimerEvent(event_queue_ptr, timer_id);
 unlock:
     if (found_flag) {
-        g_domino_timer.wake_pending_flag = true;
         DOMINO_REQUIRE_THREAD_SUCCESS(cnd_signal(&g_domino_timer.wake_condition), ERR_CONDITION_SIGNAL, "cnd_signal");
     }
     DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");

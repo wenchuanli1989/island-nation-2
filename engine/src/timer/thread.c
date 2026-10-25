@@ -8,11 +8,11 @@
 
 /**
  * @brief 整批命令的出队与入堆共用一次请求锁，取消查找不会漏掉转移中的请求。
+ * @pre 调用方持有 request_mutex；函数返回时仍持锁，可继续决定是否等待。
  * @return 实际出队数量，包括取消项；基础设施失败直接报告并终止进程。
  */
-static uint32_t processCommandBatch(void) {
+static uint32_t processCommandBatchLocked(void) {
     uint32_t command_count = 0U;
-    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
     while (command_count < DOMINO_TIMER_BATCH_SIZE) {
         DominoTimer timer;
         DOMINO_CODE code = dominoThreadQueueConsume(&g_domino_timer.command_queue, &timer, false);
@@ -28,7 +28,6 @@ static uint32_t processCommandBatch(void) {
         }
         dominoTimerHeapPush(&g_domino_timer.heap, &timer);
     }
-    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
     return command_count;
 }
 
@@ -60,7 +59,7 @@ static bool processHeapBatch(void) {
         DominoTimer timer = *timer_ptr;
         dominoTimerHeapPop(&g_domino_timer.heap);
         DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_TIMER, .payload.timer = timer};
-        const DOMINO_CODE code = dominoThreadQueueProduce(timer.event_queue_ptr, &message);
+        const DOMINO_CODE code = dominoThreadQueueProduce(timer.event_queue_ptr, &message, false);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "投递计时器到期事件失败");
         }
@@ -82,29 +81,28 @@ static inline void getWaitDeadline(domino_runtime_ms_t delta_ms, struct timespec
     deadline_out_ptr->tv_nsec = (long)(wait_ns % UINT32_C(1000000000));
 }
 
-/** @brief 持请求锁决定等待；期间收到通知则返回主循环，条件等待自动释放请求锁。 */
-static void waitForWork(void) {
+/**
+ * @brief 复用命令出队的空结果决定等待；条件等待原子释放请求锁，返回时重新持锁。
+ * @pre 本轮未处理命令且堆处理未耗尽预算；从命令队列判空前起，调用方持续持有 request_mutex。
+ * @note 判空后仍可有新命令入队，但提交方须取得请求锁才能通知，因此不会在进入等待前漏掉信号。
+ */
+static void waitForWorkLocked(void) {
     struct timespec deadline = {0};
     bool timed_wait_flag = false;
-    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
     if (dominoEngineIsStopping()) {
-        DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
         return;
     }
-    if (g_domino_timer.wake_pending_flag || dominoTimeModuleIsFrozen()) {
-        DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
+    if (dominoTimeModuleIsFrozen()) {
         return;
     }
     const DominoTimer* timer_ptr = dominoTimerHeapPeek(&g_domino_timer.heap);
     if (timer_ptr != nullptr) {
         if (timer_ptr->cancelled_flag) {
-            DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
             return;
         }
         domino_runtime_ms_t now_ms;
         dominoTimeGetRuntimeMs(&now_ms);
         if (timer_ptr->due_ms <= now_ms) {
-            DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
             return;
         }
         getWaitDeadline(timer_ptr->due_ms - now_ms, &deadline);
@@ -119,7 +117,6 @@ static void waitForWork(void) {
     } else {
         DOMINO_REQUIRE_THREAD_SUCCESS(cnd_wait(&g_domino_timer.wake_condition, &g_domino_timer.request_mutex), ERR_CONDITION_WAIT, "cnd_wait");
     }
-    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
 }
 
 int dominoTimerThread(void* arg_ptr) {
@@ -131,23 +128,22 @@ int dominoTimerThread(void* arg_ptr) {
         DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
         // 一轮堆处理与命令处理共同构成一批；仅在批次边界等待解冻，不发送冻结回执。
         while (!dominoEngineIsStopping() && dominoTimeModuleIsFrozen()) {
-            g_domino_timer.wake_pending_flag = false;
             DOMINO_REQUIRE_THREAD_SUCCESS(cnd_wait(&g_domino_timer.wake_condition, &g_domino_timer.request_mutex), ERR_CONDITION_WAIT, "cnd_wait");
         }
-        // 本轮检查前清除标志；检查期间的新通知会阻止本轮睡眠。
-        g_domino_timer.wake_pending_flag = false;
         if (dominoEngineIsStopping()) {
             DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
             break;
         }
         DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
         bool heap_batch_full_flag = processHeapBatch();
-        uint32_t command_count = processCommandBatch();
+        DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
+        uint32_t command_count = processCommandBatchLocked();
         // 入堆可能替换堆顶；堆处理耗尽本批预算时也需要重新检查。
-        if (command_count > 0U || heap_batch_full_flag) {
-            continue;
+        if (command_count == 0U && !heap_batch_full_flag) {
+            // 复用首次出队的空结果，直到条件等待原子释放请求锁前不留通知空隙。
+            waitForWorkLocked();
         }
-        waitForWork();
+        DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
     }
     return CODE_OK;
 }

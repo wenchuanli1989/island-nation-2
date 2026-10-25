@@ -4,9 +4,9 @@
 Checks: >
   bugprone-*,
   -bugprone-easily-swappable-parameters,
-  -readability-implicit-bool-conversion
   performance-*,
   readability-*,
+  -readability-implicit-bool-conversion,
   -readability-magic-numbers,
   modernize-*,
   cert-*,

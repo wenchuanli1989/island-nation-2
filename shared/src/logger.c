@@ -74,7 +74,7 @@ static thread_local uint32_t g_tid_cached = 0U;
 
 /** @brief 满队列直接提示一次并阻塞入队；其他错误直接终止进程。 */
 static void dominoLogProduce(DominoLogger* logger_ptr, DominoLogQueueItem* item_ptr) {
-    DOMINO_CODE code = dominoThreadQueueProduce(logger_ptr->queue_ptr, item_ptr);
+    DOMINO_CODE code = dominoThreadQueueProduce(logger_ptr->queue_ptr, item_ptr, false);
     if (code == ERR_QUEUE_FULL) {
         FILE* output_ptr = logger_ptr->modules[item_ptr->module_index].output_ptr;
         if (fputs("[WARN] log queue is full; waiting for space\n", output_ptr) == EOF) {
@@ -83,7 +83,7 @@ static void dominoLogProduce(DominoLogger* logger_ptr, DominoLogQueueItem* item_
         if (fflush(output_ptr) != 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log queue warning flush failed");
         }
-        code = dominoThreadQueueProduceBlocking(logger_ptr->queue_ptr, item_ptr);
+        code = dominoThreadQueueProduce(logger_ptr->queue_ptr, item_ptr, true);
     }
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "log message could not enter the writer queue");

@@ -159,8 +159,7 @@ void dominoThreadQueueDestroy(DominoThreadQueue* queue_ptr) {
     memset(queue_ptr, 0, sizeof(*queue_ptr));
 }
 
-/** @brief 两个入队公共入口共用此处一次参数及初始化校验；唤醒后仍须持锁复查动态条件。 */
-__attribute__((hot)) static DOMINO_CODE dominoThreadQueueProduceInternal(DominoThreadQueue* queue_ptr, void* item_ptr, bool blocking) {
+__attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* queue_ptr, void* item_ptr, bool blocking) {
     if (queue_ptr == nullptr || item_ptr == nullptr) {
         return ERR_NULL_POINTER;
     }
@@ -210,14 +209,6 @@ __attribute__((hot)) static DOMINO_CODE dominoThreadQueueProduceInternal(DominoT
 unlock:
     DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&queue_ptr->mutex), ERR_MUTEX_UNLOCK, "produce:mtx_unlock");
     return result_code;
-}
-
-DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* queue_ptr, void* item_ptr) {
-    return dominoThreadQueueProduceInternal(queue_ptr, item_ptr, false);
-}
-
-DOMINO_CODE dominoThreadQueueProduceBlocking(DominoThreadQueue* queue_ptr, void* item_ptr) {
-    return dominoThreadQueueProduceInternal(queue_ptr, item_ptr, true);
 }
 
 __attribute__((hot)) DOMINO_CODE dominoThreadQueueConsume(DominoThreadQueue* queue_ptr, void* item_out_ptr, bool blocking) {

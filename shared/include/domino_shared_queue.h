@@ -95,26 +95,20 @@ void dominoThreadQueueWakeAll(DominoThreadQueue* queue_ptr);
 void dominoThreadQueueDestroy(DominoThreadQueue* queue_ptr);
 
 /**
- * @brief 在队列锁内生成 ID，回写消息前 8 字节，再按值复制整条消息入队；满载时按需扩容，不等待消费空位。
+ * @brief 在队列锁内生成 ID，回写消息前 8 字节，再按值复制整条消息入队；满载时按需扩容。
  * @param item_ptr 可写消息，首字段必须为 uint64_t 类型的队列 ID，字段名不限；调用期间由当前线程独占。
+ * @param blocking 达到最大容量且满载时，true 等待空位，false 立即返回；两种模式均需获取 mutex。
  * @return CODE_OK 成功，调用方可读取自己的消息 ID；失败不修改消息，也不消耗 ID。
  *         空指针返回 ERR_NULL_POINTER；未初始化返回 ERR_NOT_INITIALIZED；已进入排空状态返回 ERR_QUEUE_FLUSHING；
- *         达到最大容量且满载返回 ERR_QUEUE_FULL。
+ *         非阻塞且达到最大容量并满载时返回 ERR_QUEUE_FULL。
  * @note 每次成功入队都会覆盖原 ID，从 1 开始按入队顺序递增，仅在同一队列的一次 Init 生命周期内唯一。
  *       扩容及 BeginFlush 保留计数，Destroy 后重新 Init 才重置；内存分配失败或计数耗尽直接打印 stderr 并 exit(EXIT_FAILURE)。
  *       成功入队在同一锁内推进唤醒版本，通知阻塞消费者及所有 Wait 等待者；失败不推进版本。
- *       非阻塞仅指不等待队列空位，仍需取得 mutex；容量、参数等错误交由所属模块处理，同步失败直接打印 stderr 并 exit。
- */
-DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* queue_ptr, void* item_ptr);
-
-/**
- * @brief 阻塞入队；达到最大容量且满载时等待空位，唤醒后在同一队列锁内重新检查并入队。
- * @note ID 回写、扩容及所有权规则同 Produce；等待期间释放队列锁，消息存储须保持有效且不得被其他线程修改。
+ *       阻塞等待期间释放队列锁，消息存储须保持有效且不得被其他线程修改；唤醒后在锁内重新检查状态及容量。
  *       消费释放空位后唤醒等待生产者；BeginFlush 也会唤醒它们，此后返回 ERR_QUEUE_FLUSHING。
- *       调用方不得持有消费者处理消息所需的锁。同步失败直接打印 stderr 并 exit(EXIT_FAILURE)。
- * @return 除满载时等待、不返回 ERR_QUEUE_FULL 外，其余返回值同 Produce。
+ *       阻塞调用方不得持有消费者处理消息所需的锁；容量、参数等错误交由所属模块处理，同步失败直接打印 stderr 并 exit。
  */
-DOMINO_CODE dominoThreadQueueProduceBlocking(DominoThreadQueue* queue_ptr, void* item_ptr);
+DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* queue_ptr, void* item_ptr, bool blocking);
 
 /**
  * @brief 按 FIFO 顺序复制并移除元素；进入排空状态后仍可消费已有元素。
