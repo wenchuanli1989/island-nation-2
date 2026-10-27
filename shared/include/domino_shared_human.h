@@ -196,7 +196,7 @@ typedef struct DominoHuman {
         } position_info;
     };
 
-    uint32_t wakeup_version;                       ///< 运行态：每人独立的唤醒登记版本，由执行线程递增，禁止回绕，不持久化。
+    domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_timer_id 非零时有效，不持久化。
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。
     domino_movable_object_id_t movable_object_id;  ///< 运动对象 ID，0 表示无关联对象。
     domino_status_t status;

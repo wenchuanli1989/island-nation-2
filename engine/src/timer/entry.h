@@ -46,39 +46,29 @@ void dominoTimerModuleDestroy(void);
 void dominoTimerNotifyTimeChanged(void);
 
 /**
- * @brief 按现实毫秒延迟提交未取消的计时请求；入队后通知计时线程，不等待该请求处理完成。
+ * @brief 按精确的累计未冻结现实毫秒截止点异步登记；入队后通知计时线程，不等待请求处理完成。
  * @pre 引擎已准备 timer 和目标事件队列，并保证调用期间资源有效；不重复校验初始化状态。
- * @note 调用方填写 delay_ms、event_queue_ptr、event_type 和 cancelled_flag；输入的 timer_id、due_ms 不参与登记。
- * @note 事件队列必须已初始化并存储 DominoThreadMessage，可混合 timer、AI、命令等类型；计时线程停止及业务消费结束前不得销毁或重建。
+ * @param event_queue_ptr 业务方拥有、已初始化且存储 DominoThreadMessage 的队列。
+ * @param due_ms 32 位绝对截止点，0 与 UINT32_MAX 均合法；已到期时保留原值并尽快异步投递。
+ * @param event_type 业务方定义的事件类型，timer 原样传递。
+ * @param data_id 业务方定义的 64 位标识，timer 原样按值传递，不解释含义或持有业务对象。
+ * @param timer_id_out_ptr 非空且由调用线程独占的登记 ID 输出；调用先清零，入队成功后写回非零 ID。
+ * @return 请求入队成功返回 CODE_OK；队列或输出指针为空返回 ERR_NULL_POINTER；
+ *         队列元素大小不匹配返回 ERR_INVALID_PARAM。参数错误不提交命令、不消耗 ID，非空输出保持为 0。
+ * @note 在局部构造未取消记录，命令队列生成首字段 timer_id 并按值复制；截止点不通过相对延迟重新计算。
+ *       仍采样并校验当前业务时刻，采样失败或超出 32 位毫秒范围直接打印到 stderr 并 exit。
  * @note 到期消息 type 为 DOMINO_THREAD_MESSAGE_TIMER，payload.timer 按值保存 DominoTimer，无需分配或释放载荷。
  *       消费方检查类型后读取 payload.timer 并跳过取消项；消息 id 与 timer_id 独立。
- * @note 校验通过后写入请求的 due_ms；队列生成并写入首字段 timer_id，再按值复制入队；排队时间计入延迟。
- * @note 请求记录须在调用期间由当前线程独占；每次调用先将 timer_id 置为 0，成功入队后写回非零登记 ID。
- * @note 校验失败时 timer_id 为 0，due_ms 及其余输入字段保持不变；基础设施错误直接终止进程。
- * @note 延迟为 0 仍经队列异步投递；消费和业务处理完全由队列所属业务方负责。
- * @note 请求已标记取消时直接返回 ERR_INVALID_PARAM，timer_id 为 0，不入队也不消耗消息 ID。
- * @return 请求实际入队时返回 CODE_OK 并写回 timer_id；请求或队列指针为空返回 ERR_NULL_POINTER；
- *         已取消请求或队列元素大小不匹配返回 ERR_INVALID_PARAM；delay_ms 与当前时刻之和超过 UINT32_MAX 毫秒返回 ERR_OUT_OF_RANGE。
- *         非空请求被拒绝时 timer_id 为 0，不提交命令；业务结果不在 timer 内打印，由调用边界按语义决定是否记录。
- * @note 入队成功后取得 request_mutex 发出唤醒信号，可能等待命令批次、堆操作或取消扫描；无需等待该请求入堆即可按 ID 取消。
+ * @note 事件队列可混合 timer、AI、命令等类型；计时线程停止及业务消费结束前不得销毁、搬移或重建。
+ * @note 入队成功后取得 request_mutex 发出唤醒信号，可能等待命令批次、堆操作或取消扫描；无需等待入堆即可按 ID 取消。
  * @note 命令提交、后台入堆或到期事件投递失败均打印到 stderr 并 exit；队列满、停止、内存不足及 ID 耗尽不重试。
- *       业务时钟采样失败或累计时间超出 32 位毫秒范围同样直接终止进程，不使用越界时间或回绕值。
+ *       参数错误由调用边界按语义决定是否记录，timer 内不重复打印。
  * @note time 冻结或引擎退出请求发布后，正在结束的业务批次仍允许登记和取消；生命周期控制方须保持 timer 资源有效。
  *       计时线程只在批次边界检查退出和冻结；一批含最多 64 个堆项及 64 条命令，普通冻结或退出不打断已开始的批次。
- *       解冻并通知后继续处理保留的请求；取消命令不入堆，取消堆顶直接回收。
+ *       解冻并通知后按原截止点继续处理保留请求；取消命令不入堆，取消堆顶直接回收。
  */
-DOMINO_CODE dominoTimerSchedule(DominoTimer* timer_ptr);
-
-/**
- * @brief 按精确的累计未冻结现实毫秒截止点异步登记，不通过相对延迟重新计算截止点。
- * @param timer_ptr 调用方独占的请求，填写 event_queue_ptr、event_type 和未取消标记；原 timer_id、due_ms、delay_ms 不作登记依据。
- * @param due_ms 32 位绝对截止点，0 与 UINT32_MAX 均合法；已到期时保留原值并尽快异步投递。
- * @return 请求校验结果与 Schedule 相同；当前业务时刻越界或提交失败直接报告并终止进程。
- * @note 校验通过后写入 due_ms，delay_ms 写为尚未到期时的 due_ms - now_ms，否则为 0；不使用 now_ms + delay_ms 重算截止点。
- * @note 每次调用先清零非空请求的 timer_id；校验失败时 due_ms、delay_ms 不变。
- * @note 成功入队后写回非零 timer_id；队列、载荷所有权、冻结、取消、生命周期和后台失败合同均与 Schedule 相同。
- */
-DOMINO_CODE dominoTimerScheduleAt(DominoTimer* timer_ptr, domino_runtime_ms_t due_ms);
+DOMINO_CODE dominoTimerScheduleAt(DominoThreadQueue* event_queue_ptr, domino_runtime_ms_t due_ms, uint8_t event_type, uint64_t data_id,
+                                  domino_timer_id_t* timer_id_out_ptr);
 
 /**
  * @brief 按登记 ID 查找命令和堆项，再到指定业务队列查找到期事件并设置取消标志，不删除命令或事件。

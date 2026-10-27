@@ -34,64 +34,32 @@ void dominoTimerNotifyTimeChanged(void) {
     notifyTimerThread();
 }
 
-/**
- * @brief 只校验共同登记条件，不修改请求或采样业务时刻。
- * @pre 登记入口已确认 timer_ptr 非空。
- */
-static DOMINO_CODE validateTimerRequest(const DominoTimer* timer_ptr) {
-    if (timer_ptr->cancelled_flag) {
-        return ERR_INVALID_PARAM;
-    }
-    if (timer_ptr->event_queue_ptr == nullptr) {
+__attribute__((hot)) DOMINO_CODE dominoTimerScheduleAt(DominoThreadQueue* event_queue_ptr, domino_runtime_ms_t due_ms, uint8_t event_type,
+                                                       uint64_t data_id, domino_timer_id_t* timer_id_out_ptr) {
+    if (timer_id_out_ptr == nullptr) {
         return ERR_NULL_POINTER;
     }
-    if (timer_ptr->event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
+    *timer_id_out_ptr = 0U;
+    if (event_queue_ptr == nullptr) {
+        return ERR_NULL_POINTER;
+    }
+    if (event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
         return ERR_INVALID_PARAM;
     }
-    return CODE_OK;
-}
-
-/** @brief 按值提交已校验的请求；调用方已填写绝对截止点。 */
-static void submitTimerRequest(DominoTimer* timer_ptr) {
-    DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_timer.command_queue, timer_ptr, false);
+    // 即使截止点已由业务确定，仍检查当前累计业务时间，不能在越界时继续登记。
+    domino_runtime_ms_t now_ms;
+    dominoTimeGetRuntimeMs(&now_ms);
+    DominoTimer timer = {
+        .event_queue_ptr = event_queue_ptr,
+        .data_id = data_id,
+        .due_ms = due_ms,
+        .event_type = event_type,
+    };
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_timer.command_queue, &timer, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "提交计时器登记命令失败");
     }
+    *timer_id_out_ptr = timer.timer_id;
     notifyTimerThread();
-}
-
-__attribute__((hot)) DOMINO_CODE dominoTimerSchedule(DominoTimer* timer_ptr) {
-    if (timer_ptr == nullptr) {
-        return ERR_NULL_POINTER;
-    }
-    timer_ptr->timer_id = 0U;
-    DOMINO_CODE code = validateTimerRequest(timer_ptr);
-    if (code != CODE_OK) {
-        return code;
-    }
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    if (timer_ptr->delay_ms > UINT32_MAX - now_ms) {
-        return ERR_OUT_OF_RANGE;
-    }
-    timer_ptr->due_ms = now_ms + timer_ptr->delay_ms;
-    submitTimerRequest(timer_ptr);
-    return CODE_OK;
-}
-
-__attribute__((hot)) DOMINO_CODE dominoTimerScheduleAt(DominoTimer* timer_ptr, domino_runtime_ms_t due_ms) {
-    if (timer_ptr == nullptr) {
-        return ERR_NULL_POINTER;
-    }
-    timer_ptr->timer_id = 0U;
-    DOMINO_CODE code = validateTimerRequest(timer_ptr);
-    if (code != CODE_OK) {
-        return code;
-    }
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    timer_ptr->due_ms = due_ms;
-    timer_ptr->delay_ms = due_ms > now_ms ? due_ms - now_ms : 0U;
-    submitTimerRequest(timer_ptr);
     return CODE_OK;
 }

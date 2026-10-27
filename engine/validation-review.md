@@ -25,9 +25,9 @@
 | `EnginePushMsg → queue → main loop → dispatch` | dispatch 使用成功出队的消息，不再次判空 | 队列入口指针、容量、停止状态、锁、消息 ID 上限；dispatch 消息类型 |
 | `Authorize/Submit → applyCommand → SleepTask → Store` | 复用已定位人物/data；入池直接接收已验证草案；任务提交后实际写入许可，删除提前扩容、空占位及占位回滚 | 人物、许可、建筑、活动槽、任务容量、版本、时间边界；分配失败先停止执行，再回复命令 |
 | `planner request → draft → executor result → Commit` | 私有规划 inbox 使用唯一生产者的固定消息契约；避免二次释放结果载荷 | 混合 inbox 消息形态、请求身份、owner、通道、版本、当前资格及完整草案语义 |
-| `advanceHuman → Start/AdvanceSleepTask → needs → wakeup` | 复用人物、活动任务、许可和 data；同刻结算后预测阈值不重新扫描需求；规则时长上限以静态断言保证 | 可写任务/行为语义、需求范围、活动形态、时间先后、绝对到期溢出、执行版本 |
+| `advanceHuman → Start/AdvanceSleepTask → needs → scheduleWakeup` | 复用人物、活动任务、许可和 data；同刻结算后预测阈值不重新扫描需求；规则时长上限以静态断言保证 | 可写任务/行为语义、需求范围、活动形态、时间先后、绝对到期溢出、执行版本 |
 | `StoreRemoveTask → hash delete → vector swap-delete` | 复用首次定位的槽位与下标；删除后仅对换入任务重新查哈希 | 终态、父子/停止引用、归属、版本上限及槽位关联 |
-| `wakeup Schedule → timer ScheduleAt → command queue → timer thread → Consume` | 复用人物指针；删除关联表提前扩容，实际 put 失败直接返回；timer 入口统一判空 | 实际分配失败、容量/时间溢出、取消、异步事件身份和版本、生命周期内 timer ID 唯一 |
+| `executor scheduleWakeup → timer ScheduleAt → command queue → timer thread → Consume` | 独立参数登记并按值传递 `data_id`；人物直接保存有效 ID 和截止点，不维护唤醒关联表或版本 | 入口参数、实际分配失败、容量/时间溢出、取消、`data_id` 转人物 ID 范围、当前非零 timer ID 匹配、生命周期内 timer ID 唯一 |
 | `time Freeze → version window → publish` | Freeze 已开启写入窗口，发布阶段不重复置奇数 | 原子字段、版本前后校验、采样窗口与 32 位业务毫秒范围 |
 | `storage Init → meta → module/shard → deserialize → reference validate/bind` | 元数据只解析一次计数；统一实体零初始化；删除加载前的数组和 ID map 预留，按需插入，data 指针在对应加载完成后绑定 | JSON 类型/范围、实际分片编号、数量、重复 ID、跨模块引用、分配及 IO 错误 |
 | `storage Destroy → shards → module meta → root meta → transaction` | 模块 meta 直接返回摘要供根 meta 使用；删除缓存再反查及固定注册表的重复键扫描；内部不重复检查已验证路径 | 停写前提、路径追加长度、磁盘状态、CRC/size、JSON 序列化、事务 IO 失败 |
@@ -41,7 +41,7 @@
 2. 存档加载先完成全部 meta 解析与摘要登记，再读取分片；保存先写全部分片，再按同一注册表生成 meta，期间世界停止写入。
 3. Human/Data 两表同序配对；冻结边界确认 `human->data` 正是 StoreValidate 已检查的同索引对象。
 4. 同步自建睡眠草案由内部构造函数建立完整有效记录；异步草案重新执行记录和当前资格校验。Store 仍承担实际入池失败。
-5. wakeup map 按需插入并检查分配错误；失败交由执行器停止普通推进，不回滚已提交 timer。timer ID 在队列生命周期内不回绕，唯一性仍为内部不变量。
+5. human 唤醒由 executor 直接登记 `data_id = human_id`，以当前非零 `wakeup_timer_id` 拒绝旧消息，`wakeup_due_ms` 保留同一截止点去重。timer ID 在队列生命周期内不回绕，唯一性仍为内部不变量；取消或消费时同时复位人物唤醒 ID 和截止点。
 6. nav 缓存只在分配和填充成功后提交；借用者不得修改缓存数组，实体搬迁前仍执行缓存失效。
 
 ## 覆盖与复查

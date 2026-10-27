@@ -136,6 +136,24 @@ VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击`
 ./scripts/build.sh clean
 ```
 
+**使用独立安装的 glibc 2.43（Linux x86_64）**：
+
+`scripts/build.sh` 仅通过环境变量 `DOMINO_GLIBC_ROOT` 选择独立 glibc；未设置或为空时使用系统默认 glibc，不探测安装目录：
+
+```bash
+DOMINO_GLIBC_ROOT="$HOME/.local/opt/glibc-2.43" ./scripts/build.sh debug
+
+# 使用系统默认 glibc
+env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
+```
+
+该目录须包含配套的 glibc 运行库、开发头文件、启动对象、动态加载器、GCC 的 `libgcc_s.so.1`，以及 Linux 内核 ABI 头文件。
+当前独立安装来自 Ubuntu 官方 `resolute-updates` 的 `2.43-2ubuntu2.4` 软件包，解包后保留 `usr/include` 和
+`usr/lib/x86_64-linux-gnu` 布局，并提供 `lib -> usr/lib`、`lib64 -> usr/lib64` 链接；软件包版本及 SHA256 记录在安装目录的 `installation.json` 中。
+安装不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。工具链同时选择编译用 sysroot、ELF 加载器和运行期库搜索路径，生成的程序可直接运行；运行时须保留该安装目录。
+改变或取消 `DOMINO_GLIBC_ROOT` 时，构建脚本会自动清理对应目录的编译产物并重建 CMake 配置缓存，重新检测工具链。
+系统 glibc 仍须满足上述环境要求；当前宿主机的 glibc 2.39 不支持 `TIME_MONOTONIC`，须指定独立安装的 2.43 才能编译当前源码。
+
 **Playground 构建与运行**：
 
 ```bash

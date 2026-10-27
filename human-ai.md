@@ -28,7 +28,7 @@
 
 | 位置 | 当前事实 | 实施方向 |
 | --- | --- | --- |
-| `engine/src/human/executor.c/h`、`wakeup.c/h` | 单写者处理睡眠命令、规划结果、到期事件及首次启动扫描；批次边界暂停，全部业务线程结束后统一结算；合并已授权空闲人物的精力阈值，以条件变量等待 | 后续增加通用行为协议和三通道兼容活动 |
+| `engine/src/human/executor.c/h` | 单写者处理睡眠命令、规划结果、到期事件及首次启动扫描；批次边界暂停，全部业务线程结束后统一结算；合并已授权空闲人物的精力阈值，以条件变量等待 | 后续增加通用行为协议和三通道兼容活动 |
 | `engine/src/human/planner.c/h` | 独立线程只读必要值快照，构造主通道单行为睡眠草案；每人一个、全局最多 64 个在途请求，批次完成后再检查暂停，保留在途结果 | 后续增加真实候选、评分、日程插入和导航，当前不读取全局世界或 nav |
 | `engine/src/human/entry.c`、`entry.h`、`store.c` | 管理同序的人物／data 数组及共用人物 ID 索引，以及全局 `DominoTask` 任务池；任务直接持有独占连续行为块及自身执行版本 | 在统一所有权上接入规划／执行生命周期；不另建人物 AI、任务或行为数据来源 |
 | `engine/src/human/rules.c/h`、`needs.c/h` | 整数需求初值、睡眠估时、空闲需求结算及只读精力阈值时刻预测已接入；保留完整分钟相位 | 后续增加其他需求的真实处理路径；活动期间不能单独调用空闲结算入口 |
@@ -159,7 +159,7 @@ flowchart LR
     Timer -->|到期事件| Other
 ```
 
-以上是完整目标拓扑。当前 human 由 `dominoHumanModuleInit()` 准备执行／规划入口、唤醒关联及控制资源，由 `dominoHumanModuleStart()`／`dominoHumanModuleStop()` 有序启动和 join 一个执行线程及一个最小规划线程，客户端直接协调 logger、human、timer 和主循环的生命周期；旧日志规划线程已移除。睡眠值快照与草案已接通，图中的导航修改、路线计算和其他领域事件仍待接入，不能把全部角色视为当前实现。
+以上是完整目标拓扑。当前 human 由 `dominoHumanModuleInit()` 准备执行／规划入口及控制资源，由 `dominoHumanModuleStart()`／`dominoHumanModuleStop()` 有序启动和 join 一个执行线程及一个最小规划线程，客户端直接协调 logger、human、timer 和主循环的生命周期；旧日志规划线程已移除。睡眠值快照与草案已接通，图中的导航修改、路线计算和其他领域事件仍待接入，不能把全部角色视为当前实现。
 
 ### 4.2 写入职责
 
@@ -243,7 +243,7 @@ flowchart LR
 
 这种布局在小行为序列上可读且直接。第一版不为内存分配预建复杂分级池；只有分配开销成为实测瓶颈才增加块复用。
 
-`DominoHuman` 固定为 64 字节，集中保存必需的 data 指针、唯一 `human_id`、状态、运动对象指针或静态坐标、运动对象 ID、地域／空间，以及 `active_plan_request_id`、`wakeup_timer_id`、`wakeup_version` 和三个调度标志。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组保持相同数量和顺序，统一由 `human_id -> array index` 定位；人物不再保存独立 data ID，也没有单独的 AI 状态／运行态数组或索引。已有 `human` 时直接访问 `human->data`，不能把 data 当作可空附件。data 前 40 字节集中随机状态、人物 ID、三个活动槽、日程版本、结算时刻、六项需求及健康／生命值；当前位置、导航地址、财富及调度补充字段紧接其后，128 字节的任务 ID 数组放在这些高频字段之后，从预留空间中调整而不扩大结构。身高体重、情绪、组织关系、资产和历史等属性继续分组保存。两种结构按自然对齐紧凑排列并用 `other_info` 补齐，不使用 packed 或复杂位域；布局简化减少检索和容器维护，尚无缓存性能实测。
+`DominoHuman` 固定为 64 字节，集中保存必需的 data 指针、唯一 `human_id`、状态、运动对象指针或静态坐标、运动对象 ID、地域／空间，以及 `active_plan_request_id`、`wakeup_timer_id`、`wakeup_due_ms` 和规划待投、执行就绪两个调度标志。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组保持相同数量和顺序，统一由 `human_id -> array index` 定位；人物不再保存独立 data ID，也没有单独的 AI 状态／运行态数组或索引。已有 `human` 时直接访问 `human->data`，不能把 data 当作可空附件。data 前 40 字节集中随机状态、人物 ID、三个活动槽、日程版本、结算时刻、六项需求及健康／生命值；当前位置、导航地址、财富及调度补充字段紧接其后，128 字节的任务 ID 数组放在这些高频字段之后，从预留空间中调整而不扩大结构。身高体重、情绪、组织关系、资产和历史等属性继续分组保存。两种结构按自然对齐紧凑排列并用 `other_info` 补齐，不使用 packed 或复杂位域；布局简化减少检索和容器维护，尚无缓存性能实测。
 
 移除单个 `DominoHuman.behavior` 字段，查询与展示从三个活动任务及其当前行为生成；需要单个主要行为时优先展示主通道任务，同时附带两个次通道任务的状态。查询摘要不回写成另一份调度状态，也不单独持久化。
 
@@ -256,7 +256,7 @@ flowchart LR
 | `DominoHumanData` | `random_state`；后续按业务增加餐次、作息周期、技能及探索记录引用 | 人物已提交的随机状态直接持久化；新业务只补充现有字段不能表达的数据 |
 | `DominoTask` | `pending_stop_reason`、`pending_child_task_id`、取消范围 | `pending_stop_reason != NONE` 表示已请求停止，停止意图归属具体任务；待交接任务已经提交但尚未启动；三个通道均可使用父子交接，同链保持相同人物和通道 |
 | `DominoHuman` | `active_plan_request_id`、`plan_submit_pending_flag`、`execution_queued_flag` | 已提交且仍有效的规划请求、等待提交规划请求的标志、已进入执行器就绪集合的去重标志；可重建，不进入存档 |
-| `DominoHuman` | `wakeup_timer_id`、`wakeup_version` | 已登记的有效唤醒计时器与唤醒登记版本；不进入存档，运行登记失败不进入重试 |
+| `DominoHuman` | `wakeup_timer_id`、`wakeup_due_ms` | 已登记的有效唤醒计时器与绝对截止点；ID 非零时截止点有效，用于同刻去重，不进入存档 |
 | `DominoHumanData` | `pending_plan_reasons` | 靠前保存的待规划原因集合，可重建且不进入存档 |
 | 候选失败记录 | 任务类型、目标 ID、失败原因、相关条件版本、`retry_not_before_ms` | 小型有界运行态记录；抑制相同条件下的立即重复选择 |
 | `DominoTask` | `task_id`、`owner_human_id`、`type`、`channel_index`、`status`、`result` | 每个任务有唯一执行主体及规划选定的通道，类型不决定通道；多人共享活动另用活动 ID |
@@ -269,10 +269,9 @@ flowchart LR
 | `DominoBehaviorProgress` | `started_at_ms`、`ended_at_ms`、`accounted_at_ms` | 实际首次激活、终结及最近结算的绝对现实时刻 |
 | `DominoBehaviorProgress` | `status`、`started_flag`、`active_elapsed_ms`、已完成业务量、提交标记 | 行为含 `CANCELLED` 终态；有效进度不包含挂起和无收益等待 |
 | `DominoPlanDraft` | `request_id`、`schedule_revision`、关键假设、任务／行为调整、必要随机状态前后值 | 私有结果；成功提交前不修改人物、任务池或随机状态 |
-| 现有 `DominoTimer` | `timer_id`、`event_queue_ptr`、`due_ms`、`delay_ms`、`event_type`、`cancelled_flag` | 按值登记及到期记录；截止点／延迟为 32 位现实毫秒，无人物 ID 或版本字段 |
-| human 唤醒关联表 | `timer_id`、`human_id`、`wakeup_version`、`due_ms` | 已由 human 执行线程维护；到期后按稳定计时 ID 查询并校验，不进入存档 |
+| 现有 `DominoTimer` | `timer_id`、`event_queue_ptr`、`data_id`、`due_ms`、`event_type`、`cancelled_flag` | 按值登记及到期记录；截止点为 32 位现实毫秒，64 位 `data_id` 由业务解释，human 传入人物 ID |
 
-`active_plan_request_id` 与 `plan_submit_pending_flag` 可以同时存在，例如普通请求仍有效、紧急升级请求尚待补投；后者不表示规划线程正在计算。`execution_queued_flag` 只表示人物已进入执行器就绪集合，用于防止重复入队，不表示正在执行。`wakeup_version` 是每个人物独立维护的 `uint32_t` 唤醒登记版本，与 `DominoHumanData.generation` 表示的家族代数无关。批次中完整完成登记，不再保留暂停专用的待登记标志和时刻。
+`active_plan_request_id` 与 `plan_submit_pending_flag` 可以同时存在，例如普通请求仍有效、紧急升级请求尚待补投；后者不表示规划线程正在计算。`execution_queued_flag` 只表示人物已进入执行器就绪集合，用于防止重复入队，不表示正在执行。`wakeup_due_ms` 是每个人物当前有效唤醒的 32 位业务截止点，0 仍是合法时刻；登记是否有效由非零 `wakeup_timer_id` 判断。批次中完整完成登记，不再保留暂停专用的待登记标志和时刻。
 
 持久事实与运行调度字段在同一人物数据体系中通过明确字段和 serde 白名单区分，不以另建容器表达。人物核心中的调度身份、标志和 data 中的 `pending_plan_reasons` 在加载后逐项初始化，不能整块清零 data。人物或 data 数组扩容、排序或删除后，必须同步两数组顺序并重新绑定 data 指针；规划线程仍只读取必要字段的独立值快照，合并布局不改变第 4.2 节的写入所有权。
 
@@ -490,7 +489,7 @@ typedef struct DominoBehaviorOps {
 
 回调不得同步重入人物执行循环，也不在其中阻塞等待另一人物或规划结果。跨人物后续处理进入就绪列表；一次短交易内部不插入其他回调。上下文以人物 ID、任务 ID 和当前行为定位为准；调用可能扩容／删除任务池、替换行为数组的函数后，必须重新按 ID 取得对象，不继续使用先前指针。结构变更同时修正行为游标、日程版本和相关引用。
 
-针对已启动行为的异步业务结果携带 `human_id + task_id + behavior_index + execution_version`，共享活动另核对 `activity_id`。消费时检查任务仍存在、状态匹配且仍占自己的槽位，并与该任务当前的行为序号及执行版本比较；步骤切换等操作递增本任务版本后，旧版本结果失效。旧结果不能仅根据通道下标操作后来占槽的新任务。尚未对应任务的来电和消息通知按其业务记录 ID 去重。人物公共唤醒的 `wakeup_version` 只标识计时登记，不替代任务执行版本，也不用于撤销其他通道的业务结果。上述异步消费检查尚未实现。
+针对已启动行为的异步业务结果携带 `human_id + task_id + behavior_index + execution_version`，共享活动另核对 `activity_id`。消费时检查任务仍存在、状态匹配且仍占自己的槽位，并与该任务当前的行为序号及执行版本比较；步骤切换等操作递增本任务版本后，旧版本结果失效。旧结果不能仅根据通道下标操作后来占槽的新任务。尚未对应任务的来电和消息通知按其业务记录 ID 去重。人物公共唤醒使用当前 `wakeup_timer_id` 标识计时登记，不替代任务执行版本，也不用于撤销其他通道的业务结果。上述异步消费检查尚未实现。
 
 ### 7.3 执行循环
 
@@ -762,7 +761,7 @@ typedef struct DominoBehaviorOps {
 
 ## 12. 文件组织
 
-以下为完整目标目录。已实现 `store.c/h`、类型元数据入口及人物／任务 serde，本轮增加 `rules.c/h`、`needs.c/h`、任务／行为两层 `sleep.c/h`、`executor.c/h`、`wakeup.c/h` 和 `planner.c/h`；人物与 AI 字段统一定义在 `shared/include/domino_shared_human.h`。原独立 AI 容器对应的 `human/model.h` 和旧 `behavior_planning.c` 已移除。当前 planner／executor 仅支持独立核心睡眠的受限自主续接，`effects.c`、完整候选规划、通用行为协议、其他业务及 social 扩展仍待实施，不为未来接口预留空文件。timer 部分列出现有文件。`.h` 按模块公开边界添加，不要求每个类型文件单独配一个头文件。
+以下为完整目标目录。已实现 `store.c/h`、类型元数据入口及人物／任务 serde，本轮增加 `rules.c/h`、`needs.c/h`、任务／行为两层 `sleep.c/h`、`executor.c/h` 和 `planner.c/h`；人物与 AI 字段统一定义在 `shared/include/domino_shared_human.h`。原独立 AI 容器对应的 `human/model.h` 和旧 `behavior_planning.c` 已移除。当前 planner／executor 仅支持独立核心睡眠的受限自主续接，`effects.c`、完整候选规划、通用行为协议、其他业务及 social 扩展仍待实施，不为未来接口预留空文件。timer 部分列出现有文件。`.h` 按模块公开边界添加，不要求每个类型文件单独配一个头文件。
 
 ```text
 engine/src/human/
@@ -772,8 +771,7 @@ engine/src/human/
   rules.c / rules.h       集中的初始玩法参数
   planner.c / planner.h   已有最小睡眠请求／结果协议；后续扩展候选试算与评分
   schedule.c              按通道及计划时间筛选、插入和同通道后续修复
-  executor.c              独立执行线程、固定三槽推进、合作停止与交接
-  wakeup.c / wakeup.h     汇总三个通道的唯一 human 唤醒及计时事件适配
+  executor.c              独立执行线程、人物唯一唤醒、固定三槽推进、合作停止与交接
   effects.c               连续结算、离散提交和效果事件
   task/
     entry.c / entry.h     任务注册表与共用顺序执行器
@@ -869,8 +867,7 @@ session_elapsed_ms >= 34560000 → 客户端依次调用 Stop、Destroy，停止
 | `dominoTimerModuleStop()` | 引擎仅在运行过的停止路径中调用；已发布 `STOPPING` 并唤醒，直接 join 计时线程并保留资源 |
 | `dominoTimerModuleDestroy()` | 引擎确认线程已结束或从未启动后调用，释放并清空内部资源；丢弃尚未投递请求，不停止或 join 线程，不清理业务队列 |
 | `dominoTimerNotifyTimeChanged()` | 唤醒线程重新检查冻结和累计现实时间，不改变业务状态 |
-| `dominoTimerSchedule(DominoTimer* timer_ptr)` | 按调用时刻加 `delay_ms` 计算 `due_ms`；异步提交，成功回写非零 `timer_id` |
-| `dominoTimerScheduleAt(DominoTimer* timer_ptr, due_ms)` | 精确保留传入的绝对累计现实截止点；已到期仍保留该值并异步投递，成功回写非零 `timer_id` |
+| `dominoTimerScheduleAt(event_queue_ptr, due_ms, event_type, data_id, timer_id_out_ptr)` | 独立参数登记绝对累计现实截止点；按值携带业务 ID，成功输出非零 `timer_id`，已到期仍异步投递 |
 | `dominoTimerCancel(timer_id, event_queue_ptr)` | 在命令队列、堆和指定业务队列中查找并设置取消标记 |
 
 没有改期、目标注册、可写通知或业务回调分派接口。改变到期时间通过取消旧登记再发起新登记完成；收益结算由消费线程执行。
@@ -879,21 +876,22 @@ session_elapsed_ms >= 34560000 → 客户端依次调用 Stop、Destroy，停止
 
 - `domino_timer_id_t timer_id`：首字段，由登记命令队列直接写入的 64 位稳定登记 ID，仅在本次 timer Init 生命周期内有效；到期投递只改写外层 `DominoThreadMessage.id`，不修改内嵌载荷的 `timer_id`。
 - `DominoThreadQueue* event_queue_ptr`：业务方拥有的通用收件队列，已初始化并存储 `DominoThreadMessage`，可以混合多个消息类型。
-- `domino_runtime_ms_t due_ms`、`delay_ms`：32 位累计现实毫秒截止点和现实毫秒延迟。
+- `uint64_t data_id`：原样携带的业务 ID，timer 不解释其含义；human 用它保存 `human_id`。
+- `domino_runtime_ms_t due_ms`：32 位累计未冻结现实毫秒截止点。
 - `event_type`、`cancelled_flag`：业务事件类别及取消标记。
 
-记录没有关联实体 ID、调用方版本或回调。相对 Schedule 输入的 `timer_id`、`due_ms` 不参与登记；调用方填写延迟、队列、事件类型和未取消标记。ScheduleAt 则使用单独参数给定绝对 `due_ms`，不二次转换为 `now + delay`；两者调用期间由当前线程独占记录，先把 `timer_id` 清零，成功入队才写回非零登记 ID。已到期登记也经队列异步投递，不在调用栈里执行业务。
+记录只携带业务 ID，不保存业务对象、调用方版本或回调。ScheduleAt 接收队列、绝对 `due_ms`、事件类型、`data_id` 和 ID 输出指针，在内部构造局部记录，不二次转换为 `now + delay`。入口先清零非空 ID 输出，参数校验通过后采样并校验当前业务时刻，成功入队才输出非零登记 ID。已到期登记也经队列异步投递，不在调用栈里执行业务。
 
 #### 统一 32 位业务计时范围
 
-任务、行为、需求结算、服务预约和业务超时统一使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，timer 的 `due_ms` 和 `delay_ms` 已使用同一类型。其最大值为 `4294967295 ms`，约合 49.71 个累计未冻结现实日。按第 13.1 节的日历规则换算：
+任务、行为、需求结算、服务预约和业务超时统一使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，timer 的 `due_ms` 也使用同一类型。其最大值为 `4294967295 ms`，约合 49.71 个累计未冻结现实日。按第 13.1 节的日历规则换算：
 
 ```text
 1 游戏年 = 12 × 24 × 60000 = 17280000 现实毫秒
 UINT32_MAX / 17280000 ≈ 248.55 游戏年
 ```
 
-约 248.6 个游戏年的累计范围满足当前产品尺度，这是已接受的 32 位约束，不能因跨存档累计或范围上限推断需要扩宽为 64 位。保留当前范围检查：毫秒入口拒绝越界的当前时刻；Schedule 在相加前检查 `delay_ms <= UINT32_MAX - now_ms`，失败返回 `ERR_OUT_OF_RANGE`，不回绕或归零。后台读取时间越界时直接打印 stderr 并 exit，不继续用越界时间处理计时项。单次会话结束后，加载仍沿用存档累计时钟。
+约 248.6 个游戏年的累计范围满足当前产品尺度，这是已接受的 32 位约束，不能因跨存档累计或范围上限推断需要扩宽为 64 位。保留当前范围检查：毫秒入口拒绝越界的当前时刻；业务在从时长计算绝对截止点前检查 `delta_ms <= UINT32_MAX - base_ms`，越界报错，不回绕或归零。后台读取时间越界时直接打印 stderr 并 exit，不继续用越界时间处理计时项。单次会话结束后，加载仍沿用存档累计时钟。
 
 任务、行为和业务超时按 32 位累计现实毫秒保存，通用 timer 不序列化。human 适配层直接用 ScheduleAt 登记业务绝对截止点，避免两次采样把截止点向后平移。ScheduleAt 仍校验当前时刻范围，`0` 与 `UINT32_MAX` 都是合法截止点，已过去的值不改写；越界按调度错误处理，不回绕、截断或归零。
 
@@ -905,7 +903,7 @@ UINT32_MAX / 17280000 ≈ 248.55 游戏年
 
 `request_mutex` 串行保护请求转移、堆、取消和唤醒状态；持有它之后才取得队列锁。当前到期投递也在请求锁内进行，无释放锁后的目标回调。每轮先处理最多 64 个堆项，再处理最多 64 条命令；取消堆顶也占堆批次预算。消费过命令或堆预算耗尽时立即重新检查，否则进入条件等待。
 
-Schedule 对无效业务请求和超出剩余业务时间的延迟保留返回结果，实际分配或必要消息提交失败直接打印 stderr 并 exit。成功入队后的后台入堆或到期投递失败同样直接退出，包括目标满载、分配失败和消息 ID 耗尽；不保存首错或发布失败回执。当前没有待投递重试列表或目标公平轮转。命令队列使用默认容量常量 100／10000，业务队列通过初始化参数选择容量。
+ScheduleAt 对空队列、空 ID 输出和不匹配的队列元素大小保留返回结果，实际分配或必要消息提交失败直接打印 stderr 并 exit。成功入队后的后台入堆或到期投递失败同样直接退出，包括目标满载、分配失败和消息 ID 耗尽；不保存首错或发布失败回执。当前没有待投递重试列表或目标公平轮转。命令队列使用默认容量常量 100／10000，业务队列通过初始化参数选择容量。
 
 接入继续采用这一明确的容量合同。命令与业务队列分别按同时登记、同时到期、取消残留及其他模块用量确定容量；首次启动分批登记，普通恢复保留已有登记，业务消费者在批次边界暂停并保留积压。有效唤醒数通常接近人物数，但物理队列及堆占用不能据此直接设为 10,000。容量不足应修正容量和提交节奏，不增加 timer 后台无限重试。
 
@@ -913,26 +911,24 @@ Schedule 对无效业务请求和超出剩余业务时间的延迟保留返回�
 
 计时线程用 `<threads.h>` 的 `cnd_wait()`、`cnd_timedwait()` 等待。未来截止点取 `due_ms - now_ms`，以现实毫秒换算并叠加 `timespec_get(TIME_UTC)` 的 UTC 绝对截止点；醒来仍按累计单调现实时间判断到期。UTC 前拨不会让到期判断提前成立，回拨可能延长等待。
 
-计时线程每轮批次入口先检查停止、再检查冻结；已进入的有限堆处理和命令迁移批次完整执行，批内不因冻结提前结束。冻结期间仍可 Schedule／ScheduleAt／Cancel，当前批次也可能继续投递到期消息。客户端普通冻结不通知 timer；客户端直接解冻后显式通知 timer，不等待业务线程回执。退出先发布停止再通知，等待中的线程优先响应退出，不要求先解冻。
+计时线程每轮批次入口先检查停止、再检查冻结；已进入的有限堆处理和命令迁移批次完整执行，批内不因冻结提前结束。冻结期间仍可 ScheduleAt／Cancel，当前批次也可能继续投递到期消息。客户端普通冻结不通知 timer；客户端直接解冻后显式通知 timer，不等待业务线程回执。退出先发布停止再通知，等待中的线程优先响应退出，不要求先解冻。
 
 #### human 唤醒适配与失败处理
 
-当前 `human/executor.c` 计算已授权核心睡眠的计划开始、剩余有效量完成时刻，或符合自主资格的空闲人物精力阈值，`human/wakeup.c` 维护每人最多一个有效登记；不登记 6 秒收益 tick 或全体空闲人物分钟 timer。未来再合并三通道完成、等待／超时、服务重试及其他需求边界；timer 本身仍允许其他业务多次登记。
+当前 `human/executor.c` 计算已授权核心睡眠的计划开始、剩余有效量完成时刻，或符合自主资格的空闲人物精力阈值，并直接维护每人最多一个有效登记；不登记 6 秒收益 tick 或全体空闲人物分钟 timer。未来再合并三通道完成、等待／超时、服务重试及其他需求边界；timer 本身仍允许其他业务多次登记。
 
 后续扩展三通道时，通道忙不能把该通道已过计划开始的待办反复作为立即唤醒来源；任何通道结束或改变截止点，都须从剩余事实重算最早时刻。当前只支持一项独立活动，公共通知仍只表示人物需要处理，不直接宣告任务完成。
 
-执行线程已唯一维护 `wakeup_timer_id`、递增 `wakeup_version` 和 `timer_id -> human_id / wakeup_version / due_ms` 关联表。版本使用 `uint32_t`，仅累计该人物本次运行内的登记变更；加载重建时清零，不进入存档。递增前检查 `UINT32_MAX`，耗尽返回 `ERR_OUT_OF_RANGE`，禁止回绕。
+执行线程唯一维护人物的 `wakeup_timer_id` 和 `wakeup_due_ms`，不再维护 `timer_id -> human` 关联表或额外唤醒版本。到期记录直接携带 `data_id = human_id`，人物查找复用现有 ID 索引；`timer_id` 在本次 Init 生命周期内唯一，可区分同一人物的不同登记。首次登记或替换唤醒按以下顺序执行：
 
-单次会话上限为 2 个游戏年对应的 576 个现实分钟（24 分钟 × 12 × 2），共 `34560000 ms`。按每个人物每毫秒递增 5 次估算，一次会话累计 `172800000` 次，低于 `UINT32_MAX` 的 `4294967295` 次容量；这里估算的是版本递增次数，不是所有人物共用的 timer ID 数量。首次登记或替换唤醒按以下顺序执行：
+1. 从业务事实计算完整的目标时刻；当前 `wakeup_timer_id` 非零且截止点相同时保留已有登记。
+2. 清空要替换的旧 ID 和截止点，并用旧 ID 和同一队列调用 Cancel。`ERR_NOT_FOUND` 表示已无可取消记录，不妨碍旧身份失效；其他错误直接报告并退出。
+3. 调用 ScheduleAt，传入人物 ID。成功后保存新的非零 `wakeup_timer_id` 和 `wakeup_due_ms`。登记和消费均在执行线程，已到期事件不会在身份保存前由另一 human 消费线程处理。
+4. 消费到期项时检查队列和事件类型，并确认 `data_id` 在非零 32 位人物 ID 范围内，再查找人物、核对其当前非零 `wakeup_timer_id`。匹配时清除 ID 和截止点，再按取消标记决定是否推进；旧事件不能清除人物的新登记。
 
-1. 从业务事实计算完整的目标时刻；目标和身份未变化时保留已有登记。
-2. 使要替换的旧身份失效、删除旧关联，并用旧 ID 和同一队列调用 Cancel。`ERR_NOT_FOUND` 表示已无可取消记录，不妨碍旧身份失效；其他错误进入明确的调度错误处理。
-3. 调用 ScheduleAt。成功取得非零 `timer_id` 后实际插入关联，按需分配并检查结果，成功才发布新的 `wakeup_timer_id`；分配失败直接打印 stderr 并 exit，不回滚已提交 timer。登记和消费均在执行线程，已到期事件不会在关联发布前由另一 human 消费线程处理。
-4. 消费到期项时取出并删除对应关联，核对人物存在、版本及当前 `wakeup_timer_id`；匹配时清除该 ID，再按取消标记决定是否推进。旧事件或缺失关联直接忽略，不能据此清除人物的新 ID。
+取消、人物删除和任务变化使旧唤醒失效时，立即清空人物的登记身份，不等待取消项再次投递；timer 会静默跳过取消命令和堆项。加载和 Destroy 复位人物唤醒运行态；timer ID 和 `wakeup_due_ms` 不进入存档。
 
-取消、人物删除和任务变化使旧唤醒失效时，立即删除旧关联，不等待取消项再次投递；timer 会静默跳过取消命令和堆项。登记失败不安装关联，自然到期消费释放关联，退出清理剩余表。关联表、timer ID 和 wakeup_version 不进入存档。
-
-活动所需的 ScheduleAt、关联插入或自动推进发生无法继续维持运行的错误时，执行器直接打印 stderr 并 exit；planner 和 timer 致命故障遵循同一规则。必要消息的队列满、内存分配失败不经过独立错误状态或命令回执传播，也不自动冻结保存或重试。已接受／已加载的 `PLANNED` 睡眠到时若 Start 条件不再满足，例如精力已达 80，当前执行策略仍直接终止进程，不自动跳过、取消或重规划。Submit 尚未接受时的资格、精力、业务容量和请求时间范围拒绝仍返回业务错误；运行时由日志模块记录，非运行阶段直接输出 stdout。
+活动所需的 ScheduleAt 或自动推进发生无法继续维持运行的错误时，执行器直接打印 stderr 并 exit；planner 和 timer 致命故障遵循同一规则。必要消息的队列满、内存分配失败不经过独立错误状态或命令回执传播，也不自动冻结保存或重试。已接受／已加载的 `PLANNED` 睡眠到时若 Start 条件不再满足，例如精力已达 80，当前执行策略仍直接终止进程，不自动跳过、取消或重规划。Submit 尚未接受时的资格、精力、业务容量和请求时间范围拒绝仍返回业务错误；运行时由日志模块记录，非运行阶段直接输出 stdout。
 
 同步 `COMMAND` 消费时必须匹配唯一待处理请求；请求已不在等待或 `request_id` 不匹配，说明内部命令协议损坏，通过 `DOMINO_EXIT_WITH_ERROR` 直接输出 stderr 并退出，避免仅记录日志后让调用方一直等待。普通业务拒绝仍通过条件变量返回结果，由公开请求边界记录一次；允许过期的 AI 结果和 timer 唤醒继续按各自身份规则丢弃。
 
@@ -942,13 +938,13 @@ Schedule 对无效业务请求和超出剩余业务时间的延迟保留返回�
 
 ### 13.3 已实现：受限自主睡眠的启动协调
 
-1. Init 准备主循环双向队列、logger、human 和 timer 的基础资源，并加载、校验和绑定世界。human Init 创建空的运行授权表、执行收件箱、唤醒关联表、规划入口和控制同步对象；不启动任何线程，time 始终冻结。旧 timer ID、队列和授权不延续。任务、行为和其他按需业务容量仍在实际需要时分配。
+1. Init 准备主循环双向队列、logger、human 和 timer 的基础资源，并加载、校验和绑定世界。human Init 创建空的运行授权表、执行收件箱、规划入口和控制同步对象；不启动任何线程，time 始终冻结。旧 timer ID、队列和授权不延续。任务、行为和其他按需业务容量仍在实际需要时分配。
 2. 客户端用 AuthorizeSleep 确认当前建筑内的持续睡眠许可，允许空闲时后续自主安排；也可用 SubmitSleep 显式创建新 `PLANNED` 任务。已加载活动睡眠须重新授权，任务目标不是授权来源。
-3. 客户端在 Start 中先启动 logger，再在冻结时钟下调用 `dominoHumanModuleStart()`：校验冻结世界、授权及结算检查点，依次启动 executor 和 planner 并等待各自就绪；随后启动 timer，最后创建主循环。Start 使用 Init 已建立的队列、关联表和同步对象，不再分配这些基础资源。主循环不启动其他线程或发布启动回执；创建顺序确保普通运行通知只访问已经完成初始化的业务模块。human 内部的线程就绪回执保留，线程在冻结时钟下于批次入口等待，不额外发送暂停回执。
+3. 客户端在 Start 中先启动 logger，再在冻结时钟下调用 `dominoHumanModuleStart()`：校验冻结世界、授权及结算检查点，依次启动 executor 和 planner 并等待各自就绪；随后启动 timer，最后创建主循环。Start 使用 Init 已建立的队列、授权表和同步对象，不再分配这些基础资源。主循环不启动其他线程或发布启动回执；创建顺序确保普通运行通知只访问已经完成初始化的业务模块。human 内部的线程就绪回执保留，线程在冻结时钟下于批次入口等待，不额外发送暂停回执。
 4. 启动调用成功后，客户端进入 `RUNNING`，直接解冻时钟并通知主循环和各业务线程。executor 仅在首次启动时按有限批次扫描人物建立调度。已加载活动从现有进度 Advance，不重走 Start；已授权待执行睡眠到时才 Start。符合自主条件的空闲人物按当前精力请求规划或登记阈值。扫描中途暂停保留游标，恢复后继续余下部分。
 5. Init／Start 返回 `void`；引擎对外入口校验生命周期和参数，内部继续校验业务事实与实际资源操作。致命错误直接打印 stderr 并 exit，包括 human Start 在冻结时刻检查活动任务与授权事实失败，以及线程就绪后的解冻失败。不再保存首错、向其他线程发布故障或逐层返回终止错误；正常线程就绪同步保留。
 
-引擎对外 Init／Start／Stop／Destroy 严格校验生命周期与调用线程，重复调用、未 Init 操作、Stop 后 Start、未 Stop 直接 Destroy 均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。内部 timer、executor 和 planner 不重复校验或维护完整阶段状态；任务存储、唤醒关联、导航内部辅助函数和加载入口也直接使用引擎已准备的资源，不再复检已由调用链保证的初始化条件；可直接调用的公共业务入口仍负责自身访问资格。业务事实、身份与版本校验和线程同步仍保留。引擎在运行过的 Stop 路径中先发布 `STOPPING` 并唤醒，再调用内部 Stop 进行 join。仅 Init 时引擎跳过 human／timer Stop 和人物结算，仍调用 logger Stop 关闭入队并刷新，随后进入引擎 `STOPPED`。shared logger／queue 保留独立公共接口的状态校验，日志包装层不重复检查。
+引擎对外 Init／Start／Stop／Destroy 严格校验生命周期与调用线程，重复调用、未 Init 操作、Stop 后 Start、未 Stop 直接 Destroy 均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。内部 timer、executor 和 planner 不重复校验或维护完整阶段状态；任务存储、人物唤醒、导航内部辅助函数和加载入口也直接使用引擎已准备的资源，不再复检已由调用链保证的初始化条件；可直接调用的公共业务入口仍负责自身访问资格。业务事实、身份与版本校验和线程同步仍保留。引擎在运行过的 Stop 路径中先发布 `STOPPING` 并唤醒，再调用内部 Stop 进行 join。仅 Init 时引擎跳过 human／timer Stop 和人物结算，仍调用 logger Stop 关闭入队并刷新，随后进入引擎 `STOPPED`。shared logger／queue 保留独立公共接口的状态校验，日志包装层不重复检查。
 
 执行器和 planner 的 `ready_flag` 只用于本轮首次启动握手，由工作线程发布、Start 等待，初值由静态存储或上一轮 Destroy 建立；Start／Stop 不重复复位，也不把它作为当前运行状态。Start 的就绪条件不要求所有人物已登记 timer、已完成规划或已启动睡眠，也不保证后续每项提交或启动都成功。当前只有最小睡眠值快照和 planner，没有完整业务快照或会话上限计时；合法未授权的待执行睡眠保留但不启动，不支持的活动／挂起状态拒绝运行。
 
@@ -972,15 +968,15 @@ Freeze 成功只保证业务时钟固定，当前批次仍可能写入世界，�
 
 运行中的世界经客户端调用 `dominoEngineStop()` 先进入 `STOPPING`，直接冻结时钟并校验退出结算时刻 T，再唤醒主循环及等待中的业务线程。已冻结的世界保持冻结，不为退出重新解冻。各线程完成当前有限批次，在下一轮首先发现退出请求并结束，不会被冻结等待挡住。主循环只结束自身循环，不协调其他线程退出或执行结算。
 
-客户端先 join 主循环，再调用 `dominoHumanModuleStop()` 依次 join 执行／规划线程，随后调用 `dominoTimerModuleStop()` join timer；期间 timer 登记入口与所有消息投递目标保持有效，让各线程完成最后的有限批次。执行线程 join 前仍允许提交最后一批规划请求，不在 Planner Submit 中按全局退出拒绝请求。所有模块的 Stop 保留队列、留队消息、关联表和同步对象。全部业务线程停止后，由客户端调用 `dominoHumanExecutionSettle(T)`，将活动睡眠 Advance 到 T、空闲人物 SettleNeeds 到 T；已到目标可完成和清槽，但保留终态，不回收、不启动下一项。引擎 Stop 完成结算后调用 logger Stop 排空日志、join writer 并刷新输出，然后进入 `STOPPED` 并返回，世界、冻结时钟及日志文件仍保留，尚未保存，也不允许直接 Start 或 Thaw。
+客户端先 join 主循环，再调用 `dominoHumanModuleStop()` 依次 join 执行／规划线程，随后调用 `dominoTimerModuleStop()` join timer；期间 timer 登记入口与所有消息投递目标保持有效，让各线程完成最后的有限批次。执行线程 join 前仍允许提交最后一批规划请求，不在 Planner Submit 中按全局退出拒绝请求。所有模块的 Stop 保留队列、留队消息、业务运行态和同步对象。全部业务线程停止后，由客户端调用 `dominoHumanExecutionSettle(T)`，将活动睡眠 Advance 到 T、空闲人物 SettleNeeds 到 T；已到目标可完成和清槽，但保留终态，不回收、不启动下一项。引擎 Stop 完成结算后调用 logger Stop 排空日志、join writer 并刷新输出，然后进入 `STOPPED` 并返回，世界、冻结时钟及日志文件仍保留，尚未保存，也不允许直接 Start 或 Thaw。
 
-外部随后调用 `dominoEngineDestroy()`，进入 `DESTROYING`，释放 timer 自有资源和主循环队列，准备 nav 并保存世界，再由 `dominoHumanModuleDestroy()` 调用 PlannerDestroy 和 ExecutionDestroy。此时排空规划及执行入口，丢弃留队请求、结果及 timer 消息，释放草案尚未转移的行为块，再销毁关联表、同步对象、任务存储和人物容器。残留清理只处理所有权，不提交草案或推进人物；规划请求 ID、唤醒标识和待规划标志均不持久化，保留到 Destroy 不改变存档内容。其余世界模块随后释放，日志文件和队列最后销毁；保存及销毁阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不调用日志记录接口。各模块 Destroy 不调用 Stop，引擎 Destroy 只接受 `STOPPED`，未先 Stop 直接调用会报错退出。结算或任一停止步骤发生致命错误时直接打印 stderr 并 exit，不继续保存、清理或重试。
+外部随后调用 `dominoEngineDestroy()`，进入 `DESTROYING`，释放 timer 自有资源和主循环队列，准备 nav 并保存世界，再由 `dominoHumanModuleDestroy()` 调用 PlannerDestroy 和 ExecutionDestroy。此时排空规划及执行入口，丢弃留队请求、结果及 timer 消息，释放草案尚未转移的行为块，再销毁授权表和同步对象、复位人物唤醒字段，最后释放任务存储和人物容器。残留清理只处理所有权，不提交草案或推进人物；规划请求 ID、唤醒标识和待规划标志均不持久化，保留到 Destroy 不改变存档内容。其余世界模块随后释放，日志文件和队列最后销毁；保存及销毁阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不调用日志记录接口。各模块 Destroy 不调用 Stop，引擎 Destroy 只接受 `STOPPED`，未先 Stop 直接调用会报错退出。结算或任一停止步骤发生致命错误时直接打印 stderr 并 exit，不继续保存、清理或重试。
 
 Init／Start／Stop／Destroy、Freeze／Thaw 返回 `void`；各阶段的状态、参数校验、停止、join、结算、保存或资源操作出现致命错误时统一通过公共方法打印 stderr 并 `exit(EXIT_FAILURE)`，允许标准退出处理。不再维护实例首错、`FAILED` 生命周期状态或错误查询接口，也不让等待者通过故障回执结束等待。正常线程就绪、命令业务结果、退出标志、通知及 join 保留。运行阶段的非致命错误和正常日志走日志模块，非运行阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。日志满载时向所属模块的输出流同步提示并等待直到入队；日志服务自身致命错误直接输出 stderr 并 exit。后续新进程仍按磁盘 staging／active／`.prev` 事务恢复，当前进程不重试失败保存。
 
 错误类别取决于语义，不由负结果码或日志级别决定。业务拒绝、查询未命中、队列空和正常排空结束保留原有结果；项目自身同步原语故障直接打印 stderr 并 exit，`lib/` 内部保留既有终止行为。
 
-任务存储由 `dominoHumanStoreInit()`／`dominoHumanStoreDestroy()` 管理，唤醒关联由 `dominoHumanWakeupInit()`／`dominoHumanWakeupDestroy()` 管理；两者不创建线程，由 human 按 Init → Destroy 管理，释放统一在 human 的 Destroy 阶段进行；内部不另设生命周期状态或重复校验顺序。
+任务存储由 `dominoHumanStoreInit()`／`dominoHumanStoreDestroy()` 按 Init → Destroy 管理，不创建线程，内部不另设生命周期状态或重复校验顺序。人物唤醒由执行器直接维护，加载后复位 `wakeup_timer_id` 和 `wakeup_due_ms`，ExecutionDestroy 清理消息后再次复位，不再有独立唤醒模块或生命周期入口。
 
 Destroy 在释放时立即复位模块状态，不依赖下次 Init 覆盖：common、host、social 的容器和 ID map 归空，host 固定世界状态清空；human 清理消息及行为块、销毁运行资源后清空执行器和规划器状态；timer 在释放命令队列、堆及同步对象后整体清零。保存及世界资源清理完成后，再调用 `dominoTimeModuleDestroy()`；引擎保证在客户端线程的 `DESTROYING` 路径中调用，time 不再复检生命周期，将 `session_start_monotonic_ns`、`runtime_datetime_base_ns`、`sequence` 设为 0，并保持 `frozen = true`。这只复位当前内存实例，存档中的累计未冻结时间仍然保留，下次 Init 重新加载该基准。
 
@@ -1021,7 +1017,7 @@ serde 逐字段写入任务事实，并遍历 `task->behaviors_ptr` 保存嵌套
 
 消息记录保存稳定业务 ID、发送方、接收方、内容及各接收方的已接收、已读状态；阅读效果与已读标记一起提交。“发送提交”“接收完成”“阅读完成”分别有事实记录，已读必须以已接收为前提。加载先关联已有消息任务，再按消息 ID 和操作去重恢复待办，不为仍占槽或已在日程中的消息操作创建第二个任务；已完成操作不再次产生关系或任务效果。外部运行命令和未提交规划草案无需持久化；如果某项操作已经承诺以后必须执行，它的意图须在保存前成为上述业务记录。
 
-不保存操作系统线程、锁、队列内容、函数指针、timer ID、堆下标、规划 `request_id`、任务运行态 `execution_version`、在途标志或真实单调时钟绝对值。任务、行为和业务超时保存 32 位累计现实毫秒；`accounted_at_ms` 同样按 32 位现实毫秒持久化，time 保存唯一累计基准。通用计时器内部队列不序列化，人物就绪集合、关联表、规划原因及唯一下一唤醒可从三个通道和其他业务事实重建。
+不保存操作系统线程、锁、队列内容、函数指针、timer ID、堆下标、规划 `request_id`、任务运行态 `execution_version`、在途标志或真实单调时钟绝对值。任务、行为和业务超时保存 32 位累计现实毫秒；`accounted_at_ms` 同样按 32 位现实毫秒持久化，time 保存唯一累计基准。通用计时器内部队列不序列化，人物就绪集合、规划原因及唯一下一唤醒可从三个通道和其他业务事实重建。
 
 ### 14.3 完整业务恢复目标与各状态的首个动作
 
@@ -1031,7 +1027,7 @@ serde 逐字段写入任务事实，并遍历 `task->behaviors_ptr` 保存嵌套
 
 活动数组必须恰有三个槽位。每个非零 ID 必须属于本人、处于 `RUNNING` 且任务自身的 `channel_index` 与槽位一致；同一任务不能重复占槽，每个 `RUNNING` 任务也必须恰被自己的槽位引用。每个槽必须指向本通道最深层任务，祖先为 `SUSPENDED`；父子及待交接引用保持同一人物和通道，不根据任务类型限制关系。违反这些条件在加载边界报错，不扩大数组、静默丢弃任务或任选一个继续。
 
-引用和业务状态校验通过后，统一重建占用计数、活动成员索引和消息接收索引。初始化空的 timer 关联表、人物就绪集合、任务执行版本和规划运行态，`active_plan_request_id` 清零，不等待旧进程规划结果。需要继续规划的原因由当前缺失日程、待决策业务状态等重新计算；它们不等于一份已经成立但可丢弃的任务。
+引用和业务状态校验通过后，统一重建占用计数、活动成员索引和消息接收索引。复位人物唤醒 ID 和截止点，初始化人物就绪集合、任务执行版本和规划运行态，`active_plan_request_id` 清零，不等待旧进程规划结果。需要继续规划的原因由当前缺失日程、待决策业务状态等重新计算；它们不等于一份已经成立但可丢弃的任务。
 
 首次继续动作取决于保存的业务状态，不对所有行为统一调用 `start` 或 `resume`：
 
@@ -1082,7 +1078,7 @@ AI 保存行程实体 ID、交通方式、当前段必要的独占几何／长�
 
 ### 第二步：接通执行、唤醒、暂停与早期诊断
 
-当前已新增 `executor.c/h`、`wakeup.c/h`、`planner.c/h` 并接通受限睡眠与 timer，移除旧日志规划线程；Start 就绪后由客户端直接解冻并通知、Freeze 固定 T、规划收尾、Stop 停止结算与 Destroy 正常保存及生命周期错误契约已落地。已有少量决策状态 DEBUG 日志，尚无 `effects.c`、完整三通道协议、完整性能指标或会话上限计时。以下列出本步骤的完整目标，不能全部视为已实现：
+当前已新增 `executor.c/h`、`planner.c/h` 并接通受限睡眠与 timer，移除旧日志规划线程；Start 就绪后由客户端直接解冻并通知、Freeze 固定 T、规划收尾、Stop 停止结算与 Destroy 正常保存及生命周期错误契约已落地。已有少量决策状态 DEBUG 日志，尚无 `effects.c`、完整三通道协议、完整性能指标或会话上限计时。以下列出本步骤的完整目标，不能全部视为已实现：
 
 - Start 等工作角色就绪后再启动累计时钟；所有人物和相关领域状态由执行线程提交，客户端读取副本。
 - 实现各任务内部共用顺序执行器、三个槽位的有界推进、部分结算、资源释放和一次终结；基础需求每人只结算一次，任务事件按实例和版本校验，并完成多队列及控制状态的等待。
@@ -1311,7 +1307,7 @@ Floyd 的 O(V²) 缓存和 O(V³) 重建可能先于任务调度成为瓶颈。�
 | 驾驶／工作、通话及消息编辑同时冻结保存再加载 | 三个槽位和各自进度均续接，基础需求不重复，电话不重拨、消息不重发，重建一个公共唤醒 |
 | 存档槽位重复、任务 channel_index 与槽位不符或遗漏 RUNNING 任务 | 加载报错，不扩展第四通道、不静默丢弃任务或任选一个执行 |
 | human 与其他模块同时使用通用 timer | 多对象、多计时项互不混淆，无需绑定 human ID |
-| Schedule 同步失败、取消后重登记失败、截止点超出合法范围 | 不安装有效关联；直接打印 stderr 并 exit，不自动冻结保存或重试 |
+| ScheduleAt 同步失败、取消后重登记失败、截止点超出合法范围 | 不保留有效唤醒身份；直接打印 stderr 并 exit，不自动冻结保存或重试 |
 | timer 后台入堆或投递失败 | 直接打印 stderr 并 exit，不等待空位或重试 |
 | 计时转移、取消及跨生命周期重新登记 | 检查取消标记、稳定计时 ID 与业务版本；加载重新登记，不复用旧 runtime |
 | 公共交通紧急中断、等待下车时退出保存 | 业务交接等待真实安全点；退出停止线程后结算到 T 并保存原位置与停止意图，不等下车也不瞬移 |

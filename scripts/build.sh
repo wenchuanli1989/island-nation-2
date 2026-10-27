@@ -12,6 +12,24 @@ get_build_jobs() {
     echo "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc 2>/dev/null || echo 1)}"
 }
 
+# 仅通过 DOMINO_GLIBC_ROOT 选择独立 glibc；切换时重新检测工具链。
+configure_project() {
+    local preset="$1" build_dir="$WORKSPACE_DIR/build-$1" glibc_root="${DOMINO_GLIBC_ROOT:-}"
+    shift
+    # 显式 -B 覆盖放在首个可选参数位置。
+    [[ "${1:-}" != -B ]] || build_dir="$2"
+    if [[ -n "$glibc_root" ]]; then
+        glibc_root="$(realpath "$glibc_root")"
+        set -- --toolchain "$WORKSPACE_DIR/cmake/linux_x86_64_glibc.cmake" "-DDOMINO_GLIBC_ROOT=$glibc_root" "$@"
+    fi
+    if [[ -f "$build_dir/CMakeCache.txt" &&
+          "$glibc_root" != "$(sed -n 's/^DOMINO_GLIBC_ROOT:PATH=//p' "$build_dir/CMakeCache.txt")" ]]; then
+        [[ ! -f "$build_dir/Makefile" ]] || cmake --build "$build_dir" --target clean
+        set -- --fresh "$@"
+    fi
+    cmake --preset "$preset" "$@"
+}
+
 # 显示使用说明
 show_usage() {
     cat << EOF
@@ -49,6 +67,9 @@ clang-tidy 选项:
   $0 scan-build             使用 Clang Static Analyzer 分析所有项目
   $0 scan-build shared      分析指定项目
   $0 playground-run playground/算法/路径规划/弗洛伊德/main.c
+
+Linux 独立 glibc:
+  DOMINO_GLIBC_ROOT 指定 glibc sysroot；未设置或为空时使用系统默认 glibc。
 EOF
 }
 
@@ -98,7 +119,7 @@ cmake_build() {
 
     echo "构建目标: $target_name"
     
-    cmake --preset "$preset" "$@"
+    configure_project "$preset" "$@"
     local jobs="$(get_build_jobs)"
 
     local build_cmd=(
@@ -123,7 +144,7 @@ run_clang_tidy() {
     local target_dir="${1:-$WORKSPACE_DIR}"
     [[ ! -d "$target_dir" ]] && { echo "错误: '$target_dir' 不是一个目录" >&2; exit 1; }
     
-    cmake --preset debug
+    configure_project debug
     
     if ! find "$target_dir" \( -name '*.c' -o -name '*.h' \) -not -path '*/build-*/*' \
         -exec clang-tidy -p "$WORKSPACE_DIR/build-debug" {} +; then
@@ -137,7 +158,7 @@ run_clang_tidy() {
 # 运行 scan-build
 run_scan_build() {
     local project_name="$1"
-    cmake --preset debug
+    configure_project debug
 
     local output_dir="$WORKSPACE_DIR/scan-build-reports"
     mkdir -p "$output_dir"

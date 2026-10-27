@@ -4,12 +4,12 @@
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
 
-/** @brief 初始化执行控制、显式睡眠许可、执行收件箱、唤醒关联与规划入口；不创建线程，致命错误直接终止。
+/** @brief 初始化执行控制、显式睡眠许可、执行收件箱与规划入口；不创建线程，致命错误直接终止。
  * @pre 引擎和 human 模块串行管理调用顺序；首次使用静态空状态，再次使用前须完成 Destroy。
  */
 extern void dominoHumanExecutionInit(void);
 
-/** @brief 释放留队消息、收件队列、唤醒关联、同步对象与睡眠许可，不停止或 join 线程。
+/** @brief 释放留队消息、收件队列、同步对象与睡眠许可，复位人物唤醒字段，不停止或 join 线程。
  * @pre 资源已 Init；执行、规划与 timer 线程均未启动或已 join，保存已完成；人物容器随后由 human 模块释放。
  */
 extern void dominoHumanExecutionDestroy(void);

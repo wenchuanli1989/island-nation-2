@@ -10,6 +10,7 @@
 #include "../queue/thread_message.h"
 #include "../social/entry.h"
 #include "../time/entry.h"
+#include "../timer/entry.h"
 #include "domino_shared_common.h"
 #include "domino_shared_queue.h"
 #include "entry.h"
@@ -19,7 +20,6 @@
 #include "store.h"
 #include "task/entry.h"
 #include "task/sleep.h"
-#include "wakeup.h"
 
 KHASHL_MAP_INIT(KH_LOCAL, HumanSleepApprovalMap, humanSleepApprovalMap, domino_human_id_t, domino_building_id_t, kh_hash_uint32, kh_eq_generic)
 
@@ -41,7 +41,53 @@ typedef struct HumanExecution {
 } HumanExecution;
 
 static HumanExecution g_execution;
-enum { HUMAN_EXECUTION_BATCH_COUNT = 64U };
+enum {
+    HUMAN_EXECUTION_BATCH_COUNT = 64U,
+    HUMAN_WAKEUP_EVENT_TYPE = 1U,
+};
+
+/** @brief 执行线程先撤销当前唤醒身份，再标记取消；已出队的旧通知由消费端忽略。 */
+static void cancelWakeup(DominoHuman* human_ptr) {
+    const domino_timer_id_t timer_id = human_ptr->wakeup_timer_id;
+    human_ptr->wakeup_timer_id = 0U;
+    human_ptr->wakeup_due_ms = 0U;
+    if (timer_id == 0U) {
+        return;
+    }
+    const DOMINO_CODE code = dominoTimerCancel(timer_id, &g_execution.inbox);
+    if (code != CODE_OK && code != ERR_NOT_FOUND) {
+        DOMINO_EXIT_WITH_ERROR(code, "cannot cancel human=%" PRIu32 " wakeup timer=%" PRIu64, human_ptr->human_id, timer_id);
+    }
+}
+
+/** @brief 为人物登记唯一绝对截止点；同一有效截止点复用原登记，0 毫秒同样合法。 */
+static void scheduleWakeup(DominoHuman* human_ptr, domino_runtime_ms_t due_ms) {
+    if (human_ptr->wakeup_timer_id != 0U && human_ptr->wakeup_due_ms == due_ms) {
+        return;
+    }
+    cancelWakeup(human_ptr);
+    const DOMINO_CODE code =
+        dominoTimerScheduleAt(&g_execution.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &human_ptr->wakeup_timer_id);
+    if (code != CODE_OK) {
+        DOMINO_EXIT_WITH_ERROR(code, "cannot schedule human=%" PRIu32 " wakeup due_ms=%" PRIu32, human_ptr->human_id, due_ms);
+    }
+    human_ptr->wakeup_due_ms = due_ms;
+}
+
+/** @brief 按 data_id 定位人物，仅消费当前 timer_id；旧通知不能清除后来登记的唤醒。 */
+static DominoHuman* consumeWakeup(const DominoTimer* timer_ptr) {
+    if (timer_ptr->event_queue_ptr != &g_execution.inbox || timer_ptr->event_type != HUMAN_WAKEUP_EVENT_TYPE || timer_ptr->data_id == 0U ||
+        timer_ptr->data_id > UINT32_MAX || timer_ptr->timer_id == 0U) {
+        return nullptr;
+    }
+    DominoHuman* human_ptr = dominoGetHumanByID((domino_human_id_t)timer_ptr->data_id);
+    if (!human_ptr || human_ptr->wakeup_timer_id != timer_ptr->timer_id) {
+        return nullptr;
+    }
+    human_ptr->wakeup_timer_id = 0U;
+    human_ptr->wakeup_due_ms = 0U;
+    return timer_ptr->cancelled_flag ? nullptr : human_ptr;
+}
 
 static domino_building_id_t getApproval(domino_human_id_t human_id) {
     const khint_t index = humanSleepApprovalMap_get(g_execution.approvals_ptr, human_id);
@@ -339,12 +385,12 @@ static void advanceHuman(DominoHuman* human_ptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "human=%" PRIu32 " sleep deadline overflows accounted_at_ms=%" PRIu32 " remaining_ms=%" PRIu32,
                                    human_id, behavior_ptr->progress.accounted_at_ms, remaining_ms);
         }
-        dominoHumanWakeupSchedule(human_ptr, behavior_ptr->progress.accounted_at_ms + remaining_ms);
+        scheduleWakeup(human_ptr, behavior_ptr->progress.accounted_at_ms + remaining_ms);
         return;
     }
     if (planned_task_id != 0U) {
         clearPendingPlan(human_ptr);
-        dominoHumanWakeupSchedule(human_ptr, planned_begin_ms);
+        scheduleWakeup(human_ptr, planned_begin_ms);
         return;
     }
     code = dominoHumanSettleNeeds(data_ptr, now_ms);
@@ -353,11 +399,11 @@ static void advanceHuman(DominoHuman* human_ptr) {
     }
     if (!canPlanSleep(human_ptr, approval)) {
         clearPendingPlan(human_ptr);
-        dominoHumanWakeupCancel(human_ptr);
+        cancelWakeup(human_ptr);
         return;
     }
     if (human_ptr->active_plan_request_id != 0U) {
-        dominoHumanWakeupCancel(human_ptr);
+        cancelWakeup(human_ptr);
         return;
     }
     domino_runtime_ms_t trigger_ms;
@@ -368,7 +414,7 @@ static void advanceHuman(DominoHuman* human_ptr) {
     if (trigger_ms > now_ms) {
         clearPendingPlan(human_ptr);
         const domino_timer_id_t old_timer_id = human_ptr->wakeup_timer_id;
-        dominoHumanWakeupSchedule(human_ptr, trigger_ms);
+        scheduleWakeup(human_ptr, trigger_ms);
         if (human_ptr->wakeup_timer_id != old_timer_id) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG,
                               "sleep threshold human=%" PRIu32 " reason=energy_sufficient energy=%u due_ms=%" PRIu32, human_id,
@@ -376,7 +422,7 @@ static void advanceHuman(DominoHuman* human_ptr) {
         }
         return;
     }
-    dominoHumanWakeupCancel(human_ptr);
+    cancelWakeup(human_ptr);
     requestSleepPlan(human_ptr, approval, now_ms);
 }
 
@@ -510,12 +556,9 @@ static void processMessage(DominoThreadMessage* message_ptr) {
         applyPlanResult(&message_ptr->payload.plan);
         dominoHumanPlannerReleaseMessage(message_ptr);
     } else if (message_ptr->type == DOMINO_THREAD_MESSAGE_TIMER) {
-        DominoHuman* human_ptr;
-        const DOMINO_CODE code = dominoHumanWakeupConsume(&message_ptr->payload.timer, &human_ptr);
-        if (code == CODE_OK) {
+        DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.timer);
+        if (human_ptr) {
             advanceHuman(human_ptr);
-        } else if (code != ERR_NOT_FOUND) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot consume human wakeup message");
         }
     } else {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human executor message type=%d", (int)message_ptr->type);
@@ -596,7 +639,6 @@ void dominoHumanExecutionInit(void) {
     DOMINO_REQUIRE_THREAD_SUCCESS(mtx_init(&g_execution.mutex, mtx_plain), ERR_MUTEX_INIT, "cannot initialize human executor mutex");
     DOMINO_REQUIRE_THREAD_SUCCESS(cnd_init(&g_execution.condition), ERR_CONDITION_INIT, "cannot initialize human executor command condition");
     dominoThreadQueueInit(&g_execution.inbox, sizeof(DominoThreadMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
-    dominoHumanWakeupInit(&g_execution.inbox);
     dominoHumanPlannerInit(&g_execution.inbox);
 }
 
@@ -612,7 +654,11 @@ void dominoHumanExecutionDestroy(void) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot drain human executor inbox during destroy");
     }
     dominoThreadQueueDestroy(&g_execution.inbox);
-    dominoHumanWakeupDestroy();
+    for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
+        DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
+        human_ptr->wakeup_timer_id = 0U;
+        human_ptr->wakeup_due_ms = 0U;
+    }
     cnd_destroy(&g_execution.condition);
     mtx_destroy(&g_execution.mutex);
     humanSleepApprovalMap_destroy(g_execution.approvals_ptr);
