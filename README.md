@@ -96,7 +96,7 @@ Destroy 返回前，common、host、social 等模块的容器指针、数量、�
 
 - Linux 目标环境：Ubuntu 26.04 LTS，glibc 2.43+；时间采样依赖 `timespec_get` 的 `TIME_UTC` 和 `TIME_MONOTONIC`。
 - CMake 4.2.1+
-- Clang 22（C23）；编译器支持 C23 不代表系统 C 库已提供 `TIME_MONOTONIC`。
+- Clang 22（C23）
 - Docker / Docker Compose（可选，用于远程开发）
 
 ---
@@ -156,11 +156,26 @@ VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击`
 
 ---
 
+### 开发环境安装（Ubuntu 26.04 服务器）
+
+在 Ubuntu 26.04 服务器上直接执行：
+
+```bash
+sudo bash setup-dev.sh
+# 如需指定 LLVM 主版本：
+sudo LLVM_VERSION=22 bash setup-dev.sh
+```
+
+脚本可单独复制到服务器运行，不要求安装 Docker 或下载整个仓库；root 用户可直接执行 `bash setup-dev.sh`。
+脚本仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
+脚本沿用原 Dockerfile 的开发环境配置：设置 root 的 Git 身份为 `domino <domino@domino.com>`、创建 SSH 密钥，并启用 root 密码登录，密码为 `123456`。
+
 ### 开发环境（Docker + VSCode Remote）
 
-镜像基于 Ubuntu 26.04 LTS（glibc 2.43），LLVM 22 和 Kitware 软件源均使用 `resolute` 发行版。
+镜像基于 Ubuntu 26.04 LTS，LLVM 22 和 Kitware 软件源均使用 `resolute` 发行版。
+Dockerfile 在构建镜像时直接调用 `setup-dev.sh`，与服务器安装使用相同流程。
 
-1. 启动开发环境：`./setup-dev.sh`
+1. 启动开发环境：`docker compose up -d --build`
 2. 连接 VSCode：
    - `Cmd+Shift+P`，输入 "Remote-SSH: Connect to Host"
    - 输入：`root@localhost -p 10022`
@@ -169,7 +184,7 @@ VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击`
 
 镜像通过 `update-alternatives` 将指定 LLVM 版本注册为 `/usr/bin/clang`、`clangd`、`clang-format` 等无版本号命令。
 SSH 会话会重新设置环境，不能仅依赖 Dockerfile 中的 `ENV PATH`，否则 VSCode 的非交互式构建任务可能找不到编译器。
-已有容器更新 Dockerfile 后，在宿主机项目目录重新执行 `./setup-dev.sh`，再重新连接 VSCode Remote-SSH。
+已有容器更新 Dockerfile 或安装脚本后，在宿主机项目目录重新执行 `docker compose up -d --build`，再重新连接 VSCode Remote-SSH。
 连接后可执行以下命令验证：
 
 ```bash

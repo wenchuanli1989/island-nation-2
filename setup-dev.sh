@@ -1,47 +1,58 @@
-#!/bin/bash
-# Domino开发环境快速设置脚本
+#!/usr/bin/env bash
+# Ubuntu 26.04 开发环境；sudo bash setup-dev.sh
+set -euo pipefail
 
-echo "=== Domino游戏服务器开发环境设置 ==="
-echo ""
+# shellcheck source=/dev/null
+source /etc/os-release
+[[ "${ID:-}:${VERSION_ID:-}" == ubuntu:26.04 ]] || { echo "错误: 仅支持 Ubuntu 26.04" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "请使用 sudo bash $0 运行" >&2; exit 1; }
+[[ $# -eq 0 ]] || { echo "用法: sudo bash $0（可通过 LLVM_VERSION 指定版本，默认 22）" >&2; exit 1; }
+LLVM_VERSION="${LLVM_VERSION:-22}"
+export DEBIAN_FRONTEND=noninteractive LC_ALL=C
+umask 022
 
-# 检查Docker是否安装
-if ! command -v docker &> /dev/null; then
-    echo "错误: 未找到Docker，请先安装Docker"
-    exit 1
+apt-get update
+apt-get install -y ca-certificates gpg wget
+
+# CMake 和 LLVM 官方软件源。
+wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc \
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
+wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ resolute main' \
+    > /etc/apt/sources.list.d/kitware.list
+echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-${LLVM_VERSION} main" \
+    > /etc/apt/sources.list.d/llvm.list
+chmod 644 /usr/share/keyrings/{kitware,llvm}-archive-keyring.gpg
+
+apt-get update
+apt-get install -y \
+    build-essential cmake git vim curl openssh-server sudo pahole \
+    "clang-${LLVM_VERSION}" "clang-tools-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
+    "clang-format-${LLVM_VERSION}" "clang-tidy-${LLVM_VERSION}" "lldb-${LLVM_VERSION}" \
+    "libclang-rt-${LLVM_VERSION}-dev" "llvm-${LLVM_VERSION}-linker-tools"
+rm -rf /var/lib/apt/lists/*
+
+for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build; do
+    update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-${LLVM_VERSION}" "$LLVM_VERSION"
+    update-alternatives --set "$tool" "/usr/bin/${tool}-${LLVM_VERSION}"
+done
+
+# 沿用原 Dockerfile 的开发用 Git 和 SSH 配置。
+git config --global user.name domino
+git config --global user.email domino@domino.com
+install -d -m 700 /root/.ssh
+if [[ ! -f /root/.ssh/id_ed25519 ]]; then
+    ssh-keygen -t ed25519 -C domino@domino.com -f /root/.ssh/id_ed25519 -N ""
 fi
-
-# 检查Docker Compose是否安装
-if ! command -v docker-compose &> /dev/null; then
-    echo "错误: 未找到Docker Compose，请先安装Docker Compose"
-    exit 1
+if ! ssh-keygen -F github.com -f /root/.ssh/known_hosts >/dev/null 2>&1; then
+    ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts
 fi
+chmod 600 /root/.ssh/known_hosts
+echo 'root:123456' | chpasswd
+install -d -m 755 /run/sshd /etc/ssh/sshd_config.d
+printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/00-domino-dev.conf
+ssh-keygen -A
+/usr/sbin/sshd -t
 
-echo "1. 构建并启动Docker容器..."
-docker-compose up -d --build
-
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "✓ 容器启动成功！"
-    echo ""
-    echo "=== 连接信息 ==="
-    echo "主机: localhost"
-    echo "端口: 10022"
-    echo "用户名: root"
-    echo "密码: 123456"
-    echo ""
-    echo "=== VSCode连接步骤 ==="
-    echo "1. 按 Cmd+Shift+P (Mac) 或 Ctrl+Shift+P (Windows/Linux)"
-    echo "2. 输入: Remote-SSH: Connect to Host"
-    echo "3. 输入: root@localhost -p 10022"
-    echo "4. 输入密码: 123456"
-    echo "5. 打开目录: /root/domino"
-    echo ""
-    echo "=== 或者使用SSH命令 ==="
-    echo "ssh root@localhost -p 10022"
-    echo ""
-else
-    echo "错误: 容器启动失败"
-    exit 1
-fi
-
-
+echo "开发环境安装完成。"
