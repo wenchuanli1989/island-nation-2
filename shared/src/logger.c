@@ -22,6 +22,7 @@
 
 /*包含结尾'\0'*/
 #define DOMINO_LOG_MESSAGE_MAX 256U
+#define DOMINO_LOG_TIMESTAMP_MAX 32U
 #define DOMINO_LOG_SOURCE_MAX 128U
 #define DOMINO_LOG_SOURCE_FILE_CAPTURE_MAX 80U
 #define DOMINO_LOG_SOURCE_FUNC_CAPTURE_MAX 32U
@@ -62,6 +63,7 @@ typedef struct DominoLogQueueItem {
     DOMINO_LOG_LEVEL level;
     uint8_t module_index;  // 生产者完成过滤后保存的只读模块表下标。
     bool source_truncated;
+    char timestamp_str[DOMINO_LOG_TIMESTAMP_MAX];  // 生产者在整理来源、正文和等待入队前采样的 UTC 时间。
     char source[DOMINO_LOG_SOURCE_MAX];
     char body[DOMINO_LOG_MESSAGE_MAX];  // 包含结尾'\0'
 } DominoLogQueueItem;
@@ -132,6 +134,10 @@ static void dominoLogSetSourceLocation(DominoLogQueueItem* item_ptr, DominoLogSo
 /** @brief module_index 已由入口完成模块和等级过滤；模块表保持有效直至 writer 退出。 */
 inline static void dominoLogInitQueueItem(DominoLogger* logger_ptr, DominoLogQueueItem* item_ptr, uint8_t module_index, DOMINO_LOG_LEVEL level,
                                           DominoLogSourceLocation loc) {
+    DOMINO_CODE code = dominoFormatUtcTimestampNow(item_ptr->timestamp_str, sizeof(item_ptr->timestamp_str));
+    if (code != CODE_OK) {
+        DOMINO_EXIT_WITH_ERROR(code, "log timestamp generation failed");
+    }
     item_ptr->module_index = module_index;
     item_ptr->seq = atomic_fetch_add(&logger_ptr->seq, 1U) + 1U;
     item_ptr->tid = dominoGetNumericThreadId();
@@ -140,12 +146,12 @@ inline static void dominoLogInitQueueItem(DominoLogger* logger_ptr, DominoLogQue
 }
 
 /** @brief 参数均由 writer 提供且非空；line_out_size 为 DOMINO_LOG_MESSAGE_MAX，足够容纳截断尾、换行和 NUL。 */
-static void dominoLogBuildOutputLine(const DominoLogQueueItem* item_ptr, const char* ts_ptr, const char* module_name, char* line_out_ptr,
-                                     size_t line_out_size, size_t* line_len_out_ptr) {
+static void dominoLogBuildOutputLine(const DominoLogQueueItem* item_ptr, const char* module_name, char* line_out_ptr, size_t line_out_size,
+                                     size_t* line_len_out_ptr) {
     const size_t content_capacity = line_out_size - 2U;  // 为换行和结尾 NUL 预留空间。
     const char* level_name = dominoLogLevelName(item_ptr->level);
-    int prefix_result = snprintf(line_out_ptr, line_out_size, "[%s][tid=%" PRIu32 "][seq=%" PRIu32 "][%s][%s][%s] ", ts_ptr, item_ptr->tid,
-                                 item_ptr->seq, level_name, module_name, item_ptr->source);
+    int prefix_result = snprintf(line_out_ptr, line_out_size, "[%s][tid=%" PRIu32 "][seq=%" PRIu32 "][%s][%s][%s] ", item_ptr->timestamp_str,
+                                 item_ptr->tid, item_ptr->seq, level_name, module_name, item_ptr->source);
 
     bool truncated = item_ptr->source_truncated;
     size_t used_len = 0U;
@@ -180,19 +186,7 @@ static void dominoLogBuildOutputLine(const DominoLogQueueItem* item_ptr, const c
     *line_len_out_ptr = used_len;
 }
 
-__attribute__((hot)) static void dominoLogWriteOneWithTimestamp(const DominoLogger* logger_ptr, const DominoLogQueueItem* item_ptr,
-                                                                const char* ts_ptr) {
-    const DominoLogModule* module_ptr = &logger_ptr->modules[item_ptr->module_index];
-    char line_buf[DOMINO_LOG_MESSAGE_MAX] = {0};
-    size_t out_len;
-    dominoLogBuildOutputLine(item_ptr, ts_ptr, module_ptr->name, line_buf, sizeof(line_buf), &out_len);
-
-    if (fwrite(line_buf, 1, out_len, module_ptr->output_ptr) != out_len) {
-        DOMINO_EXIT_WITH_ERROR(ERR_FILE_WRITE, "log output write failed");
-    }
-}
-
-static int dominoLogWriterThread(void* arg_ptr) {
+__attribute__((hot)) static int dominoLogWriterThread(void* arg_ptr) {
     DominoLogger* logger_ptr = arg_ptr;
     DominoLogQueueItem items[DOMINO_LOG_WRITER_BATCH_MAX];
     while (true) {
@@ -205,13 +199,16 @@ static int dominoLogWriterThread(void* arg_ptr) {
             DOMINO_EXIT_WITH_ERROR(result_code, "log writer queue consumption failed");
         }
 
-        char ts_buf[32] = {0};
-        result_code = dominoFormatUtcTimestampNow(ts_buf, sizeof(ts_buf));
-        if (result_code != CODE_OK) {
-            DOMINO_EXIT_WITH_ERROR(result_code, "log timestamp generation failed");
-        }
         for (size_t i = 0U; i < batch_count; i++) {
-            dominoLogWriteOneWithTimestamp(logger_ptr, &items[i], ts_buf);
+            const DominoLogQueueItem* item_ptr = &items[i];
+            const DominoLogModule* module_ptr = &logger_ptr->modules[item_ptr->module_index];
+            char line_buf[DOMINO_LOG_MESSAGE_MAX];
+            size_t out_len;
+            dominoLogBuildOutputLine(item_ptr, module_ptr->name, line_buf, sizeof(line_buf), &out_len);
+
+            if (fwrite(line_buf, 1, out_len, module_ptr->output_ptr) != out_len) {
+                DOMINO_EXIT_WITH_ERROR(ERR_FILE_WRITE, "log output write failed");
+            }
         }
     }
 }
@@ -314,12 +311,12 @@ void dominoLogStop(DominoLogger* logger_ptr) {
         FILE* output_ptr = logger_ptr->modules[module_index].output_ptr;
         if (output_ptr == stdout) {
             stdout_used = true;
-        } else if (output_ptr != logger_ptr->file_ptr && fflush(output_ptr) != 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log module file flush failed");
+        } else if (output_ptr != logger_ptr->file_ptr && dominoFlushFile(output_ptr) != 0) {
+            DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log module file flush or fsync failed");
         }
     }
-    if (logger_ptr->file_ptr != nullptr && fflush(logger_ptr->file_ptr) != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log default file flush failed");
+    if (logger_ptr->file_ptr != nullptr && dominoFlushFile(logger_ptr->file_ptr) != 0) {
+        DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log default file flush or fsync failed");
     }
     if (stdout_used && fflush(stdout) != 0) {
         DOMINO_EXIT_WITH_ERROR(ERR_FILE_FLUSH, "log stdout flush failed");

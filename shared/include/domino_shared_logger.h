@@ -123,14 +123,15 @@ void dominoLogInit(DominoLogConfig config, const DominoLogModule* modules_ptr, s
 void dominoLogStart(DominoLogger* logger_ptr);
 
 /**
- * @brief 拒绝新消息，排空日志队列并 join 写线程，刷新输出流（阻塞），保留全部资源。
+ * @brief 拒绝新消息，排空日志队列并 join 写线程，完成日志文件 fsync 和 stdout 刷新（阻塞），保留全部资源。
  *
  * 调用前必须停止并等待该实例的所有 producer，且不得与该实例的其他 API 调用并发。
  * 通过 dominoThreadQueueBeginFlush() 拒绝新消息并唤醒 writer，writer 排空后退出，调用方 join 等待完成。
- * writer 退出后刷新各模块文件、实例默认文件及被使用的 stdout，不关闭文件或释放队列；其他实例仍可正常使用。
- * 仅 Init、未 Start 时仍关闭入队并刷新输出，但不 join 未创建的线程。
+ * writer 退出后对各模块文件和实例默认文件依次完成 fflush 和 fsync，继承的默认文件只同步一次。
+ * 被使用的 stdout 仅 fflush，不承诺 fsync；不关闭文件或释放队列，其他实例仍可正常使用。
+ * 仅 Init、未 Start 时仍关闭入队并完成上述文件同步和 stdout 刷新，但不 join 未创建的线程。
  * 每次 Init 后只调用一次 Stop，返回后不得继续写日志或直接重新初始化，须由调用方随后调用 Destroy。
- * 仅接受 INITIALIZED 或 STARTED；空指针、未初始化、重复 Stop、队列同步、join 或刷新文件失败时，
+ * 仅接受 INITIALIZED 或 STARTED；空指针、未初始化、重复 Stop、队列同步、join、fflush 或 fsync 失败时，
  * 直接打印 stderr 并 exit(EXIT_FAILURE)。不得传入内容未初始化的对象。
  */
 void dominoLogStop(DominoLogger* logger_ptr);
@@ -151,9 +152,11 @@ void dominoLogDestroy(DominoLogger* logger_ptr);
  *
  * 空实例、空格式串指针、非法日志等级、未注册或被等级过滤的模块会被丢弃；source location 会在函数返回前复制到队列元素。
  * 公共入口先过滤输入，内部模块查找与格式化辅助函数使用已验证的值，不重复校验实例或等级。
+ * 通过过滤和生命周期检查后，由调用线程在整理来源、正文和等待入队前逐条采样 UTC 时间，以毫秒格式随记录按值保存。
+ * writer 直接使用该调用时间戳，排队等待不改变时间戳；UTC 墙上时间不是累计未冻结业务时间，不能用于计算业务时长。
  * 队列满时向当前模块的输出流同步提示一次并刷新，再等待直到本条日志入队；等待期间 writer 继续消费，不丢弃日志。
  * 已初始化实例只允许在 Start 后、Stop 前写日志；未 Start 或 Stop 后写入属于致命调用错误，不入队或等待。
- * 格式化、其他入队错误或写出失败直接打印 stderr 并 exit(EXIT_FAILURE)，诊断不进入异步日志队列。
+ * 时间采样、格式化、其他入队错误或写出失败直接打印 stderr 并 exit(EXIT_FAILURE)，诊断不进入异步日志队列。
  */
 void dominoLogVa(DominoLogger* logger_ptr, domino_log_module_id_t module_id, DOMINO_LOG_LEVEL level, DominoLogSourceLocation loc, const char* fmt,
                  va_list arg_list) DOMINO_LOG_PRINTF_ATTR(5, 0);

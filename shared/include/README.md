@@ -98,15 +98,16 @@ void logWithTwoServices(void) {
 - 初始化先校验完整模块列表，再分配队列、以追加模式打开配置的文件并解析模块状态，不启动 writer；返回后不借用模块数组或文件路径。Start 单独创建 writer，成功后才允许记录日志。首次对象必须零初始化（静态对象、`={0}` 或 `calloc`）；Init 仅接受未初始化状态，重复调用在创建资源前直接致命退出。Init 基于空对象创建资源，不再重复整体清零；Destroy 清空对象，完成后可直接再次 Init。
 - 模块 ID 和名称在实例内必须唯一；名称必须非空且在固定数组内以 NUL 结尾。`module_count = 0` 时允许空列表；模块 `min_level = 0` 在初始化时解析为配置的默认等级，默认等级只用于本次 Init，实例只保存解析后的模块等级，显式等级独立生效。
 - 每条日志只写一个目标：模块 `file_path` 优先，其次实例 `DominoLogConfig.file_path`，两者都未配置时写 stdout；nullptr 和空字符串都表示未配置。所有等级（包括非致命 ERROR）遵循同一规则，日志内容不写 stderr，也不同时复制到默认文件或控制台。示例中 core 写 `first.log`，nav 写 `first-nav.log`。
-- 实例内直接复用 `DominoLogModule`，初始化时由 logger 维护其 `output_ptr`，writer 通过队列元素的 `module_index` 取用。调用方无需设置 `output_ptr`，传入值会被忽略；实例副本不保留配置路径，`file_path` 保持 nullptr。文件由 logger 统一打开和关闭；指定的文件打开、写入、刷新或关闭失败时直接走公共致命退出路径。
+- 实例内直接复用 `DominoLogModule`，初始化时由 logger 维护其 `output_ptr`，writer 通过队列元素的 `module_index` 取用。调用方无需设置 `output_ptr`，传入值会被忽略；实例副本不保留配置路径，`file_path` 保持 nullptr。文件由 logger 统一打开和关闭；指定的文件打开、写入、刷新、fsync 或关闭失败时直接走公共致命退出路径。
 - `buffer_size = 0` 使用默认容量 10240；容量不得超过 `UINT32_MAX`，保留分配大小溢出检查。日志队列固定容量，满载时本次日志调用向所属模块的同一输出流同步提示一次并刷新，然后用 `dominoThreadQueueProduce(..., true)` 等待直到入队，不丢日志、不定时轮询。提示不再次入队；writer 消费后通过 `not_full` 唤醒等待者。
 - 致命错误统一使用 `DOMINO_EXIT_WITH_ERROR(code, fmt, ...)`：宏捕获调用位置，`common.c` 的 `dominoExitWithErrorAt()` 直接打印 stderr，然后执行 `exit(EXIT_FAILURE)`，允许退出回调和标准 I/O 刷新。诊断不进入日志队列，诊断本身失败不递归报错。
 - 运行阶段非致命错误和正常日志进入异步日志；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE(fmt, ...)` 直接写 stdout。宏捕获调用位置，`common.c` 的 `dominoPrintMessageAt()` 打印来源和完整正文。共用业务工具只返回可恢复结果，由掌握业务语义的调用边界选择输出；日志层不维护阶段标志或进行阶段分流。直接输出不截断、不入队、不退出，输出失败也不递归报错。日志等级只表达严重程度，不决定是否终止；ERROR 日志同样可以是可恢复的业务失败。
 - 日志不再维护故障回调、首错状态或错误查询接口；`Init`／`Start`／`Stop`／`Destroy` 返回 void。致命错误会结束整个宿主进程，队列中的剩余日志不保证写出。
 - 同一实例支持多个生产者；初始化后模块表只读。对象地址和存储必须保持有效，直至销毁返回，期间不得复制、移动或直接修改成员。
 - `dominoLogVa()` 统一完成空指针、格式指针和等级过滤，模块查找辅助函数只按模块 ID 和最小等级匹配。只有通过过滤的日志才检查 STARTED 状态；内部格式化、入队和 writer 使用已确定的模块下标，不重复校验入口条件。日志四阶段状态、序号、线程标识及截断信息仍各自承担生命周期或输出职责。
-- 生命周期由调用方串行管理为 Init → Start → Stop → Destroy；也支持 Init → Stop → Destroy。Stop 前须停止并等待所有生产者；Stop 调用 `dominoThreadQueueBeginFlush()` 拒绝新消息，已 Start 时唤醒 writer 并 join 等待排空，仅 Init 时跳过 join；随后刷新各模块文件、实例默认文件及被使用的 stdout，保留队列和文件。每次 Init 后至多 Start 一次并调用一次 Stop；Stop 后不支持重新 Start，必须 Destroy 后重新 Init。实例使用 `DominoModuleLifecycleState` 区分未初始化、已初始化、已启动、已停止；有效日志在未 Start 或 Stop 后写入直接致命退出，不会入队或等待。空实例、非法等级和未匹配／被等级过滤的模块继续丢弃；其他实例继续正常运行。
-- Destroy 要求 Stop 已完成，只关闭各模块文件和实例默认文件、销毁队列并清空对象，不内部停止或 join writer。继承的默认文件只关闭一次；stdout 不关闭，日志服务不刷新 stderr。Stop 的刷新使用 fflush，不承诺磁盘 fsync。销毁后可在原地址重新初始化；空指针、未初始化、重复 Stop／Destroy、未 Stop 就 Destroy 和 Stop 后 Start 均直接输出 stderr 并退出。
+- 每条通过过滤和生命周期检查的日志，由业务调用线程在整理来源、正文和等待入队前采样 UTC 时间，保存为 `YYYY-MM-DDTHH:MM:SS.mmmZ` 并随队列记录按值传递；writer 使用该时间戳，不按批次重新采样。满载等待和延迟写出不改变调用时间戳。UTC 墙上时间受系统校时影响，不用于计算累计未冻结业务时长或保证日志顺序。
+- 生命周期由调用方串行管理为 Init → Start → Stop → Destroy；也支持 Init → Stop → Destroy。Stop 前须停止并等待所有生产者；Stop 调用 `dominoThreadQueueBeginFlush()` 拒绝新消息，已 Start 时唤醒 writer 并 join 等待排空，仅 Init 时跳过 join；随后对各模块文件及实例默认文件完成 fflush 和 fsync，被使用的 stdout 仅 fflush，保留队列和文件。两条生命周期路径正常返回均承诺完成文件同步，继承的默认文件只同步一次；fflush 或 fsync 失败直接致命退出。每次 Init 后至多 Start 一次并调用一次 Stop；Stop 后不支持重新 Start，必须 Destroy 后重新 Init。实例使用 `DominoModuleLifecycleState` 区分未初始化、已初始化、已启动、已停止；有效日志在未 Start 或 Stop 后写入直接致命退出，不会入队或等待。空实例、非法等级和未匹配／被等级过滤的模块继续丢弃；其他实例继续正常运行。
+- Destroy 要求 Stop 已完成，只关闭各模块文件和实例默认文件、销毁队列并清空对象，不内部停止或 join writer。继承的默认文件只关闭一次；stdout 不关闭、不承诺 fsync，日志服务不刷新 stderr。销毁后可在原地址重新初始化；空指针、未初始化、重复 Stop／Destroy、未 Stop 就 Destroy 和 Stop 后 Start 均直接输出 stderr 并退出。
 - stdout 由进程共享，实例之间没有全局输出顺序；文件输出需要隔离时为各实例和模块设置不同路径。tid 是进程内分配并在线程局部缓存的数字标识。
 
 ## 通用线程队列
