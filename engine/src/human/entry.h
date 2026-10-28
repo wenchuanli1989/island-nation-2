@@ -17,7 +17,7 @@ extern void dominoHumanModuleInit(void);
 extern void dominoHumanModuleStart(void);
 
 /** @brief 依次 join 执行线程和规划线程，保留所有人物及运行资源。
- * @pre 线程已创建，引擎已进入 STOPPING 并唤醒业务线程；timer 和投递目标仍有效。
+ * @pre 线程已创建，引擎已进入 STOPPING 并唤醒业务线程；game_timer 和投递目标仍有效。
  * @note 仅 Init、未 Start 的实例由引擎跳过本接口；内部不重复校验生命周期。
  */
 extern void dominoHumanModuleStop(void);

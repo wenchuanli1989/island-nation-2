@@ -6,11 +6,11 @@
 #include <threads.h>
 
 #include "../entry.h"
+#include "../game_timer/entry.h"
 #include "../logger/entry.h"
 #include "../queue/thread_message.h"
 #include "../social/entry.h"
 #include "../time/entry.h"
-#include "../timer/entry.h"
 #include "domino_shared_common.h"
 #include "domino_shared_queue.h"
 #include "entry.h"
@@ -48,45 +48,45 @@ enum {
 
 /** @brief 执行线程先撤销当前唤醒身份，再标记取消；已出队的旧通知由消费端忽略。 */
 static void cancelWakeup(DominoHuman* human_ptr) {
-    const domino_timer_id_t timer_id = human_ptr->wakeup_timer_id;
-    human_ptr->wakeup_timer_id = 0U;
+    const domino_game_timer_id_t game_timer_id = human_ptr->wakeup_game_timer_id;
+    human_ptr->wakeup_game_timer_id = 0U;
     human_ptr->wakeup_due_ms = 0U;
-    if (timer_id == 0U) {
+    if (game_timer_id == 0U) {
         return;
     }
-    const DOMINO_CODE code = dominoTimerCancel(timer_id, &g_execution.inbox);
+    const DOMINO_CODE code = dominoGameTimerCancel(game_timer_id, &g_execution.inbox);
     if (code != CODE_OK && code != ERR_NOT_FOUND) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot cancel human=%" PRIu32 " wakeup timer=%" PRIu64, human_ptr->human_id, timer_id);
+        DOMINO_EXIT_WITH_ERROR(code, "cannot cancel human=%" PRIu32 " wakeup game_timer=%" PRIu64, human_ptr->human_id, game_timer_id);
     }
 }
 
 /** @brief 为人物登记唯一绝对截止点；同一有效截止点复用原登记，0 毫秒同样合法。 */
 static void scheduleWakeup(DominoHuman* human_ptr, domino_runtime_ms_t due_ms) {
-    if (human_ptr->wakeup_timer_id != 0U && human_ptr->wakeup_due_ms == due_ms) {
+    if (human_ptr->wakeup_game_timer_id != 0U && human_ptr->wakeup_due_ms == due_ms) {
         return;
     }
     cancelWakeup(human_ptr);
     const DOMINO_CODE code =
-        dominoTimerScheduleAt(&g_execution.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &human_ptr->wakeup_timer_id);
+        dominoGameTimerScheduleAt(&g_execution.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &human_ptr->wakeup_game_timer_id);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot schedule human=%" PRIu32 " wakeup due_ms=%" PRIu32, human_ptr->human_id, due_ms);
     }
     human_ptr->wakeup_due_ms = due_ms;
 }
 
-/** @brief 按 data_id 定位人物，仅消费当前 timer_id；旧通知不能清除后来登记的唤醒。 */
-static DominoHuman* consumeWakeup(const DominoTimer* timer_ptr) {
-    if (timer_ptr->event_queue_ptr != &g_execution.inbox || timer_ptr->event_type != HUMAN_WAKEUP_EVENT_TYPE || timer_ptr->data_id == 0U ||
-        timer_ptr->data_id > UINT32_MAX || timer_ptr->timer_id == 0U) {
+/** @brief 按 data_id 定位人物，仅消费当前 game_timer_id；旧通知不能清除后来登记的唤醒。 */
+static DominoHuman* consumeWakeup(const DominoGameTimer* game_timer_ptr) {
+    if (game_timer_ptr->event_queue_ptr != &g_execution.inbox || game_timer_ptr->event_type != HUMAN_WAKEUP_EVENT_TYPE ||
+        game_timer_ptr->data_id == 0U || game_timer_ptr->data_id > UINT32_MAX || game_timer_ptr->game_timer_id == 0U) {
         return nullptr;
     }
-    DominoHuman* human_ptr = dominoGetHumanByID((domino_human_id_t)timer_ptr->data_id);
-    if (!human_ptr || human_ptr->wakeup_timer_id != timer_ptr->timer_id) {
+    DominoHuman* human_ptr = dominoGetHumanByID((domino_human_id_t)game_timer_ptr->data_id);
+    if (!human_ptr || human_ptr->wakeup_game_timer_id != game_timer_ptr->game_timer_id) {
         return nullptr;
     }
-    human_ptr->wakeup_timer_id = 0U;
+    human_ptr->wakeup_game_timer_id = 0U;
     human_ptr->wakeup_due_ms = 0U;
-    return timer_ptr->cancelled_flag ? nullptr : human_ptr;
+    return game_timer_ptr->cancelled_flag ? nullptr : human_ptr;
 }
 
 static domino_building_id_t getApproval(domino_human_id_t human_id) {
@@ -413,9 +413,9 @@ static void advanceHuman(DominoHuman* human_ptr) {
     }
     if (trigger_ms > now_ms) {
         clearPendingPlan(human_ptr);
-        const domino_timer_id_t old_timer_id = human_ptr->wakeup_timer_id;
+        const domino_game_timer_id_t old_game_timer_id = human_ptr->wakeup_game_timer_id;
         scheduleWakeup(human_ptr, trigger_ms);
-        if (human_ptr->wakeup_timer_id != old_timer_id) {
+        if (human_ptr->wakeup_game_timer_id != old_game_timer_id) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG,
                               "sleep threshold human=%" PRIu32 " reason=energy_sufficient energy=%u due_ms=%" PRIu32, human_id,
                               (unsigned)data_ptr->energy, trigger_ms);
@@ -555,8 +555,8 @@ static void processMessage(DominoThreadMessage* message_ptr) {
     } else if (message_ptr->type == DOMINO_THREAD_MESSAGE_AI_RESULT) {
         applyPlanResult(&message_ptr->payload.plan);
         dominoHumanPlannerReleaseMessage(message_ptr);
-    } else if (message_ptr->type == DOMINO_THREAD_MESSAGE_TIMER) {
-        DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.timer);
+    } else if (message_ptr->type == DOMINO_THREAD_MESSAGE_GAME_TIMER) {
+        DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.game_timer);
         if (human_ptr) {
             advanceHuman(human_ptr);
         }
@@ -643,7 +643,7 @@ void dominoHumanExecutionInit(void) {
 }
 
 void dominoHumanExecutionDestroy(void) {
-    /* 已启动的 planner 和 timer 均已 join，不会再收到投递。 */
+    /* 已启动的 planner 和 game_timer 均已 join，不会再收到投递。 */
     dominoThreadQueueBeginFlush(&g_execution.inbox);
     DominoThreadMessage message;
     DOMINO_CODE code;
@@ -656,7 +656,7 @@ void dominoHumanExecutionDestroy(void) {
     dominoThreadQueueDestroy(&g_execution.inbox);
     for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
         DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
-        human_ptr->wakeup_timer_id = 0U;
+        human_ptr->wakeup_game_timer_id = 0U;
         human_ptr->wakeup_due_ms = 0U;
     }
     cnd_destroy(&g_execution.condition);

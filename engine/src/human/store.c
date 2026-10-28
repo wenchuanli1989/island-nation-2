@@ -322,7 +322,7 @@ void dominoHumanStoreResetRuntime(void) {
         DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
         DominoHumanData* data_ptr = &kv_A(domino_all_human_data_list, index);
         human_ptr->active_plan_request_id = 0U;
-        human_ptr->wakeup_timer_id = 0U;
+        human_ptr->wakeup_game_timer_id = 0U;
         human_ptr->wakeup_due_ms = 0U;
         human_ptr->plan_submit_pending_flag = false;
         human_ptr->execution_queued_flag = false;

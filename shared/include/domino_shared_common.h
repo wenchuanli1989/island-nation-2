@@ -88,7 +88,7 @@ DOMINO_CODE dominoMkdirRecursive(const char* path);
  * @brief 采样 64 位 UTC 墙上时间戳毫秒，供存档生命周期文件命名使用；失败不降级或重试。
  * @return 当前 UTC 墙上时间戳毫秒。
  * @note 采样失败直接打印 stderr 并 exit(EXIT_FAILURE)。
- * @note 不受引擎冻结控制，不是累计未冻结现实毫秒，不能用于任务、timer 或收益结算的业务计时。
+ * @note 不受引擎冻结控制，不是累计未冻结现实毫秒，不能用于任务、game_timer 或收益结算的业务计时。
  */
 uint64_t dominoWallTimeMs(void);
 

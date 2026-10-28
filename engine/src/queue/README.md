@@ -1,28 +1,28 @@
 # engine 线程消息
 
 `DominoThreadQueue` 由 shared 提供 FIFO 存储、控制唤醒和版本变化等待；通用接口见 `shared/include/domino_shared_queue.h`。
-本目录定义 engine 业务消息 `DominoThreadMessage`，具体载荷类型由 `human/message.h` 和 `timer/message.h` 提供。
+本目录定义 engine 业务消息 `DominoThreadMessage`，具体载荷类型由 `human/message.h` 和 `game_timer/message.h` 提供。
 使用消息的代码须自行包含 `thread_message.h`；底层 shared 队列不依赖这些业务类型。
 执行器、规划器等线程各自拥有一个收件队列，每条消息的 `type` 决定 `payload` 联合体的有效成员。
 队列不按业务类型拆分，也不执行业务分派。
 
 | 字段 | 职责 |
 | --- | --- |
-| `id` | 必须位于首字段，由收件队列回写；与载荷里的请求 ID、timer ID 独立 |
-| `payload.timer` | 按值保存 `DominoTimer` 到期事件 |
+| `id` | 必须位于首字段，由收件队列回写；与载荷里的请求 ID、game_timer ID 独立 |
+| `payload.game_timer` | 按值保存 `DominoGameTimer` 到期事件 |
 | `payload.plan` | 按值保存 AI 请求／结果共用的 `DominoHumanPlanEnvelope` |
 | `payload.command` | 按值保存 `HumanExecutionCommand` |
-| `type` | TIMER、AI_REQUEST、AI_RESULT、COMMAND 等类型，决定读取哪个联合体成员 |
+| `type` | GAME_TIMER、AI_REQUEST、AI_RESULT、COMMAND 等类型，决定读取哪个联合体成员 |
 
 `queue.items_ptr` 是环形数组本身，存放完整的 `DominoThreadMessage`，包括内嵌载荷。
-底层队列仍允许模块内部按固定记录传值，例如 timer 自有的登记命令队列。
+底层队列仍允许模块内部按固定记录传值，例如 game_timer 自有的登记命令队列。
 等待和唤醒直接使用收件队列已有的互斥锁与条件变量；无需额外对象或绑定关系。队列不解释模块的业务状态。
 
 ## 消息发送与接收
 
 收件队列以 `sizeof(DominoThreadMessage)` 初始化。发送者直接用结构体初始化对应联合体成员，
 Produce 按值复制整条消息，无需为外层载荷逐条分配或释放内存。每个队列槽位的大小由最大载荷决定。
-当前 x86_64 Clang 静态布局中，timer 为 32 字节、命令为 24 字节、AI envelope 为 128 字节，完整消息为 144 字节；
+当前 x86_64 Clang 静态布局中，game_timer 为 32 字节、命令为 24 字节、AI envelope 为 128 字节，完整消息为 144 字节；
 原描述符为 32 字节且另有堆载荷。新布局减少逐条分配和指针访问，同时增加每个槽位占用及队列复制字节数，尚无性能实测。
 
 ```c
@@ -37,13 +37,13 @@ if (code != CODE_OK) {
 ```
 
 接收者 Consume 得到完整消息，按 `type` 读取对应联合体成员；类型和载荷的对应关系由生产入口保证。
-TIMER 和 COMMAND 没有独占的动态载荷，处理或丢弃后无需释放。timer 的队列指针是借用引用，业务方负责保持队列有效。
+GAME_TIMER 和 COMMAND 没有独占的动态载荷，处理或丢弃后无需释放。game_timer 的队列指针是借用引用，业务方负责保持队列有效。
 AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独占块；按值复制不会递归复制该数组。
 入队成功才移交行为块所有权，发送者之后不得读取、修改、释放或再次发送该行为指针；入队失败仍归发送者。
 接收者处理或丢弃 AI 消息后调用 `dominoHumanPlannerReleaseMessage()`，释放未被任务系统接管的行为块并清空消息。
 不能把栈地址或可扩容数组内部地址作为载荷中的借用指针交给异步消费者。
 
-执行器收件队列可依次出现 `AI_RESULT → TIMER → COMMAND`；规划器当前只接收由 Submit 构造的 AI_REQUEST。
+执行器收件队列可依次出现 `AI_RESULT → GAME_TIMER → COMMAND`；规划器当前只接收由 Submit 构造的 AI_REQUEST。
 消息保留 FIFO；抢占、紧急提升和任务选择由接收模块处理。
 暂停、恢复和退出状态由所属模块维护，使用原子变量或模块自己的锁同步；普通冻结和恢复不要求业务线程回执。
 
@@ -59,7 +59,7 @@ AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独
 
 公共入口通过 `initialized` 明确判断实例是否已初始化；Init 完整建立资源后置为 true，Destroy 清空整个对象时复位为 false。`item_size` 只表示元素字节数，`items_ptr` 会在扩容中改变，均不承担初始化状态判断。Init 基于调用方或上轮 Destroy 提供的空对象建立资源，不重复整体清零。Produce 的两种模式共享一次参数及初始化检查，Consume 委托 ConsumeBatch；内部等待、扩容和复制步骤依赖已建立的前置条件。等待期间锁会释放，唤醒后的排空状态、元素数、容量及版本检查仍必须保留。
 
-- 每次成功 `Produce` 都在队列锁内推进本队列的唤醒版本并通知等待者，包含 timer 投递 TIMER 消息的路径。
+- 每次成功 `Produce` 都在队列锁内推进本队列的唤醒版本并通知等待者，包含 game_timer 投递 GAME_TIMER 消息的路径。
 - 入队失败和出队不推进版本；出队后若存在等待空位的生产者，广播 `not_full`。
 - `WakeAll` 推进本队列版本，并通知全部队列等待者，不占用任何队列容量。
 - `BeginFlush` 在同一队列锁内设置 `flushing_flag`、推进版本并通知全部等待者；进入后拒绝生产，允许消费已有消息。
@@ -67,8 +67,8 @@ AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独
 - 每个队列只唤醒自身等待者。成功入队时如有已登记的版本等待者或阻塞消费者，统一广播 `not_empty`，让它们重新检查条件；
   `waiter_count` 登记全部条件等待，`producer_waiter_count` 额外统计等待空位的生产者。多个消费者被唤醒后仍通过队列锁竞争消息。
 
-timer 到期时发送 `type = DOMINO_THREAD_MESSAGE_TIMER`、`payload.timer` 内嵌 `DominoTimer` 的消息，与 AI、命令共用收件队列。
-timer 内部用于取消、堆迁移和计时线程等待的同步协议不变。
+game_timer 到期时发送 `type = DOMINO_THREAD_MESSAGE_GAME_TIMER`、`payload.game_timer` 内嵌 `DominoGameTimer` 的消息，与 AI、命令共用收件队列。
+game_timer 内部用于取消、堆迁移和计时线程等待的同步协议不变。
 
 ## 消费者循环
 
@@ -89,9 +89,9 @@ Wait 不以队列非空为返回条件：暂停时可以保留消息并睡眠，
 单纯 `WakeAll` 会让 Wait 返回；普通阻塞 Consume 若仍无消息且未进入排空状态，会继续等待。
 
 `CODE_OK` 表示唤醒版本已变化，调用方应重新检查业务条件；虚假唤醒后版本未变则继续等待。
-`Wait` 不设置超时；有到期需求的业务通过 timer 登记，由到期消息入队触发唤醒。
+`Wait` 不设置超时；有到期需求的业务通过 game_timer 登记，由到期消息入队触发唤醒。
 
-Snapshot/Wait/WakeAll 使用队列内部锁，正常完成时先释放锁再返回。调用方不得持队列锁调用这些接口、调用 timer 或执行业务；
+Snapshot/Wait/WakeAll 使用队列内部锁，正常完成时先释放锁再返回。调用方不得持队列锁调用这些接口、调用 game_timer 或执行业务；
 进入 Wait 前也必须释放通知方需要取得的业务锁。
 控制状态必须先完成同步发布再通知，不能只改一个跨线程普通变量。
 
@@ -111,7 +111,7 @@ Snapshot/Wait/WakeAll 使用队列内部锁，正常完成时先释放锁再返�
 
 使用阻塞 `Consume`／`ConsumeBatch` 的线程不能仅靠模块标志和 `WakeAll` 退出：正常状态下队列仍为空时，它会继续等待。此类线程退出前，先停止并等待全部生产者，再调用 `BeginFlush`；消费者处理完剩余消息，收到 `ERR_QUEUE_FLUSHING` 后退出，调用方 join 后再 Destroy。日志 Stop 使用此流程并刷新输出，日志 Destroy 只关闭文件和释放队列，由所属生命周期入口管理先后顺序。
 
-引擎先进入 `STOPPING`，再通过 `WakeAll` 唤醒 Executor 和 Planner；两个模块不维护本地退出标志。`dominoHumanModuleStop()` 先 join Executor，确保最后一批规划请求已提交，再 join Planner；随后引擎调用 `dominoTimerModuleStop()` join timer。全局退出后 Planner 的提交入口保持可用，直到执行线程结束；Executor inbox 继续接收 Planner 和 timer 的最后投递，timer 目标队列须保持允许生产直到 timer Stop 返回。所有队列和残留消息保留到引擎 Destroy，再由 human 的 PlannerDestroy／ExecutionDestroy 调用 `BeginFlush`、排空并释放尚未转移的 AI 行为块，最后销毁队列。
+引擎先进入 `STOPPING`，再通过 `WakeAll` 唤醒 Executor 和 Planner；两个模块不维护本地退出标志。`dominoHumanModuleStop()` 先 join Executor，确保最后一批规划请求已提交，再 join Planner；随后引擎调用 `dominoGameTimerModuleStop()` join game_timer。全局退出后 Planner 的提交入口保持可用，直到执行线程结束；Executor inbox 继续接收 Planner 和 game_timer 的最后投递，game_timer 目标队列须保持允许生产直到 game_timer Stop 返回。所有队列和残留消息保留到引擎 Destroy，再由 human 的 PlannerDestroy／ExecutionDestroy 调用 `BeginFlush`、排空并释放尚未转移的 AI 行为块，最后销毁队列。
 
 队列为空只表示元素已取出，消费者可能仍在处理载荷。销毁前必须确保全部使用者已结束访问，并成功 join 负责消费或等待的工作线程。未启用线程的队列由调用方清理载荷后可直接销毁。
 

@@ -10,7 +10,7 @@
 extern void dominoHumanExecutionInit(void);
 
 /** @brief 释放留队消息、收件队列、同步对象与睡眠许可，复位人物唤醒字段，不停止或 join 线程。
- * @pre 资源已 Init；执行、规划与 timer 线程均未启动或已 join，保存已完成；人物容器随后由 human 模块释放。
+ * @pre 资源已 Init；执行、规划与 game_timer 线程均未启动或已 join，保存已完成；人物容器随后由 human 模块释放。
  */
 extern void dominoHumanExecutionDestroy(void);
 
@@ -23,14 +23,14 @@ extern void dominoHumanExecutionStart(void);
 extern void dominoHumanExecutionNotifyTimeChanged(void);
 
 /** @brief join 执行线程，保留队列及其他资源；已开始的批次完整执行。
- * @pre 线程已创建，引擎已进入 STOPPING 并通知执行／规划线程，timer 和收件队列仍存活。
+ * @pre 线程已创建，引擎已进入 STOPPING 并通知执行／规划线程，game_timer 和收件队列仍存活。
  * @note 执行线程读取 dominoEngineIsStopping()；本接口不发布退出、重复唤醒或停止规划线程。
  * 仅 Init、未 Start 时由引擎跳过本接口；内部不重复校验生命周期。
  */
 extern void dominoHumanExecutionStop(void);
 
 /** @brief 所有业务线程退出后统一结算到冻结时刻；不释放资源，无法形成一致世界状态时直接终止。
- * @pre human 和 timer Stop 已完成；世界与睡眠许可仍存活，调用方独占人物写入权。
+ * @pre human 和 game_timer Stop 已完成；世界与睡眠许可仍存活，调用方独占人物写入权。
  */
 extern void dominoHumanExecutionSettle(domino_runtime_ms_t now_ms);
 

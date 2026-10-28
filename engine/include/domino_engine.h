@@ -37,7 +37,7 @@ typedef struct DominoEngineLaunchConfig {
 
 /**
  * @brief 准备固定运行资源并加载存档，保持时钟冻结，不创建线程；成功调用的线程登记为客户端线程。
- * @note 日志文件、主循环及 human/timer 队列、映射表和同步对象在本阶段初始化；业务容器仍按数据量增长。
+ * @note 日志文件、主循环及 human/game_timer 队列、映射表和同步对象在本阶段初始化；业务容器仍按数据量增长。
  * @note 首次使用依赖静态初值，再次使用须先完成 Destroy；Init 不重复清空已复位的模块状态。
  * @note 生命周期调用须串行，不能与其他引擎操作并发；非法生命周期调用及不可恢复错误直接打印 stderr 并 exit(EXIT_FAILURE)。
  * Init 仅接受未初始化，Start 仅接受已初始化，Stop 接受已初始化或运行中，Destroy 仅接受已停止；重复或错序不作无操作处理。
@@ -59,7 +59,7 @@ typedef struct DominoEngineClientData {
 static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096 bytes");
 
 /**
- * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行／规划线程、timer 和主循环。
+ * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行／规划线程、game_timer 和主循环。
  * @note 所有线程创建完成后进入 RUNNING，解冻并唤醒业务线程；本阶段不再创建固定队列、映射表或同步对象。
  * @param client_data_out_ptr 可为 nullptr；非空时仅写入 game_date_time_ns。
  * @note 已加载活动睡眠须在 Start 前显式授权，不从建筑引用推断许可。
@@ -70,7 +70,7 @@ extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 /**
  * @brief 客户端进入 STOPPING，停止已启动的线程并排空日志，保留资源供 Destroy 保存和释放。
  * @pre 引擎处于 INITIALIZED 或 RUNNING，且由 Init 登记的客户端线程串行调用；已冻结的运行实例同样可以停止。
- * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 timer，统一结算人物，再排空日志并 join writer。
+ * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 game_timer，统一结算人物，再排空日志并 join writer。
  * 仅 Init、未 Start 时各模块跳过线程 join，logger 关闭入队并刷新输出；保持已加载及配置的事实，不结算人物或要求睡眠授权。
  * 停止或结算失败直接终止进程，不保存。
  * 成功后进入 STOPPED，世界、队列、同步对象和日志文件均保留，全部线程已退出，尚未保存；随后显式调用 Destroy，不支持直接 Start 或 Thaw。
@@ -78,11 +78,11 @@ extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 extern void dominoEngineStop(void);
 
 /**
- * @brief 释放已停止的 timer 和主循环队列，保存世界，再释放 human 等世界模块和日志，完成后回到未初始化状态。
+ * @brief 释放已停止的 game_timer 和主循环队列，保存世界，再释放 human 等世界模块和日志，完成后回到未初始化状态。
  * @pre 引擎处于 STOPPED，且由 Init 登记的客户端线程串行调用；无论是否 Start，都必须先由外部完成 Stop。
  * @note 不停钟、不停止或 join 任何线程；未完成 Stop 直接调用属于生命周期错误，打印 stderr 并 exit(EXIT_FAILURE)。
  * 日志资源最后销毁；保存及销毁阶段的非致命诊断通过 DOMINO_PRINT_MESSAGE 直接输出 stdout，不调用日志记录接口。
- * 返回前容器、索引指针、timer 和引擎实例状态已复位；time 在保存后恢复为基准、采样起点、版本均为零的冻结快照。
+ * 返回前容器、索引指针、game_timer 和引擎实例状态已复位；time 在保存后恢复为基准、采样起点、版本均为零的冻结快照。
  * 内存时钟清空不修改存档累计时间，下一次 Init 从存档恢复；不依赖下一次 Init 清理旧实例状态。
  * 所有阶段的致命错误均使用 DOMINO_EXIT_WITH_ERROR 直接输出 stderr 并退出。
  * 须排除其他 API 并发；保存或释放失败直接终止进程，成功后允许重新 Init。

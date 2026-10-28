@@ -28,7 +28,7 @@ extern void dominoTimeModuleFreeze(void);
  * @brief 从冻结的累计基准重新建立单调起点并解冻，不计入冻结期间的现实经过量。
  * @pre 调用方须保证冻结基准已通过 32 位业务范围校验，且校验后未被修改。
  * @note 未冻结时调用或时钟采样失败直接打印到 stderr 并终止进程。
- * @note 生命周期调用须串行且消费者已就绪；客户端发布后唤醒主循环、human 和 timer，不重置跨存档累计基准。
+ * @note 生命周期调用须串行且消费者已就绪；客户端发布后唤醒主循环、human 和 game_timer，不重置跨存档累计基准。
  */
 extern void dominoTimeModuleThaw(void);
 

@@ -18,7 +18,7 @@ shared logger 首次对象仍须零初始化，Destroy 负责清空，Init 不�
 - 初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一在调用点使用 `DOMINO_PRINT_MESSAGE(fmt, ...)` 直接写 stdout，由 `common.c` 输出调用位置和完整正文、追加换行并刷新，不截断、不退出，也不调用日志记录接口。
 - 运行阶段使用 `DOMINO_ENGINE_LOG`，所有等级（包括非致命 ERROR）交给实例异步处理。日志层只转发到实例，不维护阶段标志或选择 stdout。
 - 导航、计时器等共用业务接口只返回可恢复结果，由掌握调用语义的边界记录一次：运行阶段使用日志宏，非运行阶段统一使用 `DOMINO_PRINT_MESSAGE`；若结果在该场景下属于致命故障，直接使用 `DOMINO_EXIT_WITH_ERROR`，写 stderr 并退出，不先记录日志。
-- 开始、停止、冻结、解冻操作本身的消息直接打印；业务线程正在完成的批次仍使用运行日志。引擎 Stop 先 join 主循环、human 和 timer，完成人物结算，再调用 logger Stop，最后进入 `STOPPED`。引擎 Destroy 保存并释放世界后再调用 logger Destroy；保存和销毁期间的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不再进入日志队列。
+- 开始、停止、冻结、解冻操作本身的消息直接打印；业务线程正在完成的批次仍使用运行日志。引擎 Stop 先 join 主循环、human 和 game_timer，完成人物结算，再调用 logger Stop，最后进入 `STOPPED`。引擎 Destroy 保存并释放世界后再调用 logger Destroy；保存和销毁期间的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不再进入日志队列。
 - logger 在引擎 Init 时只准备资源，Start 时先启动 writer。引擎 Stop 同时接受 `INITIALIZED` 和 `RUNNING`：仅 Init 时没有任何线程需要 join，logger 关闭入队并同步文件、刷新 stdout，世界保持已加载事实，不结算人物；运行过的实例在业务线程退出及结算后停止 writer。两条路径都由外部先 Stop 再 Destroy；Destroy 只接受 `STOPPED`，不停止任何线程。
 - writer 独立于引擎 Freeze/Thaw，冻结期间仍消费日志。
 

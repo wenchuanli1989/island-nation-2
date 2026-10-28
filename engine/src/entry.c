@@ -11,6 +11,7 @@
 #include "domino_shared_common.h"
 #include "domino_shared_error_codes.h"
 #include "domino_shared_queue.h"
+#include "game_timer/entry.h"
 #include "host/entry.h"
 #include "human/entry.h"
 #include "human/executor.h"
@@ -19,7 +20,6 @@
 #include "social/entry.h"
 #include "storage/entry.h"
 #include "time/entry.h"
-#include "timer/entry.h"
 
 char g_domino_storage_account_id[DOMINO_STORAGE_ACCOUNT_ID_MAX] = "";
 char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX] = "local";
@@ -121,7 +121,7 @@ void dominoEngineFreezeTime(void) {
 /** @brief 恢复或退出状态先发布，再通知业务等待者；普通冻结不需要通知。 */
 static void notifyBusinessThreads(void) {
     dominoHumanExecutionNotifyTimeChanged();
-    dominoTimerNotifyTimeChanged();
+    dominoGameTimerNotifyTimeChanged();
 }
 
 void dominoEngineThawTime(void) {
@@ -234,7 +234,7 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
     dominoNavModuleInitBefore();
     dominoSocialModuleInit();
     dominoHumanModuleInit();
-    dominoTimerModuleInit();
+    dominoGameTimerModuleInit();
     dominoStorageModuleInit();
     dominoNavModuleInitAfter();
     g_domino_client_thread = thrd_current();
@@ -292,7 +292,7 @@ void dominoEngineStart(DominoEngineClientData* client_data_out_ptr) {
     /* 时钟保持冻结，等所有消费者就绪后再恢复。 */
     dominoLoggerModuleStart();
     dominoHumanModuleStart();
-    dominoTimerModuleStart();
+    dominoGameTimerModuleStart();
     DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_domino_main_loop_thread, dominoMainLoopThread, nullptr), ERR_THREAD_CREATE,
                                   "failed to create the main loop thread");
     atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_RUNNING);
@@ -318,7 +318,7 @@ void dominoEngineStop(void) {
         notifyBusinessThreads();
         DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_domino_main_loop_thread, nullptr), ERR_THREAD_JOIN, "failed to join the main loop thread");
         dominoHumanModuleStop();
-        dominoTimerModuleStop();
+        dominoGameTimerModuleStop();
         dominoHumanExecutionSettle(now_ms);
     }
     /* 仅 Init 时不调用业务线程 Stop，不结算人物；logger 仍关闭入队并刷新输出。 */
@@ -331,7 +331,7 @@ void dominoEngineDestroy(void) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "destroy requires a stopped engine and its client thread");
     }
     atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_DESTROYING);
-    dominoTimerModuleDestroy();
+    dominoGameTimerModuleDestroy();
     dominoThreadQueueDestroy(&g_domino_to_main_loop_queue);
     dominoThreadQueueDestroy(&g_domino_from_main_loop_queue);
     dominoNavModuleDestroyBefore();

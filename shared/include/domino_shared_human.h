@@ -184,7 +184,7 @@ static_assert(sizeof(DominoHumanData) == 4096, "DominoHumanData must be exactly 
 typedef struct DominoHuman {
     DominoHumanData* data;            ///< 借用同索引的 Data；数组布局改变后须重新绑定。
     uint64_t active_plan_request_id;  ///< 运行态：已提交且仍有效的规划请求 ID，0 表示无有效请求，不持久化。
-    uint64_t wakeup_timer_id;         ///< 运行态：人物唯一有效唤醒计时器 ID，0 表示未登记，不持久化。
+    uint64_t wakeup_game_timer_id;    ///< 运行态：人物唯一有效唤醒计时器 ID，0 表示未登记，不持久化。
 
     /* movable_object_id 为 0 时保存静态坐标，否则保存绑定后的运动对象指针。 */
     union {
@@ -196,7 +196,7 @@ typedef struct DominoHuman {
         } position_info;
     };
 
-    domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_timer_id 非零时有效，不持久化。
+    domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_game_timer_id 非零时有效，不持久化。
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。
     domino_movable_object_id_t movable_object_id;  ///< 运动对象 ID，0 表示无关联对象。
     domino_status_t status;

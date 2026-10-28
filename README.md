@@ -37,25 +37,25 @@ client-hub 与 engine-remote/local 当前仍只管理各自的日志资源，公
 | Stop | 已初始化或运行中 | 已停止 |
 | Destroy | 已停止 | 未初始化 |
 
-仅 Init 的引擎 Stop 跳过 human／timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 InitBefore → InitAfter → DestroyBefore → DestroyAfter 调用；time 无独立 Init，由引擎保证在客户端 DESTROYING 路径中复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
+仅 Init 的引擎 Stop 跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 InitBefore → InitAfter → DestroyBefore → DestroyAfter 调用；time 无独立 Init，由引擎保证在客户端 DESTROYING 路径中复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
 
 ### 当前引擎生命周期
 
 `dominoEngineInit(launch_config)` 按固定顺序初始化模块：
 
 ```text
-logger -> main queues -> common -> host -> nav(before) -> social -> human -> timer -> storage(load) -> nav(after)
+logger -> main queues -> common -> host -> nav(before) -> social -> human -> game_timer -> storage(load) -> nav(after)
 ```
 
 - `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，其他查询、读取或解析失败均打印 stderr 并退出进程。
 - `launch_config.storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载使用存档自身声明的校验策略。
-- Init 准备日志文件、主循环双向队列、human 执行／规划队列与运行映射表、timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
+- Init 准备日志文件、主循环双向队列、human 执行／规划队列与运行映射表、game_timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
 - 每次 `dominoEngineInit()` 使用静态初值或上一轮 Destroy 已恢复的空世界基线，再从当前 `storage_path` 加载；上一轮成功 Destroy 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
-`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行；原本等待中的线程保持等待，恢复或退出时再唤醒。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
+`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 game_timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行；原本等待中的线程保持等待，恢复或退出时再唤醒。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
-所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行／规划线程和 timer，再将人物结算到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
+所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行／规划线程和 game_timer，再将人物结算到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 game_timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 game_timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
 
 Init／Start／Stop／Destroy、Freeze／Thaw 等生命周期接口返回 `void`。无论处于初始化、开始、停止、冻结、解冻、销毁还是运行阶段，致命错误都通过 `DOMINO_EXIT_WITH_ERROR` 直接输出到 stderr，再由 `common.c` 中的公共方法执行 `exit(EXIT_FAILURE)`；标准退出处理仍可执行。不再维护实例首错、`FAILED` 生命周期状态或跨线程故障传播。正常启动就绪、生命周期状态、通知、join 和资源释放顺序继续保留；失败退出不进入正常保存或清理流程。保存失败由后续新进程按磁盘事务恢复。`lib/` 下第三方库代码保持原样，其原有终止行为保留，不纳入项目自有模块的退出实现改造。
 
@@ -63,7 +63,7 @@ Init／Start／Stop／Destroy、Freeze／Thaw 等生命周期接口返回 `void`
 
 首次 Init 使用静态初值，再次 Init 使用上一轮 Destroy 已复位的空状态；Init 只创建资源、绑定本轮配置和加载数据，不重复清空全局容器、世界计数或模块结构。time 无独立 Init 重置或提前采样，加载只恢复累计基准，Start 解冻时才建立单调起点。通用 queue／logger 首次对象须以静态初值、`={0}` 或 `calloc` 零初始化，Init 在创建资源前检测重复调用；Destroy 后可直接再次 Init。
 
-Destroy 返回前，common、host、social 等模块的容器指针、数量、容量及索引指针均已清空，timer 的线程句柄存储和唤醒状态随模块整体复位；引擎配置、路径及线程句柄存储也恢复初始值。世界保存和容器释放完成后调用 `dominoTimeModuleDestroy()`，把内存中的累计基准、单调采样起点及快照版本归零，保持冻结。不依赖下一次 Init 覆盖旧状态，也不改动已保存的累计时间；再次加载同一存档时继续恢复原基准。
+Destroy 返回前，common、host、social 等模块的容器指针、数量、容量及索引指针均已清空，game_timer 的线程句柄存储和唤醒状态随模块整体复位；引擎配置、路径及线程句柄存储也恢复初始值。世界保存和容器释放完成后调用 `dominoTimeModuleDestroy()`，把内存中的累计基准、单调采样起点及快照版本归零，保持冻结。不依赖下一次 Init 覆盖旧状态，也不改动已保存的累计时间；再次加载同一存档时继续恢复原基准。
 
 ### 数据与存档
 
