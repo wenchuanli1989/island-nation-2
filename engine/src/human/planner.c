@@ -1,11 +1,9 @@
 #include "planner.h"
 
 #include <inttypes.h>
-#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
-#include <time.h>
 
 #include "../entry.h"
 #include "../time/entry.h"
@@ -16,22 +14,14 @@
 
 typedef struct HumanPlanner {
     DominoThreadQueue inbox;
+    cnd_t condition;
+    mtx_t mutex;
     DominoThreadQueue* result_queue_ptr;
     thrd_t thread;
-    atomic_bool ready_flag;  ///< 仅用于首次启动握手，由静态初值或 Destroy 复位。
+    bool ready_flag;  ///< 仅用于首次启动握手，读写由 mutex 保护，由静态初值或 Destroy 复位。
 } HumanPlanner;
 
 static HumanPlanner g_planner;
-
-/** @brief 等待工作线程发布就绪，保证 Start 返回时已完成启动握手。 */
-static void waitUntilReady(void) {
-    const struct timespec interval = {.tv_nsec = 10000000L};
-    while (!atomic_load(&g_planner.ready_flag)) {
-        if (thrd_sleep(&interval, nullptr) == -2) {
-            DOMINO_EXIT_WITH_ERROR(ERR_THREAD_SLEEP, "planner startup acknowledgement wait sleep failed");
-        }
-    }
-}
 
 void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr) {
     if (message_ptr && (message_ptr->type == DOMINO_THREAD_MESSAGE_AI_REQUEST || message_ptr->type == DOMINO_THREAD_MESSAGE_AI_RESULT)) {
@@ -100,7 +90,10 @@ static void processRequest(DominoThreadMessage* message_ptr) {
 
 static int humanPlannerThread(void* arg_ptr) {
     (void)arg_ptr;
-    atomic_store(&g_planner.ready_flag, true);
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_planner.mutex), ERR_MUTEX_LOCK, "human planner:mtx_lock");
+    g_planner.ready_flag = true;
+    DOMINO_REQUIRE_THREAD_SUCCESS(cnd_broadcast(&g_planner.condition), ERR_CONDITION_BROADCAST, "human planner:cnd_broadcast");
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_planner.mutex), ERR_MUTEX_UNLOCK, "human planner:mtx_unlock");
     for (;;) {
         uint64_t epoch;
         DOMINO_CODE code = dominoThreadQueueSnapshot(&g_planner.inbox, &epoch);
@@ -135,6 +128,8 @@ static int humanPlannerThread(void* arg_ptr) {
 }
 
 void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_init(&g_planner.mutex, mtx_plain), ERR_MUTEX_INIT, "cannot initialize human planner mutex");
+    DOMINO_REQUIRE_THREAD_SUCCESS(cnd_init(&g_planner.condition), ERR_CONDITION_INIT, "cannot initialize human planner startup condition");
     dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoThreadMessage), DOMINO_HUMAN_PLAN_INFLIGHT_MAX, DOMINO_HUMAN_PLAN_INFLIGHT_MAX);
     g_planner.result_queue_ptr = result_queue_ptr;
 }
@@ -142,7 +137,11 @@ void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
 void dominoHumanPlannerStart(void) {
     DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planner.thread, humanPlannerThread, nullptr), ERR_THREAD_CREATE,
                                   "cannot create human planner thread");
-    waitUntilReady();
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_planner.mutex), ERR_MUTEX_LOCK, "human planner:mtx_lock");
+    while (!g_planner.ready_flag) {
+        DOMINO_REQUIRE_THREAD_SUCCESS(cnd_wait(&g_planner.condition, &g_planner.mutex), ERR_CONDITION_WAIT, "human planner:cnd_wait");
+    }
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_planner.mutex), ERR_MUTEX_UNLOCK, "human planner:mtx_unlock");
 }
 
 void dominoHumanPlannerNotifyTimeChanged(void) {
@@ -179,6 +178,7 @@ void dominoHumanPlannerDestroy(void) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot drain human planner inbox during destroy");
     }
     dominoThreadQueueDestroy(&g_planner.inbox);
+    cnd_destroy(&g_planner.condition);
+    mtx_destroy(&g_planner.mutex);
     memset(&g_planner, 0, sizeof(g_planner));
-    atomic_init(&g_planner.ready_flag, false);
 }

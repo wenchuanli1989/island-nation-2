@@ -946,7 +946,7 @@ ScheduleAt 对空队列、空 ID 输出和不匹配的队列元素大小保留�
 
 引擎对外 Init／Start／Stop／Destroy 严格校验生命周期与调用线程，重复调用、未 Init 操作、Stop 后 Start、未 Stop 直接 Destroy 均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。内部 game_timer、executor 和 planner 不重复校验或维护完整阶段状态；任务存储、人物唤醒、导航内部辅助函数和加载入口也直接使用引擎已准备的资源，不再复检已由调用链保证的初始化条件；可直接调用的公共业务入口仍负责自身访问资格。业务事实、身份与版本校验和线程同步仍保留。引擎在运行过的 Stop 路径中先发布 `STOPPING` 并唤醒，再调用内部 Stop 进行 join。仅 Init 时引擎跳过 human／game_timer Stop 和人物结算，仍调用 logger Stop 关闭入队并刷新，随后进入引擎 `STOPPED`。shared logger／queue 保留独立公共接口的状态校验，日志包装层不重复检查。
 
-执行器和 planner 的 `ready_flag` 只用于本轮首次启动握手，由工作线程发布、Start 等待，初值由静态存储或上一轮 Destroy 建立；Start／Stop 不重复复位，也不把它作为当前运行状态。Start 的就绪条件不要求所有人物已登记 game_timer、已完成规划或已启动睡眠，也不保证后续每项提交或启动都成功。当前只有最小睡眠值快照和 planner，没有完整业务快照或会话上限计时；合法未授权的待执行睡眠保留但不启动，不支持的活动／挂起状态拒绝运行。
+执行器和 planner 的 `ready_flag` 只用于本轮首次启动握手，由工作线程发布、Start 等待；每个模块的工作线程与 Start 使用同一把互斥锁保护标志，并通过条件变量通知和等待，不做定时轮询。同步对象在 Init 创建、Destroy 释放。标志初值由静态存储或上一轮 Destroy 建立，Start／Stop 不重复复位，也不把它作为当前运行状态。Start 的就绪条件不要求所有人物已登记 game_timer、已完成规划或已启动睡眠，也不保证后续每项提交或启动都成功。当前只有最小睡眠值快照和 planner，没有完整业务快照或会话上限计时；合法未授权的待执行睡眠保留但不启动，不支持的活动／挂起状态拒绝运行。
 
 普通 Freeze 由客户端直接调用 time，不发控制请求，也不通知业务线程。Thaw 也由客户端直接调用 time，发布解冻状态后通知主循环、executor、planner 和 game_timer；不经过主循环转发或等待恢复回执。退出也由客户端直接进入 `STOPPING`、冻结并校验时钟，再唤醒主循环和业务线程，随后等待线程结束并统一结算保存；均不依赖业务队列空位或客户端消费响应。生命周期接口由 Init 成功的客户端线程串行调用，普通冻结、解冻和退出停钟统一由该客户端写入 time。为异步首错传播设置的运行通知锁和故障状态已移除；主循环、human、game_timer 和 logger 的致命错误直接打印 stderr 并 exit。human 执行器与规划器通过 `dominoEngineIsStopping()` 统一判断引擎是否处于 `STOPPING`，不维护本地停止标志；正常启动就绪、命令完成同步和线程 join 保留。主循环不调用会 join 自身的公共 Stop。
 
