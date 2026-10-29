@@ -30,15 +30,15 @@ extern void dominoHumanExecutionNotifyTimeChanged(void);
  */
 extern void dominoHumanExecutionStop(void);
 
-/** @brief 所有业务线程退出后统一结算到冻结时刻；不释放资源，无法形成一致世界状态时直接终止。
+/** @brief 所有业务线程退出后统一结算正常人物到冻结时刻；异常人物直接跳过，不释放资源。
  * @pre human 和 game_timer Stop 已完成；世界仍存活，调用方独占人物写入权。
  */
 extern void dominoHumanExecutionSettle(domino_runtime_ms_t now_ms);
 
 /** @brief 提交无需建筑或地点许可的单行为睡眠；运行中完成当次人物推进后才返回成功。
  * @pre 引擎公开入口已确认处于 INITIALIZED 或 RUNNING，且调用方为登记的客户端线程；与生命周期操作串行。
- * @note 尚未 Start 时只提交 PLANNED；运行实例暂停期间拒绝提交。普通业务拒绝只返回结果，由引擎公开入口记录；
- * 分配、投递、推进或唤醒登记等致命错误直接终止。
+ * @note 尚未 Start 时只提交 PLANNED；异常人物或运行实例冻结期间拒绝提交。普通业务拒绝只返回结果，由引擎公开入口记录；
+ * 已提交任务的业务失败终结为 FAILED 并使人物进入异常；分配、投递或唤醒登记等致命错误直接终止。
  */
 extern DOMINO_CODE dominoHumanExecutionSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr);
 

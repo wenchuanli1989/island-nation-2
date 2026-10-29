@@ -32,6 +32,13 @@
 #define DOMINO_MAX_ORG_COUNT_PER_HUMAN 5
 #define DOMINO_MAX_ORG_BOSS_COUNT_PER_HUMAN 5
 
+/** @brief 人物业务状态；异常状态持久化，执行器跳过其任务、需求和规划，不自动恢复。 */
+typedef enum {
+    DOMINO_HUMAN_STATUS_NORMAL = 0,  ///< 正常参与模拟。
+    DOMINO_HUMAN_STATUS_EXCEPTION,   ///< 已提交任务失败或取消，保留业务现场并停止后续执行。
+    DOMINO_HUMAN_STATUS_COUNT,
+} DOMINO_HUMAN_STATUS;
+
 /** @brief 六项需求共用的百分制上限，字段直接保存整数分。 */
 enum {
     DOMINO_HUMAN_NEED_MAX = 100U,
@@ -65,7 +72,7 @@ typedef struct DominoHumanData {
     uint32_t pending_plan_reasons;  ///< 运行态：合并的待规划原因位集合，不持久化。
 
     /* 本人持有的全部任务；按提交顺序追加，删除时前移，状态和计划时间变化不重排。 */
-    domino_task_id_t task_id_list[DOMINO_HUMAN_TASK_COUNT_MAX];  ///< 前 task_count 项有效，包含活动、待执行、挂起、待交接及尚未回收的终态任务。
+    domino_task_id_t task_id_list[DOMINO_HUMAN_TASK_COUNT_MAX];  ///< 前 task_count 项有效，包含活动、待执行及尚未回收的终态任务。
     uint8_t task_count;                                          ///< 持有任务数量，0..32；数组位置不代表执行顺序。
 
     /* 其他身体状态、情绪与外观。 */
@@ -199,7 +206,7 @@ typedef struct DominoHuman {
     domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_game_timer_id 非零时有效，不持久化。
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。
     domino_movable_object_id_t movable_object_id;  ///< 运动对象 ID，0 表示无关联对象。
-    domino_status_t status;
+    domino_status_t status;                        ///< 持久化业务状态，取 DOMINO_HUMAN_STATUS。
     uint8_t region_index;
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;

@@ -102,7 +102,7 @@ DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id) {
     }
     const uint32_t task_pool_index = kh_val(g_task_id_map, task_map_index);
     const DominoTask task = kv_A(domino_all_task_list, task_pool_index);
-    if (!isTaskTerminal(&task) || task.parent_task_id || task.active_child_task_id || task.pending_child_task_id) {
+    if (!isTaskTerminal(&task)) {
         return ERR_GAME_STATE_INVALID;
     }
     DominoHumanData* data_ptr = dominoGetHumanDataByID(task.owner_human_id);
@@ -116,16 +116,7 @@ DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id) {
     for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
         if (data_ptr->task_id_list[index] == task_id) {
             task_index = index;
-            continue;
-        }
-        const DominoTask* other_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
-        if (!other_ptr) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "人物任务清单引用不存在的任务: human_id=%u, task_id=%u", data_ptr->human_id,
-                                   data_ptr->task_id_list[index]);
-        }
-        if (other_ptr->parent_task_id == task_id || other_ptr->active_child_task_id == task_id || other_ptr->pending_child_task_id == task_id ||
-            other_ptr->cancel_target_task_id == task_id) {
-            return ERR_GAME_STATE_INVALID;
+            break;
         }
     }
     if (task_index == data_ptr->task_count) {

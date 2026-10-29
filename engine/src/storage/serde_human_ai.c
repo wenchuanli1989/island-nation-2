@@ -11,38 +11,25 @@
 #define AI_READ_UINT(object, record, field) ((record)->field = (typeof((record)->field))yyjson_get_uint(yyjson_obj_get(object, #field)))
 #define AI_READ_BOOL(object, record, field) ((record)->field = yyjson_get_bool(yyjson_obj_get(object, #field)))
 
-static void deserializeProgress(yyjson_val* object, DominoBehaviorProgress* progress_ptr) {
-    AI_READ_UINT(object, progress_ptr, started_at_ms);
-    AI_READ_UINT(object, progress_ptr, ended_at_ms);
-    AI_READ_UINT(object, progress_ptr, accounted_at_ms);
-    AI_READ_UINT(object, progress_ptr, active_elapsed_ms);
-    AI_READ_UINT(object, progress_ptr, wait_until_ms);
-    AI_READ_UINT(object, progress_ptr, status);
-    AI_READ_UINT(object, progress_ptr, wait_reason);
-    AI_READ_BOOL(object, progress_ptr, started_flag);
-    AI_READ_BOOL(object, progress_ptr, effect_committed_flag);
-}
-
 static void deserializeBehavior(yyjson_val* object, DominoBehavior* behavior_ptr) {
     AI_READ_UINT(object, behavior_ptr, type);
     AI_READ_UINT(object, behavior_ptr, target_building_id);
     AI_READ_UINT(object, behavior_ptr, planned_begin_ms);
     AI_READ_UINT(object, behavior_ptr, planned_end_ms);
-    yyjson_val* parameters = yyjson_obj_get(object, "parameters");
-    if (behavior_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP) {
-        AI_READ_UINT(parameters, &behavior_ptr->parameters.sleep, target_active_ms);
-    }
-    deserializeProgress(yyjson_obj_get(object, "progress"), &behavior_ptr->progress);
+    AI_READ_UINT(object, behavior_ptr, started_at_ms);
+    AI_READ_UINT(object, behavior_ptr, ended_at_ms);
+    AI_READ_UINT(object, behavior_ptr, accounted_at_ms);
+    AI_READ_UINT(object, behavior_ptr, active_elapsed_ms);
+    AI_READ_UINT(object, behavior_ptr, wait_until_ms);
+    AI_READ_UINT(object, behavior_ptr, status);
+    AI_READ_BOOL(object, behavior_ptr, started_flag);
+    AI_READ_BOOL(object, behavior_ptr, effect_committed_flag);
 }
 
 /** @brief 行为数量以嵌套数组为唯一来源，完成字段解析后由调用方分配连续块。 */
 static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
     AI_READ_UINT(object, task_ptr, task_id);
     AI_READ_UINT(object, task_ptr, owner_human_id);
-    AI_READ_UINT(object, task_ptr, parent_task_id);
-    AI_READ_UINT(object, task_ptr, active_child_task_id);
-    AI_READ_UINT(object, task_ptr, pending_child_task_id);
-    AI_READ_UINT(object, task_ptr, cancel_target_task_id);
     AI_READ_UINT(object, task_ptr, planned_begin_ms);
     AI_READ_UINT(object, task_ptr, planned_end_ms);
     AI_READ_UINT(object, task_ptr, started_at_ms);
@@ -51,10 +38,7 @@ static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
     AI_READ_UINT(object, task_ptr, type);
     AI_READ_UINT(object, task_ptr, channel_index);
     AI_READ_UINT(object, task_ptr, status);
-    AI_READ_UINT(object, task_ptr, result);
     AI_READ_UINT(object, task_ptr, priority_class);
-    AI_READ_UINT(object, task_ptr, pending_stop_reason);
-    AI_READ_UINT(object, task_ptr, cancel_scope);
     AI_READ_BOOL(object, task_ptr, started_flag);
     yyjson_val* behaviors = yyjson_obj_get(object, "behaviors");
     size_t count = yyjson_arr_size(behaviors);
@@ -68,42 +52,24 @@ static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
 #undef AI_READ_UINT
 #undef AI_READ_BOOL
 
-static yyjson_mut_val* serializeProgress(yyjson_mut_doc* doc, const DominoBehaviorProgress* progress) {
-    yyjson_mut_val* object = yyjson_mut_obj(doc);
-    if (!object || !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", progress->started_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", progress->ended_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "accounted_at_ms", progress->accounted_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "active_elapsed_ms", progress->active_elapsed_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "wait_until_ms", progress->wait_until_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "status", progress->status) ||
-        !yyjson_mut_obj_add_uint(doc, object, "wait_reason", progress->wait_reason) ||
-        !yyjson_mut_obj_add_bool(doc, object, "started_flag", progress->started_flag) ||
-        !yyjson_mut_obj_add_bool(doc, object, "effect_committed_flag", progress->effect_committed_flag)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior progress fields");
-    }
-    return object;
-}
-
-/** @brief 写入行为公共字段，按类型写入已定义的专属参数。 */
+/** @brief 写入行为事实；睡眠目标时长由计划区间推导，不单独保存。 */
 static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavior* behavior) {
     yyjson_mut_val* object = yyjson_mut_obj(doc);
     if (!object) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
     }
-    yyjson_mut_val* parameters = yyjson_mut_obj(doc);
-    if (!parameters) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
-    }
-    yyjson_mut_val* progress = serializeProgress(doc, &behavior->progress);
     if (!yyjson_mut_obj_add_uint(doc, object, "type", behavior->type) ||
         !yyjson_mut_obj_add_uint(doc, object, "target_building_id", behavior->target_building_id) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", behavior->planned_begin_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", behavior->planned_end_ms) ||
-        !yyjson_mut_obj_add_val(doc, object, "parameters", parameters) || !yyjson_mut_obj_add_val(doc, object, "progress", progress)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
-    }
-    if (behavior->type == DOMINO_BEHAVIOR_TYPE_SLEEP &&
-        !yyjson_mut_obj_add_uint(doc, parameters, "target_active_ms", behavior->parameters.sleep.target_active_ms)) {
+        !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", behavior->started_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", behavior->ended_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, object, "accounted_at_ms", behavior->accounted_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, object, "active_elapsed_ms", behavior->active_elapsed_ms) ||
+        !yyjson_mut_obj_add_uint(doc, object, "wait_until_ms", behavior->wait_until_ms) ||
+        !yyjson_mut_obj_add_uint(doc, object, "status", behavior->status) ||
+        !yyjson_mut_obj_add_bool(doc, object, "started_flag", behavior->started_flag) ||
+        !yyjson_mut_obj_add_bool(doc, object, "effect_committed_flag", behavior->effect_committed_flag)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
     }
     return object;
@@ -114,20 +80,14 @@ static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task
     yyjson_mut_val* object = yyjson_mut_obj(doc);
     if (!object || !yyjson_mut_obj_add_uint(doc, object, "task_id", task->task_id) ||
         !yyjson_mut_obj_add_uint(doc, object, "owner_human_id", task->owner_human_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "parent_task_id", task->parent_task_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "active_child_task_id", task->active_child_task_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "pending_child_task_id", task->pending_child_task_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "cancel_target_task_id", task->cancel_target_task_id) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", task->planned_begin_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", task->planned_end_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", task->started_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", task->ended_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "current_behavior_index", task->current_behavior_index) ||
         !yyjson_mut_obj_add_uint(doc, object, "channel_index", task->channel_index) || !yyjson_mut_obj_add_uint(doc, object, "type", task->type) ||
-        !yyjson_mut_obj_add_uint(doc, object, "status", task->status) || !yyjson_mut_obj_add_uint(doc, object, "result", task->result) ||
+        !yyjson_mut_obj_add_uint(doc, object, "status", task->status) ||
         !yyjson_mut_obj_add_uint(doc, object, "priority_class", task->priority_class) ||
-        !yyjson_mut_obj_add_uint(doc, object, "pending_stop_reason", task->pending_stop_reason) ||
-        !yyjson_mut_obj_add_uint(doc, object, "cancel_scope", task->cancel_scope) ||
         !yyjson_mut_obj_add_bool(doc, object, "started_flag", task->started_flag)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI task fields");
     }

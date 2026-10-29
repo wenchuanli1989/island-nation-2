@@ -44,7 +44,7 @@ AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独
 不能把栈地址或可扩容数组内部地址作为载荷中的借用指针交给异步消费者。
 
 执行器收件队列可依次出现 `AI_RESULT → GAME_TIMER → COMMAND`；规划器当前只接收由 Submit 构造的 AI_REQUEST。
-消息保留 FIFO；抢占、紧急提升和任务选择由接收模块处理。
+消息保留 FIFO；业务优先级和任务选择由接收模块处理。
 暂停、恢复和退出状态由所属模块维护，使用原子变量或模块自己的锁同步；普通冻结和恢复不要求业务线程回执。
 
 业务消息使用 `dominoThreadQueueProduce(..., false)`，不等待空位：队列满时按需扩容，达到最大容量后立即返回 `ERR_QUEUE_FULL`。日志满载后使用 `dominoThreadQueueProduce(..., true)` 等待空位并入队。
