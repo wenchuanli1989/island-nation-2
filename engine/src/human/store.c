@@ -76,7 +76,7 @@ DominoBehavior* dominoGetBehaviorByTaskIDAndSequenceIndex(domino_task_id_t task_
     return &task_ptr->behaviors_ptr[sequence_index];
 }
 
-/** @brief store 已初始化，任务身份和行为块已检查且 ID 未占用；按值入池，扩容不会使输入失效。 */
+/** @brief store 已初始化，可信加载或提交入口保证有效任务及未占用 ID；按值入池，扩容不会使输入失效。 */
 static DOMINO_CODE appendTask(DominoTask task) {
     size_t count = kv_size(domino_all_task_list);
     if (count >= HUMAN_STORE_COUNT_MAX) {
@@ -94,21 +94,6 @@ static DOMINO_CODE appendTask(DominoTask task) {
 }
 
 DOMINO_CODE dominoHumanStoreImportTask(const DominoTask* task_ptr) {
-    if (!task_ptr) {
-        return ERR_NULL_POINTER;
-    }
-    if (!task_ptr->task_id || !task_ptr->owner_human_id) {
-        return ERR_INVALID_DATA;
-    }
-    if (!task_ptr->behaviors_ptr) {
-        return ERR_INVALID_DATA;
-    }
-    if (!task_ptr->behavior_count) {
-        return ERR_INVALID_DATA;
-    }
-    if (dominoGetTaskByID(task_ptr->task_id)) {
-        return ERR_ALREADY_EXISTS;
-    }
     return appendTask(*task_ptr);
 }
 

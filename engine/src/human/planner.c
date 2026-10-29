@@ -9,7 +9,6 @@
 #include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "domino_shared_human.h"
-#include "rules.h"
 #include "task/sleep.h"
 
 typedef struct HumanPlanner {
@@ -30,34 +29,10 @@ void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr) {
     }
 }
 
-/** @brief 仅从独立快照选择同楼核心睡眠，不查询人物、建筑、任务池、导航或时钟。 */
+/** @brief 唯一生产者已确认空闲、同楼许可、容量及低精力；不可变快照只需构造睡眠草案。 */
 static void buildPlan(DominoHumanPlanEnvelope* envelope_ptr) {
     const DominoHumanPlanRequest* request_ptr = &envelope_ptr->request;
     envelope_ptr->status = DOMINO_HUMAN_PLAN_NO_PLAN;
-    if (request_ptr->energy > DOMINO_HUMAN_NEED_MAX || request_ptr->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid plan snapshot human=%" PRIu32 " request=%" PRIu64 " energy=%u task_count=%u",
-                               request_ptr->human_id, request_ptr->request_id, (unsigned)request_ptr->energy, (unsigned)request_ptr->task_count);
-    }
-    if (request_ptr->approved_sleep_building_id == 0U || request_ptr->current_building_id != request_ptr->approved_sleep_building_id) {
-        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_NO_AUTHORIZATION;
-        return;
-    }
-    bool busy_flag = request_ptr->has_nonterminal_task;
-    for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-        busy_flag |= request_ptr->active_task_id_list[channel] != 0U;
-    }
-    if (busy_flag) {
-        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_BUSY;
-        return;
-    }
-    if (request_ptr->task_count == DOMINO_HUMAN_TASK_COUNT_MAX) {
-        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_CAPACITY;
-        return;
-    }
-    if (request_ptr->energy > DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY) {
-        envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_ENERGY_SUFFICIENT;
-        return;
-    }
     const DOMINO_CODE code =
         dominoHumanBuildSleepTaskDraft(request_ptr->human_id, request_ptr->approved_sleep_building_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY,
                                        request_ptr->energy, request_ptr->now_ms, &envelope_ptr->task);

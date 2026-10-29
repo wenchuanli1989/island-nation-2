@@ -101,9 +101,6 @@ static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
 
 static void ingestIncrementIds(yyjson_val* inc) {
     yyjson_val* task_val = yyjson_obj_get(inc, "task");
-    if (!yyjson_is_uint(task_val) || yyjson_get_uint(task_val) > UINT32_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "metadata runtime_data.global_increment_id.task must be a uint32 value");
-    }
     /* 游标为下一候选 ID；0 是初始化或回绕后的合法值，分配时跳过。 */
     atomic_store(&g_domino_global_increment_id.task_increment_id, (domino_task_id_t)yyjson_get_uint(task_val));
     /* 其他实体仍按各模块原有计数器格式恢复。 */
@@ -122,13 +119,18 @@ static void ingestIncrementIds(yyjson_val* inc) {
 }
 
 void saveAllShards(const char* save_path) {
+    for (size_t i = 0; i < g_storage_module_type_count; i++) {
+        const StorageModuleType* module_type = &g_storage_module_types[i];
+        if (module_type->validate_save_fn) {
+            module_type->validate_save_fn();
+        }
+    }
     if (dominoMkdir(save_path) != 0) {
         int mkdir_errno = errno;
         DOMINO_EXIT_WITH_ERROR(ERR_DIRECTORY_CREATE, "failed to create save directory (path=%s, errno=%d)", save_path, mkdir_errno);
     }
     for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        module_type->save_fn(save_path);
+        g_storage_module_types[i].save_fn(save_path);
     }
 }
 
@@ -202,19 +204,8 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
     const char* type_name = module_type->type_name;
     bool do_verify = storageSubModuleIntegrityVerify();
     yyjson_val* item = yyjson_obj_get(sub_module, type_name);
-    if (!item && !module_type->required) {
-        return;
-    }
-    if (!yyjson_is_obj(item)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata module entry must be an object (module=%s)", type_name);
-    }
-
     yyjson_val* crc_val = yyjson_obj_get(item, "crc32c");
     yyjson_val* size_val = yyjson_obj_get(item, "size");
-    if (!yyjson_is_uint(crc_val) || yyjson_get_uint(crc_val) > UINT32_MAX || !yyjson_is_uint(size_val) || yyjson_get_uint(size_val) > UINT32_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata module crc32c and size must be uint32 values (module=%s)", type_name);
-    }
-
     uint32_t meta_crc32c = 0;
     uint32_t meta_size = 0;
     if (do_verify) {
@@ -232,36 +223,9 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
     }
     yyjson_doc* doc = storageReadJsonFile(module_meta_path, do_verify, meta_crc32c, meta_size);
     yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!yyjson_is_obj(root)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata root must be an object (path=%s)", module_meta_path);
-    }
-    yyjson_val* type_val = yyjson_obj_get(root, "type");
-    const char* module_type_str = yyjson_get_str(type_val);
-    size_t module_type_len = yyjson_get_len(type_val);
-    if (!yyjson_is_str(type_val) || module_type_len != strlen(type_name) || memcmp(module_type_str, type_name, module_type_len) != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata type does not match module name (path=%s)", module_meta_path);
-    }
     yyjson_val* shard_arr = yyjson_obj_get(root, "shard");
-    if (!yyjson_is_arr(shard_arr)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard field must be an array (path=%s)", module_meta_path);
-    }
-    yyjson_val* shard_count_val = yyjson_obj_get(root, "shard_count");
-    if (!yyjson_is_uint(shard_count_val) || yyjson_get_uint(shard_count_val) > UINT32_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard_count must be a uint32 value (path=%s)", module_meta_path);
-    }
-    yyjson_val* total_count_val = yyjson_obj_get(root, "total_count");
-    if (!yyjson_is_uint(total_count_val) || yyjson_get_uint(total_count_val) > UINT32_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata total_count must be a uint32 value (path=%s)", module_meta_path);
-    }
-    uint32_t shard_count = (uint32_t)yyjson_get_uint(shard_count_val);
-    if ((size_t)shard_count != yyjson_arr_size(shard_arr)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard_count does not match shard array length (path=%s)", module_meta_path);
-    }
-    uint32_t total_count = (uint32_t)yyjson_get_uint(total_count_val);
-    uint32_t expected_shard_count = storageModuleShardCount(module_type, total_count);
-    if (shard_count != expected_shard_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard count does not match total count (path=%s)", module_meta_path);
-    }
+    uint32_t shard_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(root, "shard_count"));
+    uint32_t total_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(root, "total_count"));
 
     StorageSubModuleMeta load_sm = {0};
     strncpy(load_sm.type_name, type_name, sizeof(load_sm.type_name) - 1);
@@ -273,16 +237,8 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
 
     for (uint32_t shard_id = 0; shard_id < shard_count; shard_id++) {
         yyjson_val* shard_item = yyjson_arr_get(shard_arr, shard_id);
-        if (!yyjson_is_obj(shard_item)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard entry must be an object (path=%s, shard=%u)", module_meta_path, shard_id);
-        }
         yyjson_val* shard_crc_val = yyjson_obj_get(shard_item, "crc32c");
         yyjson_val* shard_size_val = yyjson_obj_get(shard_item, "size");
-        if (!yyjson_is_uint(shard_crc_val) || yyjson_get_uint(shard_crc_val) > UINT32_MAX || !yyjson_is_uint(shard_size_val) ||
-            yyjson_get_uint(shard_size_val) > UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "module metadata shard crc32c and size must be uint32 values (path=%s, shard=%u)",
-                                   module_meta_path, shard_id);
-        }
         uint32_t crc32c = (uint32_t)yyjson_get_uint(shard_crc_val);
         uint32_t size = (uint32_t)yyjson_get_uint(shard_size_val);
         StorageSubModuleShard shard_row = {0};
@@ -294,7 +250,7 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
     }
 
     if (module_type->read_meta_extra_fn) {
-        module_type->read_meta_extra_fn(root, type_name, total_count);
+        module_type->read_meta_extra_fn(root, type_name);
     }
 
     yyjson_doc_free(doc);
@@ -312,23 +268,11 @@ void loadAllSubModule(yyjson_val* sub_module) {
     for (size_t i = 0; i < g_storage_module_type_count; i++) {
         const StorageModuleType* module_type = &g_storage_module_types[i];
         const StorageSubModuleMeta* meta = storageSubModuleMetaFind(module_type->type_name);
-        if (!meta) {
-            continue;
-        }
-        /* 空集合也调用加载入口，避免绕过 human_ai 与人物数量等跨模块约束。 */
+        /* 当前格式为每个注册项写出 meta，空集合也保持同一加载路径。 */
         module_type->load_fn(save_path, meta->total_count, meta->shard_count);
     }
 
-    /* 跨模块引用只能在所有实体主表和 ID map 都稳定后校验。校验阶段不得修改实体。 */
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        if (!module_type->validate_references_fn) {
-            continue;
-        }
-        module_type->validate_references_fn();
-    }
-
-    /* 所有引用均有效后再统一绑定；bind 回调只依赖已校验且不再变化的主表，不得失败。 */
+    /* 主表和 ID map 已稳定；只构造当前进程的指针和调度状态。 */
     for (size_t i = 0; i < g_storage_module_type_count; i++) {
         const StorageModuleType* module_type = &g_storage_module_types[i];
         if (module_type->bind_references_fn) {
@@ -360,48 +304,19 @@ yyjson_doc* metaLoad(void) {
     yyjson_doc* doc = storageReadJsonFile(path, false, 0, 0);
 
     yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!yyjson_is_obj(root)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata must be an object (path=%s)", path);
-    }
     yyjson_val* version_val = yyjson_obj_get(root, "version");
-    if (!yyjson_is_uint(version_val)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata version must be an unsigned integer (path=%s)", path);
-    }
     uint64_t version = yyjson_get_uint(version_val);
     if (version != DOMINO_STORAGE_SAVE_VERSION) {
         DOMINO_EXIT_WITH_ERROR(ERR_UNSUPPORTED_VERSION, "unsupported save version (path=%s, version=%" PRIu64 ", supported=%u)", path, version,
                                (unsigned)DOMINO_STORAGE_SAVE_VERSION);
     }
     yyjson_val* info = yyjson_obj_get(root, "info");
-    if (!yyjson_is_obj(info)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata info must be an object (path=%s)", path);
-    }
     yyjson_val* runtime_option = yyjson_obj_get(root, "runtime_option");
-    if (!yyjson_is_obj(runtime_option)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata runtime_option must be an object (path=%s)", path);
-    }
     yyjson_val* runtime_data = yyjson_obj_get(root, "runtime_data");
-    if (!yyjson_is_obj(runtime_data)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata runtime_data must be an object (path=%s)", path);
-    }
     yyjson_val* game_date_time_ns_val = yyjson_obj_get(runtime_data, "game_date_time_ns");
-    if (!yyjson_is_uint(game_date_time_ns_val)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata runtime_data.game_date_time_ns must be an unsigned integer (path=%s)", path);
-    }
     yyjson_val* inc = yyjson_obj_get(runtime_data, "global_increment_id");
-    if (!yyjson_is_obj(inc)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata runtime_data.global_increment_id must be an object (path=%s)", path);
-    }
-
-    yyjson_val* sub_module = yyjson_obj_get(root, "sub_module");
-    if (!yyjson_is_obj(sub_module)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata sub_module must be an object (path=%s)", path);
-    }
 
     yyjson_val* integrity_verify_val = yyjson_obj_get(root, "integrity_verify");
-    if (!yyjson_is_bool(integrity_verify_val)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "root metadata integrity_verify must be a boolean (path=%s)", path);
-    }
     storageSubModuleSetIntegrityVerify(yyjson_get_bool(integrity_verify_val));
 
     serdeReadStr(info, "account_id", g_domino_storage_account_id, sizeof(g_domino_storage_account_id));

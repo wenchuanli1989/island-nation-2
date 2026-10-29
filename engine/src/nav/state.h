@@ -32,14 +32,11 @@ void navStateMarkDirty(void);
 void navStateMarkCanonical(void);
 
 /**
- * @brief 校验 fork road/road line 的 ID 并输出最大 ID；道路端点由随后执行的邻接重建统一校验。
- * @note Nav 已初始化，Storage 已建立唯一 ID map，navPersistenceValidateSegments 已校验 fork road/road 数量和分段容量。
- *       两个输出指针非空；存档数据不一致时直接打印到 stderr 并 exit。
+ * @brief 检查 Nav 实体和路网容量，超限时直接打印到 stderr 并 exit。
+ * @pre Storage 已恢复正确 canonical 数据及唯一 ID map，并检查实际加载分配的字节大小。
+ * @note Nav 的实体上限独立于 Storage 的通用哈希容量；全局下一候选 ID 已按完整存档恢复，不扫描或修复。
  */
-void navStateValidateLoadedData(domino_fork_road_id_t* out_max_fork_id, domino_road_line_id_t* out_max_road_line_id);
-
-/** @brief 全部加载校验和邻接重建成功后校准下一 ID；两个最大 ID 已通过校验，均小于 UINT32_MAX。 */
-void navStateAdvanceNextIds(domino_fork_road_id_t max_fork_id, domino_road_line_id_t max_road_line_id);
+void navStateValidateLoadedCapacity(void);
 
 /**
  * @brief 保存前只读校验实体、ID 映射和邻接关系，不一致时直接打印到 stderr 并 exit。
@@ -51,23 +48,25 @@ void navStateValidateRuntimeData(void);
 void navStateRefreshIdMapIndices(void);
 
 /**
- * @brief 按 ID 查找路口并区分缺失与损坏；成功输出借用指针，失败输出 nullptr。
+ * @brief 按 ID 查找路口；成功输出借用指针，失败输出 nullptr。
  * @pre Nav 已初始化且无并发销毁，out_fork_road 非空；生命周期由引擎保证。
+ *      已登记实体 ID 不可改写，ID map 只由加载、新增和排序入口维护。
  * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；找到时返回 CODE_OK。
- * @note 缺失不记录错误日志；映射损坏时直接打印到 stderr 并 exit。数组扩容或排序后须重新查询。
+ * @note 缺失不记录错误日志；索引一致性由加载、增删与排序入口维护，并以内部断言检查。数组扩容或排序后须重新查询。
  */
 DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoForkRoad** out_fork_road);
 
 /**
- * @brief 按 ID 查找道路并区分缺失与损坏；成功输出借用指针，失败输出 nullptr。
+ * @brief 按 ID 查找道路；成功输出借用指针，失败输出 nullptr。
  * @pre Nav 已初始化且无并发销毁，out_road 非空；生命周期由引擎保证。
+ *      已登记实体 ID 不可改写，ID map 只由加载、新增和排序入口维护。
  * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；找到时返回 CODE_OK。
- * @note 缺失不记录错误日志；映射损坏时直接打印到 stderr 并 exit。数组扩容或排序后须重新查询。
+ * @note 缺失不记录错误日志；索引一致性由加载、增删与排序入口维护，并以内部断言检查。数组扩容或排序后须重新查询。
  */
 DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road);
 
 /** @brief 以下查找返回借用指针；缺失时返回 nullptr，数组扩容或排序后需重新按 ID 查找。
- * @pre Nav 已初始化且无并发销毁；生命周期由引擎保证。
+ * @pre Nav 已初始化且无并发销毁，已登记实体 ID 不可改写；生命周期由引擎保证。
  */
 DominoForkRoad* dominoGetForkRoadByID(domino_fork_road_id_t fork_road_id);
 

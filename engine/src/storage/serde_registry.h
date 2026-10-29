@@ -32,28 +32,27 @@ static inline void storageValidateLoadCount(uint32_t total_count, size_t element
 typedef uint32_t (*StorageShardCountFn)(uint32_t total_count, uint32_t max_per_shard);
 /** @brief 元数据入口已创建 doc/root，type_name 来自当前注册项。 */
 typedef void (*StorageWriteModuleMetaExtraFn)(yyjson_mut_doc* doc, yyjson_mut_val* root, const char* type_name);
-/** @brief 元数据入口已校验 root 对象、注册类型和 uint32 范围内的 total_count。 */
-typedef void (*StorageReadModuleMetaExtraFn)(yyjson_val* root, const char* type_name, uint32_t total_count);
+/** @brief 读取当前格式可信元数据中的模块扩展字段。 */
+typedef void (*StorageReadModuleMetaExtraFn)(yyjson_val* root, const char* type_name);
 
-/** @brief 只读校验模块的跨模块引用；不得修改实体或其他模块状态。 */
-typedef void (*StorageValidateModuleReferencesFn)(void);
+/** @brief 保存前审计当前业务状态；不得修改实体或其他模块状态。 */
+typedef void (*StorageValidateModuleForSaveFn)(void);
 
-/** @brief 在全部模块引用校验成功后绑定运行时引用；该操作必须不可失败。 */
+/** @brief 从可信持久化 ID 绑定运行时引用；该操作不分配资源且不可失败。 */
 typedef void (*StorageBindModuleReferencesFn)(void);
 
 /** @brief regions 使用单文件专用格式，其余实体使用 {type_name}_{shard_id}.json。 */
 typedef struct {
     const char* type_name;
-    uint32_t max_per_shard;
-    bool required;
     size_t (*count_fn)(void);
     StorageShardCountFn shard_count_fn;
     void (*save_fn)(const char* save_path);
     void (*load_fn)(const char* save_path, uint32_t total, uint32_t shard_count);
     StorageWriteModuleMetaExtraFn write_meta_extra_fn;
     StorageReadModuleMetaExtraFn read_meta_extra_fn;
-    StorageValidateModuleReferencesFn validate_references_fn;
+    StorageValidateModuleForSaveFn validate_save_fn;
     StorageBindModuleReferencesFn bind_references_fn;
+    uint32_t max_per_shard;
 } StorageModuleType;
 
 extern const StorageModuleType g_storage_module_types[];
@@ -78,91 +77,79 @@ static inline uint32_t storageModuleShardCount(const StorageModuleType* module_t
 /**
  * @brief 生成分片读写循环；容器和 ID 映射由宏恢复，deserialize 接收已清零的实体。
  * @pre 引擎已初始化空容器与 ID 映射，每轮只由元数据入口调用一次加载。
- * @note 加载入口接收元数据层已校验的总数、分片数和有效存档路径。
+ * @note 加载入口接收可信元数据中的总数、分片数和有效存档路径。
  */
-#define STORAGE_DEFINE_SHARDED_IMPL(FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard,       \
-                                    EXTRA_LOAD_VALIDATE_CODE, EXTRA_LOAD_BIND_CODE)                                                                  \
-    static void storageLoadOne##FuncName(yyjson_val* entity_value) {                                                                                 \
-        EntityType out_entity = {0};                                                                                                                 \
-        deserialize_fn(entity_value, &out_entity);                                                                                                   \
-        int absent;                                                                                                                                  \
-        khint_t map_slot = id_map_put(id_map, out_entity.id, &absent);                                                                               \
-        if (absent < 0) {                                                                                                                            \
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to insert restored entity ID (type=%s, id=%" PRIu64 ")", (type_str),                    \
-                                   (uint64_t)out_entity.id);                                                                                         \
-        }                                                                                                                                            \
-        if (absent == 0) {                                                                                                                           \
-            DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "duplicate restored entity ID (type=%s, id=%" PRIu64 ")", (type_str),                         \
-                                   (uint64_t)out_entity.id);                                                                                         \
-        }                                                                                                                                            \
-        uint32_t entity_list_index = (uint32_t)kv_size(list_var);                                                                                    \
-        kv_push(EntityType, list_var, out_entity);                                                                                                   \
-        kh_val(id_map, map_slot) = entity_list_index;                                                                                                \
-    }                                                                                                                                                \
-    void serdeSave##FuncName(const char* save_path) {                                                                                                \
-        uint32_t total = (uint32_t)kv_size(list_var);                                                                                                \
-        uint32_t shard_count = storageEntityShardCount(total, (max_per_shard));                                                                      \
-        for (uint32_t shard = 0; shard < shard_count; shard++) {                                                                                     \
-            uint32_t start = shard * (max_per_shard);                                                                                                \
-            uint32_t end = start + (max_per_shard);                                                                                                  \
-            if (end > total) {                                                                                                                       \
-                end = total;                                                                                                                         \
-            }                                                                                                                                        \
-            yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);                                                                                       \
-            if (!doc) {                                                                                                                              \
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON document (type=%s, shard=%u)", (type_str), shard);           \
-            }                                                                                                                                        \
-            yyjson_mut_val* root = yyjson_mut_obj(doc);                                                                                              \
-            if (!root) {                                                                                                                             \
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON root (type=%s, shard=%u)", (type_str), shard);               \
-            }                                                                                                                                        \
-            yyjson_mut_doc_set_root(doc, root);                                                                                                      \
-            if (!yyjson_mut_obj_add_str(doc, root, "type", (type_str)) || !yyjson_mut_obj_add_uint(doc, root, "shard_id", shard)) {                  \
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON identity fields (type=%s, shard=%u)", (type_str), shard);    \
-            }                                                                                                                                        \
-            yyjson_mut_val* entities = yyjson_mut_obj_add_arr(doc, root, "entities");                                                                \
-            if (!entities) {                                                                                                                         \
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON entity array (type=%s, shard=%u)", (type_str), shard);       \
-            }                                                                                                                                        \
-            for (uint32_t entity_index = start; entity_index < end; entity_index++) {                                                                \
-                yyjson_mut_val* entity_obj = serialize_fn(doc, &kv_A(list_var, entity_index));                                                       \
-                if (!yyjson_mut_arr_append(entities, entity_obj)) {                                                                                  \
-                    DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to append shard JSON entity (type=%s, shard=%u, index=%u)", (type_str), shard,  \
-                                           entity_index);                                                                                            \
-                }                                                                                                                                    \
-            }                                                                                                                                        \
-            storageWriteShardFile((type_str), shard, save_path, doc);                                                                                \
-            yyjson_mut_doc_free(doc);                                                                                                                \
-        }                                                                                                                                            \
-    }                                                                                                                                                \
-    void serdeLoad##FuncName(const char* save_path, uint32_t total_count, uint32_t shard_count) {                                                    \
-        storageValidateLoadCount(total_count, sizeof(EntityType));                                                                                   \
-        do {                                                                                                                                         \
-            EXTRA_LOAD_VALIDATE_CODE                                                                                                                 \
-        } while (0);                                                                                                                                 \
-        for (uint32_t shard = 0; shard < shard_count; shard++) {                                                                                     \
-            yyjson_doc* doc = storageReadShardFile((type_str), shard, save_path);                                                                    \
-            yyjson_val* root = yyjson_doc_get_root(doc);                                                                                             \
-            yyjson_val* entities = serdeValidateShardRoot(root, (type_str), shard);                                                                  \
-            size_t array_index;                                                                                                                      \
-            size_t array_count;                                                                                                                      \
-            yyjson_val* entity_value;                                                                                                                \
-            yyjson_arr_foreach(entities, array_index, array_count, entity_value) {                                                                   \
-                if (kv_size(list_var) >= total_count) {                                                                                              \
-                    DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "shard entity count exceeds metadata (type=%s, shard=%u, expected=%u)", (type_str),     \
-                                           shard, total_count);                                                                                      \
-                }                                                                                                                                    \
-                storageLoadOne##FuncName(entity_value);                                                                                              \
-            }                                                                                                                                        \
-            yyjson_doc_free(doc);                                                                                                                    \
-        }                                                                                                                                            \
-        if (kv_size(list_var) != total_count) {                                                                                                      \
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "restored entity count does not match metadata (type=%s, expected=%u, actual=%zu)", (type_str), \
-                                   total_count, kv_size(list_var));                                                                                  \
-        }                                                                                                                                            \
-        do {                                                                                                                                         \
-            EXTRA_LOAD_BIND_CODE                                                                                                                     \
-        } while (0);                                                                                                                                 \
+#define STORAGE_DEFINE_SHARDED_IMPL(FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard,      \
+                                    EXTRA_LOAD_VALIDATE_CODE, EXTRA_LOAD_BIND_CODE)                                                                 \
+    static void storageLoadOne##FuncName(yyjson_val* entity_value) {                                                                                \
+        EntityType out_entity = {0};                                                                                                                \
+        deserialize_fn(entity_value, &out_entity);                                                                                                  \
+        int absent;                                                                                                                                 \
+        khint_t map_slot = id_map_put(id_map, out_entity.id, &absent);                                                                              \
+        if (absent < 0) {                                                                                                                           \
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to insert restored entity ID (type=%s, id=%" PRIu64 ")", (type_str),                   \
+                                   (uint64_t)out_entity.id);                                                                                        \
+        }                                                                                                                                           \
+        uint32_t entity_list_index = (uint32_t)kv_size(list_var);                                                                                   \
+        kv_push(EntityType, list_var, out_entity);                                                                                                  \
+        kh_val(id_map, map_slot) = entity_list_index;                                                                                               \
+    }                                                                                                                                               \
+    void serdeSave##FuncName(const char* save_path) {                                                                                               \
+        uint32_t total = (uint32_t)kv_size(list_var);                                                                                               \
+        uint32_t shard_count = storageEntityShardCount(total, (max_per_shard));                                                                     \
+        for (uint32_t shard = 0; shard < shard_count; shard++) {                                                                                    \
+            uint32_t start = shard * (max_per_shard);                                                                                               \
+            uint32_t end = start + (max_per_shard);                                                                                                 \
+            if (end > total) {                                                                                                                      \
+                end = total;                                                                                                                        \
+            }                                                                                                                                       \
+            yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);                                                                                      \
+            if (!doc) {                                                                                                                             \
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON document (type=%s, shard=%u)", (type_str), shard);          \
+            }                                                                                                                                       \
+            yyjson_mut_val* root = yyjson_mut_obj(doc);                                                                                             \
+            if (!root) {                                                                                                                            \
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON root (type=%s, shard=%u)", (type_str), shard);              \
+            }                                                                                                                                       \
+            yyjson_mut_doc_set_root(doc, root);                                                                                                     \
+            if (!yyjson_mut_obj_add_str(doc, root, "type", (type_str)) || !yyjson_mut_obj_add_uint(doc, root, "shard_id", shard)) {                 \
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON identity fields (type=%s, shard=%u)", (type_str), shard);   \
+            }                                                                                                                                       \
+            yyjson_mut_val* entities = yyjson_mut_obj_add_arr(doc, root, "entities");                                                               \
+            if (!entities) {                                                                                                                        \
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate shard JSON entity array (type=%s, shard=%u)", (type_str), shard);      \
+            }                                                                                                                                       \
+            for (uint32_t entity_index = start; entity_index < end; entity_index++) {                                                               \
+                yyjson_mut_val* entity_obj = serialize_fn(doc, &kv_A(list_var, entity_index));                                                      \
+                if (!yyjson_mut_arr_append(entities, entity_obj)) {                                                                                 \
+                    DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to append shard JSON entity (type=%s, shard=%u, index=%u)", (type_str), shard, \
+                                           entity_index);                                                                                           \
+                }                                                                                                                                   \
+            }                                                                                                                                       \
+            storageWriteShardFile((type_str), shard, save_path, doc);                                                                               \
+            yyjson_mut_doc_free(doc);                                                                                                               \
+        }                                                                                                                                           \
+    }                                                                                                                                               \
+    void serdeLoad##FuncName(const char* save_path, uint32_t total_count, uint32_t shard_count) {                                                   \
+        storageValidateLoadCount(total_count, sizeof(EntityType));                                                                                  \
+        do {                                                                                                                                        \
+            EXTRA_LOAD_VALIDATE_CODE                                                                                                                \
+        } while (0);                                                                                                                                \
+        for (uint32_t shard = 0; shard < shard_count; shard++) {                                                                                    \
+            yyjson_doc* doc = storageReadShardFile((type_str), shard, save_path);                                                                   \
+            yyjson_val* root = yyjson_doc_get_root(doc);                                                                                            \
+            yyjson_val* entities = yyjson_obj_get(root, "entities");                                                                                \
+            size_t array_index;                                                                                                                     \
+            size_t array_count;                                                                                                                     \
+            yyjson_val* entity_value;                                                                                                               \
+            yyjson_arr_foreach(entities, array_index, array_count, entity_value) {                                                                  \
+                storageLoadOne##FuncName(entity_value);                                                                                             \
+            }                                                                                                                                       \
+            yyjson_doc_free(doc);                                                                                                                   \
+        }                                                                                                                                           \
+        do {                                                                                                                                        \
+            EXTRA_LOAD_BIND_CODE                                                                                                                    \
+        } while (0);                                                                                                                                \
     }
 
 #define STORAGE_DEFINE_SHARDED_SIMPLE(FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard) \
@@ -179,10 +166,6 @@ static inline uint32_t storageModuleShardCount(const StorageModuleType* module_t
             EntityType* entity_ptr = &kv_A(list_var, entity_index);                                                                                 \
             if (entity_ptr->data_id != 0U) {                                                                                                        \
                 entity_ptr->data = data_get_fn(entity_ptr->data_id);                                                                                \
-                if (!entity_ptr->data) {                                                                                                            \
-                    DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "restored entity references missing data (type=%s, id=%u, data_id=%u)", (type_str),    \
-                                           entity_ptr->id, entity_ptr->data_id);                                                                    \
-                }                                                                                                                                   \
             }                                                                                                                                       \
         })
 

@@ -10,7 +10,7 @@
 
 /*
  * social 中 org/building/city/country 都采用外层实体 + 可选 data 嵌套的布局。
- * 保存时必须校验 data_id、data 指针和全局 data_id map 指向同一份数据；加载时同步重建 data 向量和 map。
+ * 保存时校验 data_id、data 指针和全局 data_id map 指向同一份数据；加载直接重建可信存档的数据向量和 map。
  */
 
 static yyjson_mut_val* serializeOrgData(yyjson_mut_doc* doc, const DominoOrgData* org_data) {
@@ -83,8 +83,6 @@ static yyjson_mut_val* serializeOrg(yyjson_mut_doc* doc, const DominoOrg* org) {
 }
 
 static void deserializeOrg(yyjson_val* obj, DominoOrg* out_org) {
-    memset(out_org, 0, sizeof(DominoOrg));
-    uint64_t kind_u = 0;
     out_org->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_org->data_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "data_id"));
     out_org->boss_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "boss_id"));
@@ -100,11 +98,7 @@ static void deserializeOrg(yyjson_val* obj, DominoOrg* out_org) {
     out_org->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
     out_org->total_member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "total_member_count"));
     out_org->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Organization type exceeds uint8_t range: id=%u, type=%" PRIu64, out_org->id, kind_u);
-    }
-    out_org->type = (uint8_t)kind_u;
+    out_org->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_org->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_org->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
     out_org->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
@@ -115,10 +109,6 @@ static void deserializeOrg(yyjson_val* obj, DominoOrg* out_org) {
         /* 按需插入 data 与索引，失败直接终止；指针在模块加载完成后绑定。 */
         DominoOrgData loaded_org_data;
         deserializeOrgData(data_val, &loaded_org_data);
-        if (out_org->data_id == 0U || out_org->data_id != loaded_org_data.data_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Organization data ID does not match its data record: id=%u, data_id=%u, record_data_id=%u",
-                                   out_org->id, out_org->data_id, loaded_org_data.data_id);
-        }
         size_t old_data_count = kv_size(domino_all_org_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
@@ -127,13 +117,8 @@ static void deserializeOrg(yyjson_val* obj, DominoOrg* out_org) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate organization data index: id=%u, data_id=%u", out_org->id,
                                    loaded_org_data.data_id);
         }
-        if (absent == 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate organization data record: id=%u, data_id=%u", out_org->id, loaded_org_data.data_id);
-        }
         kv_push(DominoOrgData, domino_all_org_data_list, loaded_org_data);
         kh_val(dominoOrgDataIdMap, data_id_map_slot) = data_arr_index;
-    } else if (out_org->data_id != 0U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Organization data record is missing: id=%u, data_id=%u", out_org->id, out_org->data_id);
     }
 }
 
@@ -214,8 +199,6 @@ static yyjson_mut_val* serializeBuilding(yyjson_mut_doc* doc, const DominoBuildi
 }
 
 static void deserializeBuilding(yyjson_val* obj, DominoBuilding* out_building) {
-    memset(out_building, 0, sizeof(DominoBuilding));
-    uint64_t kind_u = 0;
     out_building->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_building->data_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "data_id"));
     out_building->owner_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "owner_org_id"));
@@ -231,11 +214,7 @@ static void deserializeBuilding(yyjson_val* obj, DominoBuilding* out_building) {
     out_building->address_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "address_id"));
     out_building->total_member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "total_member_count"));
     out_building->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Building type exceeds uint8_t range: id=%u, type=%" PRIu64, out_building->id, kind_u);
-    }
-    out_building->type = (uint8_t)kind_u;
+    out_building->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_building->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_building->owner_type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "owner_type"));
     out_building->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
@@ -246,10 +225,6 @@ static void deserializeBuilding(yyjson_val* obj, DominoBuilding* out_building) {
     if (data_val && !yyjson_is_null(data_val)) {
         DominoBuildingData loaded_building_data;
         deserializeBuildingData(data_val, &loaded_building_data);
-        if (out_building->data_id == 0U || out_building->data_id != loaded_building_data.data_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Building data ID does not match its data record: id=%u, data_id=%u, record_data_id=%u",
-                                   out_building->id, out_building->data_id, loaded_building_data.data_id);
-        }
         size_t old_data_count = kv_size(domino_all_building_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
@@ -258,14 +233,8 @@ static void deserializeBuilding(yyjson_val* obj, DominoBuilding* out_building) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate building data index: id=%u, data_id=%u", out_building->id,
                                    loaded_building_data.data_id);
         }
-        if (absent == 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate building data record: id=%u, data_id=%u", out_building->id,
-                                   loaded_building_data.data_id);
-        }
         kv_push(DominoBuildingData, domino_all_building_data_list, loaded_building_data);
         kh_val(dominoBuildingDataIdMap, data_id_map_slot) = data_arr_index;
-    } else if (out_building->data_id != 0U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Building data record is missing: id=%u, data_id=%u", out_building->id, out_building->data_id);
     }
 }
 
@@ -346,8 +315,6 @@ static yyjson_mut_val* serializeCity(yyjson_mut_doc* doc, const DominoCity* city
 }
 
 static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
-    memset(out_city, 0, sizeof(DominoCity));
-    uint64_t kind_u = 0;
     out_city->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_city->data_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "data_id"));
     out_city->manager_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "manager_id"));
@@ -364,11 +331,7 @@ static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
     out_city->movable_human_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "movable_human_count"));
     out_city->movable_asset_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "movable_asset_count"));
     out_city->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "City type exceeds uint8_t range: id=%u, type=%" PRIu64, out_city->id, kind_u);
-    }
-    out_city->type = (uint8_t)kind_u;
+    out_city->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_city->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_city->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_city->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
@@ -377,10 +340,6 @@ static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
     if (data_val && !yyjson_is_null(data_val)) {
         DominoCityData loaded_city_data;
         deserializeCityData(data_val, &loaded_city_data);
-        if (out_city->data_id == 0U || out_city->data_id != loaded_city_data.data_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "City data ID does not match its data record: id=%u, data_id=%u, record_data_id=%u",
-                                   out_city->id, out_city->data_id, loaded_city_data.data_id);
-        }
         size_t old_data_count = kv_size(domino_all_city_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
@@ -388,13 +347,8 @@ static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
         if (absent < 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate city data index: id=%u, data_id=%u", out_city->id, loaded_city_data.data_id);
         }
-        if (absent == 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate city data record: id=%u, data_id=%u", out_city->id, loaded_city_data.data_id);
-        }
         kv_push(DominoCityData, domino_all_city_data_list, loaded_city_data);
         kh_val(dominoCityDataIdMap, data_id_map_slot) = data_arr_index;
-    } else if (out_city->data_id != 0U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "City data record is missing: id=%u, data_id=%u", out_city->id, out_city->data_id);
     }
 }
 
@@ -474,8 +428,6 @@ static yyjson_mut_val* serializeCountry(yyjson_mut_doc* doc, const DominoCountry
 }
 
 static void deserializeCountry(yyjson_val* obj, DominoCountry* out_country) {
-    memset(out_country, 0, sizeof(DominoCountry));
-    uint64_t kind_u = 0;
     out_country->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_country->data_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "data_id"));
     out_country->wealth = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "wealth"));
@@ -485,11 +437,7 @@ static void deserializeCountry(yyjson_val* obj, DominoCountry* out_country) {
     out_country->org_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "org_count"));
     out_country->building_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "building_count"));
     out_country->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Country type exceeds uint8_t range: id=%u, type=%" PRIu64, out_country->id, kind_u);
-    }
-    out_country->type = (uint8_t)kind_u;
+    out_country->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_country->city_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "city_count"));
     out_country->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_country->main_leader_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "main_leader_count"));
@@ -498,10 +446,6 @@ static void deserializeCountry(yyjson_val* obj, DominoCountry* out_country) {
     if (data_val && !yyjson_is_null(data_val)) {
         DominoCountryData loaded_country_data;
         deserializeCountryData(data_val, &loaded_country_data);
-        if (out_country->data_id == 0U || out_country->data_id != loaded_country_data.data_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Country data ID does not match its data record: id=%u, data_id=%u, record_data_id=%u",
-                                   out_country->id, out_country->data_id, loaded_country_data.data_id);
-        }
         size_t old_data_count = kv_size(domino_all_country_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
@@ -510,14 +454,8 @@ static void deserializeCountry(yyjson_val* obj, DominoCountry* out_country) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate country data index: id=%u, data_id=%u", out_country->id,
                                    loaded_country_data.data_id);
         }
-        if (absent == 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate country data record: id=%u, data_id=%u", out_country->id,
-                                   loaded_country_data.data_id);
-        }
         kv_push(DominoCountryData, domino_all_country_data_list, loaded_country_data);
         kh_val(dominoCountryDataIdMap, data_id_map_slot) = data_arr_index;
-    } else if (out_country->data_id != 0U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Country data record is missing: id=%u, data_id=%u", out_country->id, out_country->data_id);
     }
 }
 
@@ -599,8 +537,6 @@ static yyjson_mut_val* serializeAsset(yyjson_mut_doc* doc, const DominoAsset* as
 }
 
 static void deserializeAsset(yyjson_val* obj, DominoAsset* out_asset) {
-    memset(out_asset, 0, sizeof(DominoAsset));
-    uint64_t kind_u = 0;
     out_asset->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_asset->parent_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "parent_id"));
     out_asset->production_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "production_org_id"));
@@ -642,11 +578,7 @@ static void deserializeAsset(yyjson_val* obj, DominoAsset* out_asset) {
     out_asset->count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "count"));
     out_asset->idle = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "idle"));
     out_asset->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Asset type exceeds uint8_t range: id=%u, type=%" PRIu64, out_asset->id, kind_u);
-    }
-    out_asset->type = (uint8_t)kind_u;
+    out_asset->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_asset->owner_type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "owner_type"));
     out_asset->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_asset->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
@@ -660,19 +592,6 @@ static void deserializeAsset(yyjson_val* obj, DominoAsset* out_asset) {
 
 STORAGE_DEFINE_SHARDED_SIMPLE(Asset, "asset", DominoAsset, domino_all_asset_list, dominoAssetIdMap, dominoAssetIdMap_put, serializeAsset,
                               deserializeAsset, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)
-
-void serdeValidateAssetReferences(void) {
-    for (size_t asset_index = 0; asset_index < kv_size(domino_all_asset_list); asset_index++) {
-        const DominoAsset* asset = &kv_A(domino_all_asset_list, asset_index);
-        if (asset->movable_object_id == 0) {
-            continue;
-        }
-        if (!dominoGetMovableObjectByID(asset->movable_object_id)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "资产引用的可移动物体不存在: asset_id=%u, movable_object_id=%u", asset->id,
-                                   asset->movable_object_id);
-        }
-    }
-}
 
 void serdeBindAssetReferences(void) {
     for (size_t asset_index = 0; asset_index < kv_size(domino_all_asset_list); asset_index++) {

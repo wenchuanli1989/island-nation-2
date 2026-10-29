@@ -24,9 +24,9 @@ void navGraphAppendEdge(DominoForkRoad* fork_road, domino_fork_road_id_t to_fork
 bool navGraphRemoveEdge(DominoForkRoad* fork_road, domino_fork_road_id_t to_fork_road_id);
 
 /**
- * @brief 一次道路扫描校验端点并收集邻接；成功后提交邻接、清空顶点索引并失效全部路径缓存。
- * @note 仅在加载后的基础校验通过后调用；失败直接打印到 stderr 并 exit。
- *       Storage 已建立唯一 ID 映射，实体数组、map 与实体属性在调用期间不得修改。
+ * @brief 清空邻接和顶点索引后按道路重建邻接，并失效全部路径缓存。
+ * @pre Storage 已恢复当前格式的正确世界及唯一 ID map，Nav 容量已检查，调用期间实体数组和属性保持稳定。
+ * @note 不重复复核道路关系；追加邻接仍检查固定出度容量，超限直接打印到 stderr 并 exit。
  */
 void navGraphRebuildAdjacency(void);
 

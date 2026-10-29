@@ -2,108 +2,62 @@
 
 #include "../human/entry.h"
 #include "../human/store.h"
-#include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
 #include "serde_registry.h"
 
-/** @brief AI 字段必须存在且在目标类型范围内；不使用 yyjson 的缺失字段默认值。 */
-static void readUnsigned(yyjson_val* object, const char* key, uint64_t maximum, uint64_t* value_ptr) {
-    yyjson_val* value = yyjson_obj_get(object, key);
-    if (!yyjson_is_uint(value)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI field must be an unsigned integer: field=%s", key);
-    }
-    uint64_t parsed = yyjson_get_uint(value);
-    if (parsed > maximum) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human AI field exceeds its allowed range: field=%s value=%llu maximum=%llu", key,
-                               (unsigned long long)parsed, (unsigned long long)maximum);
-    }
-    *value_ptr = parsed;
-}
-
-/* 字段解析失败直接终止，调用方只处理已校验的字段。 */
-#define AI_READ_UINT(object, record, field, maximum)             \
-    do {                                                         \
-        uint64_t parsed_value;                                   \
-        readUnsigned(object, #field, maximum, &parsed_value);    \
-        (record)->field = (typeof((record)->field))parsed_value; \
-    } while (0)
-
-#define AI_READ_BOOL(object, record, field)                                                                 \
-    do {                                                                                                    \
-        yyjson_val* parsed_value = yyjson_obj_get(object, #field);                                          \
-        if (!yyjson_is_bool(parsed_value)) {                                                                \
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI field must be a boolean: field=%s", #field); \
-        }                                                                                                   \
-        (record)->field = yyjson_get_bool(parsed_value);                                                    \
-    } while (0)
+/* 仅从当前格式的可信字段构造记录；容量与资源检查由所属加载步骤承担。 */
+#define AI_READ_UINT(object, record, field) ((record)->field = (typeof((record)->field))yyjson_get_uint(yyjson_obj_get(object, #field)))
+#define AI_READ_BOOL(object, record, field) ((record)->field = yyjson_get_bool(yyjson_obj_get(object, #field)))
 
 static void deserializeProgress(yyjson_val* object, DominoBehaviorProgress* progress_ptr) {
-    if (!yyjson_is_obj(object)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI behavior progress must be an object");
-    }
-    AI_READ_UINT(object, progress_ptr, started_at_ms, UINT32_MAX);
-    AI_READ_UINT(object, progress_ptr, ended_at_ms, UINT32_MAX);
-    AI_READ_UINT(object, progress_ptr, accounted_at_ms, UINT32_MAX);
-    AI_READ_UINT(object, progress_ptr, active_elapsed_ms, UINT32_MAX);
-    AI_READ_UINT(object, progress_ptr, wait_until_ms, UINT32_MAX);
-    AI_READ_UINT(object, progress_ptr, status, UINT8_MAX);
-    AI_READ_UINT(object, progress_ptr, wait_reason, UINT8_MAX);
+    AI_READ_UINT(object, progress_ptr, started_at_ms);
+    AI_READ_UINT(object, progress_ptr, ended_at_ms);
+    AI_READ_UINT(object, progress_ptr, accounted_at_ms);
+    AI_READ_UINT(object, progress_ptr, active_elapsed_ms);
+    AI_READ_UINT(object, progress_ptr, wait_until_ms);
+    AI_READ_UINT(object, progress_ptr, status);
+    AI_READ_UINT(object, progress_ptr, wait_reason);
     AI_READ_BOOL(object, progress_ptr, started_flag);
     AI_READ_BOOL(object, progress_ptr, effect_committed_flag);
 }
 
 static void deserializeBehavior(yyjson_val* object, DominoBehavior* behavior_ptr) {
-    if (!yyjson_is_obj(object)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI behavior must be an object");
-    }
-    AI_READ_UINT(object, behavior_ptr, type, DOMINO_BEHAVIOR_TYPE_COUNT - 1U);
-    AI_READ_UINT(object, behavior_ptr, target_building_id, UINT32_MAX);
-    AI_READ_UINT(object, behavior_ptr, planned_begin_ms, UINT32_MAX);
-    AI_READ_UINT(object, behavior_ptr, planned_end_ms, UINT32_MAX);
+    AI_READ_UINT(object, behavior_ptr, type);
+    AI_READ_UINT(object, behavior_ptr, target_building_id);
+    AI_READ_UINT(object, behavior_ptr, planned_begin_ms);
+    AI_READ_UINT(object, behavior_ptr, planned_end_ms);
     yyjson_val* parameters = yyjson_obj_get(object, "parameters");
-    if (!yyjson_is_obj(parameters)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI behavior parameters must be an object");
-    }
     if (behavior_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP) {
-        AI_READ_UINT(parameters, &behavior_ptr->parameters.sleep, target_active_ms, UINT32_MAX);
+        AI_READ_UINT(parameters, &behavior_ptr->parameters.sleep, target_active_ms);
     }
     deserializeProgress(yyjson_obj_get(object, "progress"), &behavior_ptr->progress);
 }
 
 /** @brief 行为数量以嵌套数组为唯一来源，完成字段解析后由调用方分配连续块。 */
 static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
-    if (!yyjson_is_obj(object)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI task must be an object");
-    }
-    AI_READ_UINT(object, task_ptr, task_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, owner_human_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, parent_task_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, active_child_task_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, pending_child_task_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, cancel_target_task_id, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, planned_begin_ms, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, planned_end_ms, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, started_at_ms, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, ended_at_ms, UINT32_MAX);
-    AI_READ_UINT(object, task_ptr, current_behavior_index, UINT8_MAX);
-    AI_READ_UINT(object, task_ptr, type, DOMINO_TASK_TYPE_COUNT - 1U);
-    AI_READ_UINT(object, task_ptr, channel_index, DOMINO_HUMAN_TASK_CHANNEL_COUNT - 1U);
-    AI_READ_UINT(object, task_ptr, status, UINT8_MAX);
-    AI_READ_UINT(object, task_ptr, result, UINT8_MAX);
-    AI_READ_UINT(object, task_ptr, priority_class, UINT8_MAX);
-    AI_READ_UINT(object, task_ptr, pending_stop_reason, UINT8_MAX);
-    AI_READ_UINT(object, task_ptr, cancel_scope, UINT8_MAX);
+    AI_READ_UINT(object, task_ptr, task_id);
+    AI_READ_UINT(object, task_ptr, owner_human_id);
+    AI_READ_UINT(object, task_ptr, parent_task_id);
+    AI_READ_UINT(object, task_ptr, active_child_task_id);
+    AI_READ_UINT(object, task_ptr, pending_child_task_id);
+    AI_READ_UINT(object, task_ptr, cancel_target_task_id);
+    AI_READ_UINT(object, task_ptr, planned_begin_ms);
+    AI_READ_UINT(object, task_ptr, planned_end_ms);
+    AI_READ_UINT(object, task_ptr, started_at_ms);
+    AI_READ_UINT(object, task_ptr, ended_at_ms);
+    AI_READ_UINT(object, task_ptr, current_behavior_index);
+    AI_READ_UINT(object, task_ptr, type);
+    AI_READ_UINT(object, task_ptr, channel_index);
+    AI_READ_UINT(object, task_ptr, status);
+    AI_READ_UINT(object, task_ptr, result);
+    AI_READ_UINT(object, task_ptr, priority_class);
+    AI_READ_UINT(object, task_ptr, pending_stop_reason);
+    AI_READ_UINT(object, task_ptr, cancel_scope);
     AI_READ_BOOL(object, task_ptr, started_flag);
     yyjson_val* behaviors = yyjson_obj_get(object, "behaviors");
-    if (!yyjson_is_arr(behaviors)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI behaviors must be an array: task_id=%u", task_ptr->task_id);
-    }
     size_t count = yyjson_arr_size(behaviors);
-    if (count == 0U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI task has no behaviors: task_id=%u", task_ptr->task_id);
-    }
     if (count > DOMINO_TASK_BEHAVIOR_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI behavior count exceeds task capacity: task_id=%u count=%zu", task_ptr->task_id,
                                count);
@@ -211,27 +165,11 @@ static yyjson_mut_val* serializeAI(yyjson_mut_doc* doc, const DominoHumanData* h
 
 /**
  * @brief 任务清单已由 human.data 恢复，此处只导入任务实体；已导入的行为块归 store。
- * 数据无效时直接终止，已导入内容不回滚。
+ * 当前格式存档保证任务身份、归属与引用正确；本次资源失败直接终止，不回滚已导入内容。
  */
-static void loadOneAI(yyjson_val* object, bool* seen_list) {
-    if (!yyjson_is_obj(object)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI record must be an object");
-    }
-    uint64_t parsed_human_id;
-    readUnsigned(object, "human_id", UINT32_MAX, &parsed_human_id);
-    domino_human_id_t human_id = (domino_human_id_t)parsed_human_id;
-    khint_t key = dominoHumanIdMap_get(dominoHumanIdMap, human_id);
-    if (!kh_exist(dominoHumanIdMap, key)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI record references a missing human: human_id=%u", human_id);
-    }
-    uint32_t human_index = kh_val(dominoHumanIdMap, key);
-    if (seen_list[human_index]) {
-        DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate human AI record: human_id=%u", human_id);
-    }
+static void loadOneAI(yyjson_val* object) {
+    domino_human_id_t human_id = (domino_human_id_t)yyjson_get_uint(yyjson_obj_get(object, "human_id"));
     yyjson_val* tasks = yyjson_obj_get(object, "tasks");
-    if (!yyjson_is_arr(tasks)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI tasks must be an array: human_id=%u", human_id);
-    }
     if (yyjson_arr_size(tasks) > DOMINO_HUMAN_TASK_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI task count exceeds capacity: human_id=%u count=%zu", human_id,
                                yyjson_arr_size(tasks));
@@ -253,10 +191,6 @@ static void loadOneAI(yyjson_val* object, bool* seen_list) {
     yyjson_arr_foreach(tasks, task_index, task_count, task_object) {
         DominoTask task = {0};
         deserializeTask(task_object, &task);
-        if (task.owner_human_id != human_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI task owner disagrees with record: task_id=%u owner=%u human_id=%u", task.task_id,
-                                   task.owner_human_id, human_id);
-        }
         task.behaviors_ptr = calloc(task.behavior_count, sizeof(*task.behaviors_ptr));
         if (!task.behaviors_ptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behaviors: task_id=%u count=%u", task.task_id, task.behavior_count);
@@ -270,14 +204,6 @@ static void loadOneAI(yyjson_val* object, bool* seen_list) {
             DOMINO_EXIT_WITH_ERROR(result, "Cannot import human AI task: task_id=%u", task.task_id);
         }
     }
-    seen_list[human_index] = true;
-}
-
-void serdeValidateHumanAIReferences(void) {
-    serdeValidateHumanReferences();
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    dominoHumanStoreValidate(now_ms);
 }
 
 void serdeBindHumanAIReferences(void) {
@@ -285,7 +211,6 @@ void serdeBindHumanAIReferences(void) {
 }
 
 void serdeSaveHumanAI(const char* save_path) {
-    serdeValidateHumanAIReferences();
     /* 引用预检已确认人物数量等于使用 32 位计数的 ID map。 */
     const size_t total_count = kv_size(domino_all_human_list);
     uint32_t shard_count = storageEntityShardCount((uint32_t)total_count, DOMINO_STORAGE_SHARD_HUMAN_AI);
@@ -321,37 +246,16 @@ void serdeSaveHumanAI(const char* save_path) {
 }
 
 void serdeLoadHumanAI(const char* save_path, uint32_t total_count, uint32_t shard_count) {
-    if (total_count != kv_size(domino_all_human_list) || shard_count != storageEntityShardCount(total_count, DOMINO_STORAGE_SHARD_HUMAN_AI)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI metadata disagrees with human records or shard count: total=%u humans=%zu shards=%u",
-                               total_count, kv_size(domino_all_human_list), shard_count);
-    }
-    if (total_count == 0U) {
-        return;
-    }
-    /* 仅加载期记录人物是否已有任务集合；通过人物索引允许分片中的记录任意排序。 */
-    bool* seen_list = calloc(total_count, sizeof(*seen_list));
-    if (!seen_list) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI duplicate tracking: count=%u", total_count);
-    }
-    uint32_t loaded_count = 0;
+    (void)total_count;
     for (uint32_t shard = 0; shard < shard_count; shard++) {
         yyjson_doc* doc = storageReadShardFile("human_ai", shard, save_path);
-        yyjson_val* entities = serdeValidateShardRoot(yyjson_doc_get_root(doc), "human_ai", shard);
-        uint32_t remaining = total_count - loaded_count;
-        uint32_t expected = remaining < DOMINO_STORAGE_SHARD_HUMAN_AI ? remaining : DOMINO_STORAGE_SHARD_HUMAN_AI;
-        if (yyjson_arr_size(entities) != expected) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human AI shard record count disagrees with metadata: shard=%u expected=%u actual=%zu", shard,
-                                   expected, yyjson_arr_size(entities));
-        }
+        yyjson_val* entities = yyjson_obj_get(yyjson_doc_get_root(doc), "entities");
         size_t index;
         size_t count;
         yyjson_val* object;
         yyjson_arr_foreach(entities, index, count, object) {
-            loadOneAI(object, seen_list);
-            loaded_count++;
+            loadOneAI(object);
         }
         yyjson_doc_free(doc);
     }
-    /* 每片已精确校验记录数；人物 ID 存在且去重，完成全部分片即覆盖全部人物。 */
-    free(seen_list);
 }

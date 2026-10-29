@@ -14,7 +14,7 @@ extern void dominoHumanExecutionInit(void);
  */
 extern void dominoHumanExecutionDestroy(void);
 
-/** @brief 在冻结时刻校验已加载活动睡眠，创建执行线程并等待启动就绪；首次运行分批建立调度。
+/** @brief 在冻结时刻检查执行器支持范围、当前睡眠许可和恢复结算，创建执行线程并等待启动就绪；首次运行分批建立调度。
  * @pre Init 已准备全部基础资源，世界冻结，引擎处于 STARTING；规划线程由 human 模块随后启动。
  */
 extern void dominoHumanExecutionStart(void);

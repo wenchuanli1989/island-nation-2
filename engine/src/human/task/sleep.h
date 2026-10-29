@@ -7,8 +7,9 @@
 
 /** @file sleep.h
  * @brief 单个核心睡眠行为的同步内核；复用现有任务、行为和人物需求，不读取时钟或登记计时器。
- * @note 访问世界的入口调用前须完成模块初始化、加载校验及人物 data 绑定；调用方独占相关人物、任务和建筑的写入。
+ * @note 访问世界的入口调用前须完成模块初始化、可信存档加载及人物 data 绑定；调用方独占相关人物、任务和建筑的写入。
  * data_ptr 与已提交 task_ptr 由调用方在同次操作中取得，须属于同一人物；不得跨数组扩容、删除或重排保留借用指针。
+ * 已提交任务及需求记录的完整语义由可信存档和受控写入维持；Start/Advance 只检查本次支持形态、业务条件及时间。
  * now_ms 使用同一世界累计未冻结现实毫秒，调用顺序不得倒退，0 与 UINT32_MAX 均可作为时刻。
  * approved_sleep_building_id 由可信调用方确认睡眠许可；内核仅复核非零 ID、建筑存在、人物确实同楼及行为目标一致。
  * 首版只执行无父子／停止关系的单行为睡眠，允许选择任一通道，但不与其他活动任务并行。
@@ -29,23 +30,6 @@
  */
 DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
                                            uint8_t energy, domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr);
-
-/** @brief 在持有写入权的线程重新核对当前事实后，一次提交已有睡眠草案。
- * @param draft_ptr 调用方独占的单行为睡眠草案，不能借用已提交任务或行为块。
- * @param data_ptr 调用方已按草案 owner_human_id 取得的绑定人物 data。
- * @param approved_sleep_building_id 调用方当前重新确认的明确睡眠授权，须与草案目标一致。
- * @param expected_schedule_revision 请求快照的日程版本，须与当前人物一致。
- * @param now_ms 提交检查的累计未冻结现实毫秒，不早于草案采样时刻。
- * @param task_id_out_ptr 成功时写入新任务 ID；失败保持原值。
- * @return CODE_OK 成功；版本、地点、活动槽或精力条件变化返回 ERR_GAME_STATE_INVALID；已有未终结睡眠返回
- * ERR_ALREADY_EXISTS；建筑不存在返回 ERR_NOT_FOUND；提交时刻早于草案采样返回 ERR_INVALID_PARAM；任务容量耗尽返回
- * ERR_CAPACITY_EXCEEDED；其他参数、记录或时间错误直接传播；分配失败直接打印致命错误并终止进程。
- * @note 跨线程草案须先由调用方核对规划请求身份与当前授权。这里只重验睡眠所需事实，三个活动槽须为空。
- * 失败不修改世界且草案仍拥有行为块；成功后 store 接管，draft_ptr->behaviors_ptr 清空。任务取号允许留下空洞。
- * 晚到草案不补算过去收益，真正启动仍按当时需求重新估时。
- */
-DOMINO_CODE dominoHumanCommitSleepTaskDraft(DominoTask* draft_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                            uint32_t expected_schedule_revision, domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr);
 
 /** @brief 精力不高于触发阈值时提交 PLANNED 睡眠任务，不立即启动或修改需求。
  * @param data_ptr 调用方已取得的绑定人物 data。
@@ -68,7 +52,7 @@ DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_buildin
  * @param approved_sleep_building_id 调用方重新确认授权的人物当前建筑，须与行为目标相同。
  * @param now_ms 不早于任务和行为计划开始的实际启动时刻。
  * @return CODE_OK 成功；状态/资格不满足或尚未到计划开始时刻返回 ERR_GAME_STATE_INVALID；倒退至已结算时刻之前返回
- * ERR_INVALID_PARAM；时间或版本溢出返回 ERR_OUT_OF_RANGE；其他参数、建筑或记录错误直接传播。失败不修改需求、任务或槽位。
+ * ERR_INVALID_PARAM；时间或版本溢出返回 ERR_OUT_OF_RANGE；空参数、非法建筑等结果直接传播。失败不修改需求、任务或槽位。
  * @note 三个活动槽均须为空；已满足精力目标时拒绝启动。按启动时需求重新估算目标时长，
  * 将本任务和行为计划修订为 [now_ms, now_ms + target_active_ms)，有变化才递增 schedule_revision。
  * 不调整其他任务，不处理日程冲突；实际进度从零开始，过去的计划时间不产生睡眠收益。
@@ -82,7 +66,7 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* dat
  * @param approved_sleep_building_id 自上次结算至 now_ms 持续有效的睡眠授权建筑。
  * @param now_ms 不早于行为 accounted_at_ms 的本次结算时刻。
  * @return CODE_OK 成功；不支持的状态或资格返回 ERR_GAME_STATE_INVALID；倒退至结算/结束时刻之前返回 ERR_INVALID_PARAM；
- * 任务与需求结算记录不一致返回 ERR_INVALID_DATA；完成时版本溢出返回 ERR_OUT_OF_RANGE；其他参数、建筑或记录错误直接传播。
+ * 任务与需求结算记录不一致返回 ERR_INVALID_DATA；完成时版本溢出返回 ERR_OUT_OF_RANGE；空参数、非法建筑等结果直接传播。
  * 所有错误均发生在效果写回前。
  * @note 地点或资格变更前，调用方须按旧事实结算到变更生效时刻；本批不处理搬离、撤权或取消。
  * 加载不会自动赋予资格，继续推进前仍须由调用方确认授权。自然变化和每点恢复按时序结算，同刻先衰减后恢复。

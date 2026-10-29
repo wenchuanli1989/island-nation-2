@@ -19,7 +19,7 @@
 DOMINO_CODE dominoHumanValidateNeedSettlement(const DominoHumanData* data_ptr, domino_runtime_ms_t now_ms);
 
 /** @brief 内部只读预测空闲人物首次达到睡眠触发精力的关注时刻，保留自然结算的完整分钟相位。
- * @param data_ptr 已在本次调用链中成功通过 dominoHumanSettleNeeds(data_ptr, now_ms)，且需求与活动槽未再改变的人物 data。
+ * @param data_ptr 已在本次调用链中完成到 now_ms 的空闲需求结算、确认三槽为空，且需求与活动槽未再改变的人物 data。
  * @param now_ms 本次判断的累计未冻结现实毫秒，不早于 needs_updated_at_ms；不读取时钟，调用方须保证人物业务时间不倒退。
  * @param due_out_ptr 必需输出，成功时写入绝对关注时刻；当前已达阈值时写入 now_ms，错误时保持原值。
  * @return CODE_OK 成功；未来阈值超出 32 位毫秒范围返回 ERR_OUT_OF_RANGE。
@@ -40,7 +40,7 @@ static inline uint8_t dominoHumanDecayNeed(uint8_t value, uint32_t minute_count,
 }
 
 /** @brief 内部入口：对已校验的人物补结算完整现实分钟，保留不足一分钟的时间。
- * @param data_ptr 已通过 dominoHumanValidateNeedSettlement 的人物 data。
+ * @param data_ptr 六项需求在合法范围内、由可信加载及受控写入维护，且本次已确认结算时刻有效的人物 data。
  * @param now_ms 不早于自然结算检查点的累计未冻结现实毫秒。
  * @note 仅供统一睡眠结算按时间顺序调用；调用者须独占写入，并在收益点之前结算自然变化。
  * 普通调用者使用 dominoHumanSettleNeeds，不能绕过活动槽检查而先结算整段自然变化。

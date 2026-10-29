@@ -31,9 +31,6 @@ static yyjson_mut_val* serializeRegion(yyjson_mut_doc* doc, const DominoRegion* 
 }
 
 static void deserializeRegion(yyjson_val* obj, DominoRegion* out_region) {
-    if (!yyjson_is_obj(obj)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region data must be a JSON object");
-    }
     const struct RegionCountField {
         const char* key_str;
         _Atomic uint32_t* count_ptr;
@@ -50,20 +47,11 @@ static void deserializeRegion(yyjson_val* obj, DominoRegion* out_region) {
     };
     for (size_t index = 0; index < sizeof(count_fields) / sizeof(count_fields[0]); index++) {
         yyjson_val* count_val = yyjson_obj_get(obj, count_fields[index].key_str);
-        if (!yyjson_is_uint(count_val)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region count must be an unsigned integer: field=%s", count_fields[index].key_str);
-        }
         const uint64_t count = yyjson_get_uint(count_val);
-        if (count > UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Region count exceeds its numeric range: field=%s", count_fields[index].key_str);
-        }
         atomic_store(count_fields[index].count_ptr, (uint32_t)count);
     }
     uint64_t type_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
     uint64_t status_u = yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    if (type_u > 255U || status_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Region type or status exceeds its numeric range");
-    }
     out_region->type = (uint8_t)type_u;
     out_region->status = (uint8_t)status_u;
 }
@@ -101,7 +89,7 @@ void serdeSaveRegion(const char* save_path) {
 }
 
 void serdeLoadRegion(const char* save_path, uint32_t total_count, uint32_t shard_count) {
-    /* 元数据层已按 regions 注册项确认单分片；地域容量仍在此处校验。 */
+    /* 当前格式的 regions 固定为单分片；地域数组容量仍在此处校验。 */
     (void)shard_count;
     if (total_count > (uint32_t)DOMINO_MAX_REGION_COUNT) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Saved region count exceeds capacity: count=%u, capacity=%u", total_count,
@@ -110,31 +98,12 @@ void serdeLoadRegion(const char* save_path, uint32_t total_count, uint32_t shard
 
     yyjson_doc* doc = storageReadShardFile("regions", 0, save_path);
     yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!yyjson_is_obj(root)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region shard root must be a JSON object");
-    }
-
-    uint64_t region_count = yyjson_get_uint(yyjson_obj_get(root, "region_count"));
-    if (region_count != total_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region count does not match module metadata");
-    }
-
     yyjson_val* regions = yyjson_obj_get(root, "regions");
-    if (!yyjson_is_arr(regions)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region shard regions field must be a JSON array");
-    }
-    size_t regions_size = yyjson_arr_size(regions);
-    if (region_count != regions_size) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Region array length does not match saved region count");
-    }
 
-    /* host 初始化已清空全部地域；这里逐项原子写入有效槽。 */
+    /* host 初始化已清空全部地域；按可信元数据中的有效前缀恢复。 */
     g_domino_region_count = total_count;
-    size_t array_index;
-    size_t array_count;
-    yyjson_val* region_value;
-    yyjson_arr_foreach(regions, array_index, array_count, region_value) {
-        deserializeRegion(region_value, &g_domino_region_list[array_index]);
+    for (uint32_t region_index = 0; region_index < total_count; region_index++) {
+        deserializeRegion(yyjson_arr_get(regions, region_index), &g_domino_region_list[region_index]);
     }
 
     yyjson_doc_free(doc);

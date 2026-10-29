@@ -8,7 +8,8 @@
  * @brief 初始化 storage 子系统，从运行时配置指定的存档目录恢复内存状态。
  *
  * 由引擎串行保证 Init → Destroy 顺序；storage_path 已在 dominoEngineInit 中校验并复制。
- * 无存档文件时以新世界启动；存档格式、完整性、IO 或分配失败直接打印到 stderr 并 exit。
+ * 无根 meta 时以新世界启动；已有存档须为当前版本正确运行数据的一次完整持久化。
+ * 加载不重验字段、唯一性与引用关系；版本不支持、JSON 解析、完整性、IO、容量或分配失败直接打印 stderr 并 exit。
  */
 extern void dominoStorageModuleInit(void);
 

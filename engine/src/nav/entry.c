@@ -9,12 +9,8 @@ void dominoNavModuleInitBefore(void) {
 }
 
 void dominoNavModuleInitAfter(void) {
-    domino_fork_road_id_t max_fork_id = 0U;
-    domino_road_line_id_t max_road_line_id = 0U;
-    navPersistenceValidateSegments();
-    navStateValidateLoadedData(&max_fork_id, &max_road_line_id);
+    navStateValidateLoadedCapacity();
     navGraphRebuildAdjacency();
-    navStateAdvanceNextIds(max_fork_id, max_road_line_id);
     navStateMarkCanonical();
 }
 

@@ -1,8 +1,7 @@
 #include "floyd.h"
 
+#include <assert.h>
 #include <time.h>
-
-#include "domino_shared_common.h"
 
 static void initPathMatrix(domino_nav_vertex_index_t vertex_num, const VertexEdges* vertices, PathInfo (*path_matrix)[vertex_num]) {
     for (uint16_t source_vertex_index = 0; source_vertex_index < vertex_num; source_vertex_index++) {
@@ -84,11 +83,7 @@ DOMINO_CODE findShortestPath(PathInfo* shortest_path_info, int max_shortest_path
     domino_nav_vertex_index_t current = end_vertex_index;
     do {
         PathInfo* current_info = &(path_matrix[start_vertex_index][current]);
-        if (current_info->pre_vertex_index >= vertex_num || current_info->pre_vertex_index == current || stack_top >= vertex_num) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "shortest path predecessor chain is invalid: start=%u target=%u current=%u predecessor=%u",
-                                   (unsigned)start_vertex_index, (unsigned)end_vertex_index, (unsigned)current,
-                                   (unsigned)current_info->pre_vertex_index);
-        }
+        assert(current_info->pre_vertex_index < vertex_num && current_info->pre_vertex_index != current && stack_top < vertex_num);
         if (current_info->pre_vertex_index == start_vertex_index) {
             break;
         }

@@ -143,15 +143,9 @@ static inline void serdeReadFloatArray(yyjson_val* json_array, float* array, uin
 
 static inline void serdeReadSintVec3FromJson(yyjson_val* object, const char* key, int32_t* out_x, int32_t* out_y, int32_t* out_z) {
     yyjson_val* arr = yyjson_obj_get(object, key);
-    if (yyjson_arr_size(arr) != 3) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-    }
     for (size_t i = 0; i < 3; i++) {
         yyjson_val* elem_val = yyjson_arr_get(arr, i);
-        if (!yyjson_is_sint(elem_val) && !yyjson_is_uint(elem_val)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-        }
-        int32_t axis_val = (int)yyjson_is_sint(elem_val) ? (int32_t)yyjson_get_sint(elem_val) : (int32_t)yyjson_get_uint(elem_val);
+        int32_t axis_val = (int32_t)yyjson_get_sint(elem_val);
         if (i == 0) {
             *out_x = axis_val;
         } else if (i == 1) {
@@ -164,15 +158,9 @@ static inline void serdeReadSintVec3FromJson(yyjson_val* object, const char* key
 
 static inline void serdeReadSintVec2FromJson(yyjson_val* object, const char* key, int32_t* out_x, int32_t* out_y) {
     yyjson_val* arr = yyjson_obj_get(object, key);
-    if (yyjson_arr_size(arr) != 2) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-    }
     for (size_t i = 0; i < 2; i++) {
         yyjson_val* elem_val = yyjson_arr_get(arr, i);
-        if (!yyjson_is_sint(elem_val) && !yyjson_is_uint(elem_val)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-        }
-        int32_t axis_val = (int)yyjson_is_sint(elem_val) ? (int32_t)yyjson_get_sint(elem_val) : (int32_t)yyjson_get_uint(elem_val);
+        int32_t axis_val = (int32_t)yyjson_get_sint(elem_val);
         if (i == 0) {
             *out_x = axis_val;
         } else {
@@ -183,14 +171,8 @@ static inline void serdeReadSintVec2FromJson(yyjson_val* object, const char* key
 
 static inline void serdeReadFloatVec3FromJson(yyjson_val* object, const char* key, float* out_xyz) {
     yyjson_val* arr = yyjson_obj_get(object, key);
-    if (yyjson_arr_size(arr) != 3) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-    }
     for (size_t i = 0; i < 3; i++) {
         yyjson_val* elem_val = yyjson_arr_get(arr, i);
-        if (!yyjson_is_real(elem_val)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid coordinate array in save data (field=%s)", key);
-        }
         out_xyz[i] = (float)yyjson_get_real(elem_val);
     }
 }
@@ -226,32 +208,28 @@ void serdeWriteNameDescription(yyjson_mut_doc* document, yyjson_mut_val* object,
 /** @brief 读取名称和描述并分配运行期 ID；两个输出地址均由调用方提供有效且已清零的实体字段。 */
 void serdeReadNameDescription(yyjson_val* object, domino_name_id_t* out_name_id, domino_description_id_t* out_description_id);
 
-/** @brief 校验分片类型、分片 ID 和实体数组；expected_type 为注册器中的非空类型名。 */
-yyjson_val* serdeValidateShardRoot(yyjson_val* root, const char* expected_type, uint32_t expected_shard_id);
-
 /** @brief 写出 Nav 分段；doc/root 已创建，type_name 为注册器中的 fork_road 或 road。 */
 void serdeNavWriteModuleMetaExtraFields(yyjson_mut_doc* doc, yyjson_mut_val* root, const char* type_name);
 
-/** @brief 读取 Nav 分段；元数据入口已校验 root、type_name 和 total_count。
+/** @brief 读取 Nav 分段；root 与 type_name 来自当前格式的可信元数据。
  * @pre 引擎已初始化空分段容器，每轮按注册类型各加载一次。
  */
-void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name, uint32_t total_count);
+void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name);
 
 /**
  * @brief 以下内部序列化回调由 storage 按注册表顺序调用。
  * @pre 世界容器和 ID 映射已由引擎初始化；加载从空容器开始，每类只调用一次，保存发生在世界资源释放前。
- * @note 初始化和重复加载不在此重复检查；存档结构、数量、ID、引用与资源操作失败仍按各回调语义校验。
+ * @note 加载信任当前格式存档的字段、数量、ID 和引用；仍检查本次资源分配、容量和 IO 失败。
+ * 保存回调仅由 saveAllShards 调用，全部保存前审计完成后才开始写出分片。
  */
 void serdeSaveHuman(const char* save_path);
 void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count);
-/** @brief 加载与保存共用的人物/data 身份、容量和位置引用前置校验。 */
-void serdeValidateHumanReferences(void);
+/** @brief 保存前统一审计人物/data 身份、绑定指针与任务业务状态。 */
+void serdeValidateHumanForSave(void);
 void serdeBindHumanReferences(void);
 
 void serdeSaveHumanAI(const char* save_path);
 void serdeLoadHumanAI(const char* save_path, uint32_t total_count, uint32_t shard_count);
-/** @brief 先校验人物前置，再校验任务恢复数据；供统一加载及 AI 保存入口调用。 */
-void serdeValidateHumanAIReferences(void);
 void serdeBindHumanAIReferences(void);
 
 void serdeSaveOrg(const char* save_path);
@@ -268,7 +246,6 @@ void serdeLoadCountry(const char* save_path, uint32_t total_count, uint32_t shar
 
 void serdeSaveAsset(const char* save_path);
 void serdeLoadAsset(const char* save_path, uint32_t total_count, uint32_t shard_count);
-void serdeValidateAssetReferences(void);
 void serdeBindAssetReferences(void);
 
 void serdeSaveForkRoad(const char* save_path);

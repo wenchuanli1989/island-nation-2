@@ -13,12 +13,8 @@ typedef struct DominoHumanPlanRequest {
     uint32_t schedule_revision;
     domino_runtime_ms_t now_ms;
     uint32_t reasons;
-    domino_building_id_t current_building_id;
     domino_building_id_t approved_sleep_building_id;
-    domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];
     uint8_t energy;
-    uint8_t task_count;
-    bool has_nonterminal_task;
 } DominoHumanPlanRequest;
 
 typedef enum DominoHumanPlanStatus {
@@ -28,10 +24,6 @@ typedef enum DominoHumanPlanStatus {
 
 typedef enum DominoHumanPlanReason {
     DOMINO_HUMAN_PLAN_REASON_LOW_ENERGY,
-    DOMINO_HUMAN_PLAN_REASON_ENERGY_SUFFICIENT,
-    DOMINO_HUMAN_PLAN_REASON_NO_AUTHORIZATION,
-    DOMINO_HUMAN_PLAN_REASON_BUSY,
-    DOMINO_HUMAN_PLAN_REASON_CAPACITY,
     DOMINO_HUMAN_PLAN_REASON_TIME_RANGE,  ///< 草案时长超过剩余可表示业务时间；当前时钟仍有效。
 } DominoHumanPlanReason;
 

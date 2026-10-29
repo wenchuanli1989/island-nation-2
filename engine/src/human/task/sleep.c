@@ -8,7 +8,6 @@
 #include "../rules.h"
 #include "../store.h"
 #include "domino_shared_common.h"
-#include "entry.h"
 
 static DOMINO_CODE validateSleepBuilding(const DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id) {
     if (approved_sleep_building_id == 0U) {
@@ -39,14 +38,14 @@ static uint8_t predictEnergy(const DominoHumanData* data_ptr, domino_runtime_ms_
     return dominoHumanDecayNeed(data_ptr->energy, minute_count, DOMINO_HUMAN_ENERGY_DECAY_PER_MINUTE);
 }
 
-/** @brief 检查本批可执行的记录形态；调用方已取得任务及所属人物，清单关系由加载校验和 store 入口保证。 */
+/** @brief 调用方取得有效 store 记录；仅检查本批支持的单行为睡眠形态，不重复扫描任务状态机。 */
 static DOMINO_CODE validateSleepTask(const DominoTask* task_ptr) {
-    DOMINO_CODE code = dominoHumanValidateTaskRecord(task_ptr);
-    if (code != CODE_OK) {
-        return code;
+    if (!task_ptr) {
+        return ERR_NULL_POINTER;
     }
     if (task_ptr->type != DOMINO_TASK_TYPE_SLEEP || task_ptr->behavior_count != 1U || task_ptr->behaviors_ptr[0].type != DOMINO_BEHAVIOR_TYPE_SLEEP ||
-        task_ptr->parent_task_id || task_ptr->active_child_task_id || task_ptr->pending_stop_reason != DOMINO_TASK_STOP_NONE) {
+        task_ptr->parent_task_id || task_ptr->active_child_task_id || task_ptr->pending_child_task_id || task_ptr->cancel_target_task_id ||
+        task_ptr->pending_stop_reason != DOMINO_TASK_STOP_NONE || task_ptr->cancel_scope != DOMINO_TASK_CANCEL_NONE) {
         return ERR_GAME_STATE_INVALID;
     }
     return CODE_OK;
@@ -136,44 +135,6 @@ static DOMINO_CODE validateSleepSubmission(const DominoHumanData* data_ptr, domi
     return CODE_OK;
 }
 
-/** @brief 草案及当前资格已预检；store 成功后立即交出行为块所有权，不再执行可失败步骤。 */
-static DOMINO_CODE commitSleepTaskDraft(DominoTask* draft_ptr, DominoHumanData* data_ptr, domino_task_id_t* task_id_out_ptr) {
-    const DOMINO_CODE code = dominoHumanStoreAddValidatedTask(draft_ptr, data_ptr, task_id_out_ptr);
-    if (code == CODE_OK) {
-        draft_ptr->behaviors_ptr = nullptr;
-    }
-    return code;
-}
-
-DOMINO_CODE dominoHumanCommitSleepTaskDraft(DominoTask* draft_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                            uint32_t expected_schedule_revision, domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr) {
-    if (!draft_ptr || !data_ptr || !task_id_out_ptr) {
-        return ERR_NULL_POINTER;
-    }
-    DOMINO_CODE code = dominoHumanValidateTaskRecord(draft_ptr);
-    if (code != CODE_OK) {
-        return code;
-    }
-    if (draft_ptr->task_id != 0U || draft_ptr->type != DOMINO_TASK_TYPE_SLEEP || draft_ptr->status != DOMINO_TASK_STATUS_PLANNED ||
-        draft_ptr->behavior_count != 1U || draft_ptr->behaviors_ptr[0].type != DOMINO_BEHAVIOR_TYPE_SLEEP || draft_ptr->parent_task_id != 0U ||
-        draft_ptr->active_child_task_id != 0U) {
-        return ERR_INVALID_PARAM;
-    }
-    const DominoBehavior* behavior_ptr = &draft_ptr->behaviors_ptr[0];
-    if (now_ms < draft_ptr->planned_begin_ms || now_ms < behavior_ptr->planned_begin_ms) {
-        return ERR_INVALID_PARAM;
-    }
-    if (behavior_ptr->target_building_id != approved_sleep_building_id || data_ptr->schedule_revision != expected_schedule_revision) {
-        return ERR_GAME_STATE_INVALID;
-    }
-    domino_runtime_ms_t target_active_ms;
-    code = validateSleepSubmission(data_ptr, approved_sleep_building_id, now_ms, &target_active_ms);
-    if (code != CODE_OK) {
-        return code;
-    }
-    return commitSleepTaskDraft(draft_ptr, data_ptr, task_id_out_ptr);
-}
-
 DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
                                        domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr) {
     if (!data_ptr || !task_id_out_ptr) {
@@ -189,8 +150,10 @@ DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_buildin
     }
     DominoTask draft = {0};
     buildSleepTaskDraft(data_ptr->human_id, approved_sleep_building_id, channel_index, target_active_ms, now_ms, &draft);
-    code = commitSleepTaskDraft(&draft, data_ptr, task_id_out_ptr);
-    free(draft.behaviors_ptr);
+    code = dominoHumanStoreAddValidatedTask(&draft, data_ptr, task_id_out_ptr);
+    if (code != CODE_OK) {
+        free(draft.behaviors_ptr);
+    }
     return code;
 }
 
@@ -218,9 +181,8 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* dat
     if (code != CODE_OK) {
         return code;
     }
-    code = dominoHumanValidateNeedSettlement(data_ptr, now_ms);
-    if (code != CODE_OK) {
-        return code;
+    if (now_ms < data_ptr->needs_updated_at_ms) {
+        return ERR_INVALID_PARAM;
     }
     const uint8_t energy = predictEnergy(data_ptr, now_ms);
     if (energy >= DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY) {
@@ -290,10 +252,6 @@ DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* d
         return code;
     }
     code = validateSleepBuilding(data_ptr, approved_sleep_building_id);
-    if (code != CODE_OK) {
-        return code;
-    }
-    code = dominoHumanValidateNeedSettlement(data_ptr, now_ms);
     if (code != CODE_OK) {
         return code;
     }

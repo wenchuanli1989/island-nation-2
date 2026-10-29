@@ -54,12 +54,11 @@ static size_t countRoadLine(void) {
     return kv_size(domino_all_road_line_list);
 }
 
-/* regions 先恢复地域；跨模块引用统一在全部实体加载完成后校验并绑定。 */
+/* regions 先恢复地域；全部实体加载后绑定可信存档中的跨模块引用。 */
 const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "regions",
         .max_per_shard = 1,
-        .required = true,
         .count_fn = countRegion,
         .shard_count_fn = storageSingleShardCount,
         .save_fn = serdeSaveRegion,
@@ -68,18 +67,15 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "asset",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countAsset,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveAsset,
         .load_fn = serdeLoadAsset,
-        .validate_references_fn = serdeValidateAssetReferences,
         .bind_references_fn = serdeBindAssetReferences,
     },
     {
         .type_name = "building",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA,
-        .required = false,
         .count_fn = countBuilding,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveBuilding,
@@ -88,7 +84,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "city",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA,
-        .required = false,
         .count_fn = countCity,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveCity,
@@ -97,7 +92,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "country",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA,
-        .required = false,
         .count_fn = countCountry,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveCountry,
@@ -106,7 +100,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "fork_road",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countForkRoad,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveForkRoad,
@@ -117,7 +110,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "human",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA,
-        .required = false,
         .count_fn = countHuman,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveHuman,
@@ -127,18 +119,16 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "human_ai",
         .max_per_shard = DOMINO_STORAGE_SHARD_HUMAN_AI,
-        .required = true,
         .count_fn = countHuman,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveHumanAI,
         .load_fn = serdeLoadHumanAI,
-        .validate_references_fn = serdeValidateHumanAIReferences,
+        .validate_save_fn = serdeValidateHumanForSave,
         .bind_references_fn = serdeBindHumanAIReferences,
     },
     {
         .type_name = "island",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countIsland,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveIsland,
@@ -147,7 +137,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "movable_object",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countMovableObject,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveMovableObject,
@@ -156,7 +145,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "org",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA,
-        .required = false,
         .count_fn = countOrg,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveOrg,
@@ -165,7 +153,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "road",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countRoad,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveRoad,
@@ -176,7 +163,6 @@ const StorageModuleType g_storage_module_types[] = {
     {
         .type_name = "road_line",
         .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
-        .required = false,
         .count_fn = countRoadLine,
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveRoadLine,

@@ -9,8 +9,9 @@
 void dominoNavModuleInitBefore(void);
 
 /**
- * @brief 在 storage load 后校验持久化布局并重建邻接。
- * @pre 引擎已完成 InitBefore；有存档时已完成 Storage 加载，无存档时直接校验空状态。
+ * @brief 在 storage load 后检查 Nav 容量并重建邻接。
+ * @pre 引擎已完成 InitBefore；Storage 已恢复当前格式的正确 canonical 世界及全局下一候选 ID，无存档时为空状态。
+ * @note 不重新校验存档布局、实体关系或修复 ID 游标。
  */
 void dominoNavModuleInitAfter(void);
 

@@ -25,39 +25,13 @@ static yyjson_mut_val* serializeNavDataSegment(yyjson_mut_doc* doc, const Domino
 }
 
 static void deserializeNavDataSegment(yyjson_val* object, DominoNavDataSegment* out_segment) {
-    if (!yyjson_is_obj(object)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Nav data segment must be a JSON object");
-    }
-
-    yyjson_val* init_index_value = yyjson_obj_get(object, "init_index");
-    yyjson_val* init_count_value = yyjson_obj_get(object, "init_count");
-    yyjson_val* increment_index_value = yyjson_obj_get(object, "increment_index");
-    yyjson_val* total_count_value = yyjson_obj_get(object, "total_count");
-    yyjson_val* region_index_value = yyjson_obj_get(object, "region_index");
-    yyjson_val* road_network_type_value = yyjson_obj_get(object, "road_network_type");
-    if (!yyjson_is_uint(init_index_value) || !yyjson_is_uint(init_count_value) || !yyjson_is_uint(increment_index_value) ||
-        !yyjson_is_uint(total_count_value) || !yyjson_is_uint(region_index_value) || !yyjson_is_uint(road_network_type_value)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Nav data segment fields must be unsigned integers");
-    }
-
-    uint64_t init_index = yyjson_get_uint(init_index_value);
-    uint64_t init_count = yyjson_get_uint(init_count_value);
-    uint64_t increment_index = yyjson_get_uint(increment_index_value);
-    uint64_t total_count = yyjson_get_uint(total_count_value);
-    uint64_t region_index = yyjson_get_uint(region_index_value);
-    uint64_t road_network_type = yyjson_get_uint(road_network_type_value);
-    if (init_index > UINT32_MAX || init_count > UINT32_MAX || increment_index > UINT32_MAX || total_count > UINT32_MAX || region_index > UINT8_MAX ||
-        road_network_type > UINT8_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Nav data segment field exceeds its numeric range");
-    }
-
     *out_segment = (DominoNavDataSegment){
-        .init_index = (uint32_t)init_index,
-        .init_count = (uint32_t)init_count,
-        .increment_index = (uint32_t)increment_index,
-        .total_count = (uint32_t)total_count,
-        .region_index = (uint8_t)region_index,
-        .road_network_type = (uint8_t)road_network_type,
+        .init_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "init_index")),
+        .init_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "init_count")),
+        .increment_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "increment_index")),
+        .total_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "total_count")),
+        .region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(object, "region_index")),
+        .road_network_type = (uint8_t)yyjson_get_uint(yyjson_obj_get(object, "road_network_type")),
     };
 }
 
@@ -77,23 +51,15 @@ void serdeNavWriteModuleMetaExtraFields(yyjson_mut_doc* doc, yyjson_mut_val* roo
     }
 }
 
-/** @brief 校验 JSON 结构和范围；与实体数组的一致性由 Nav 加载后校验。 */
-void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name, uint32_t total_count) {
+/** @brief 从可信元数据恢复分段；保留本次容器容量和分配大小检查。 */
+void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name) {
     DominoNavDataSegmentVec* out_segment_list =
         strcmp(type_name, "fork_road") == 0 ? &domino_all_fork_road_nav_data_segment_list : &domino_all_road_nav_data_segment_list;
 
     yyjson_val* array = yyjson_obj_get(root, "data_segment");
-    if (!yyjson_is_arr(array)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Nav metadata data_segment must be an array: type=%s", type_name);
-    }
-
     size_t segment_count = yyjson_arr_size(array);
     if (segment_count > DOMINO_NAV_DATA_SEGMENT_KEY_COUNT) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Nav segment count exceeds capacity: type=%s, count=%zu", type_name, segment_count);
-    }
-    if (segment_count > total_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Nav segment count exceeds entity count: type=%s, segments=%zu, entities=%u", type_name,
-                               segment_count, total_count);
     }
     if (segment_count > SIZE_MAX / sizeof(DominoNavDataSegment)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "Nav segment allocation size overflows: type=%s, count=%zu", type_name, segment_count);
@@ -126,7 +92,6 @@ static yyjson_mut_val* serializeForkRoad(yyjson_mut_doc* doc, const DominoForkRo
 }
 
 static void deserializeForkRoad(yyjson_val* obj, DominoForkRoad* out_fork_road) {
-    uint64_t kind_u = 0;
     out_fork_road->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_fork_road->position_x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
     out_fork_road->position_y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
@@ -134,11 +99,7 @@ static void deserializeForkRoad(yyjson_val* obj, DominoForkRoad* out_fork_road) 
     out_fork_road->weight = (domino_nav_weight_atom_t)yyjson_get_uint(yyjson_obj_get(obj, "weight"));
     out_fork_road->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_fork_road->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Fork road type exceeds its numeric range");
-    }
-    out_fork_road->type = (uint8_t)kind_u;
+    out_fork_road->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     serdeReadU8Array(yyjson_obj_get(obj, "num"), out_fork_road->num, 2);
 }
 
@@ -172,70 +133,26 @@ static yyjson_mut_val* serdeWriteCornerPoints(yyjson_mut_doc* doc, const DominoR
     return arr;
 }
 
+/** @brief 转折点数量来自可信存档；按该数量分配并写入对应的 union 存储。 */
 static void serdeReadCornerPoints(yyjson_val* json_corner_points, DominoRoad* out_road) {
-    if (!yyjson_is_arr(json_corner_points)) {
-        out_road->corner_point_count = 0;
-        return;
-    }
-
-    size_t json_count = yyjson_arr_size(json_corner_points);
-    uint16_t want = out_road->corner_point_count;
-    uint16_t count = want;
-    if (count > (uint16_t)json_count) {
-        count = (uint16_t)json_count;
-    }
-
-    int32_t(*allocated)[3] = nullptr;
+    const uint16_t count = out_road->corner_point_count;
     if (count > MIN_CORNER_POINTS_PER_ROAD) {
-        int32_t(*buf)[3] = (int32_t(*)[3])malloc(sizeof(*buf) * (size_t)count);
-        if (!buf) {
+        out_road->corner_point_ptr = malloc(sizeof(*out_road->corner_point_ptr) * (size_t)count);
+        if (!out_road->corner_point_ptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate road corner points: count=%u", count);
         }
-        out_road->corner_point_ptr = buf;
-        allocated = buf;
     }
-
-    size_t idx;
-    size_t cnt;
-    yyjson_val* point_val;
-    uint16_t write_index = 0;
-    yyjson_arr_foreach(json_corner_points, idx, cnt, point_val) {
-        if (write_index >= count) {
-            break;
+    for (uint16_t index = 0; index < count; index++) {
+        yyjson_val* point = yyjson_arr_get(json_corner_points, index);
+        for (size_t axis = 0; axis < 3; axis++) {
+            int32_t coordinate = (int32_t)yyjson_get_sint(yyjson_arr_get(point, axis));
+            if (count > MIN_CORNER_POINTS_PER_ROAD) {
+                out_road->corner_point_ptr[index][axis] = coordinate;
+            } else {
+                out_road->corner_points[axis][index] = coordinate;
+            }
         }
-        if (!yyjson_is_arr(point_val)) {
-            continue;
-        }
-        yyjson_val* x_val = yyjson_arr_get(point_val, 0);
-        yyjson_val* y_val = yyjson_arr_get(point_val, 1);
-        yyjson_val* z_val = yyjson_arr_get(point_val, 2);
-        int32_t point_x = (int32_t)yyjson_get_sint(x_val);
-        int32_t point_y = (int32_t)yyjson_get_sint(y_val);
-        int32_t point_z = (int32_t)yyjson_get_sint(z_val);
-
-        if (count > MIN_CORNER_POINTS_PER_ROAD) {
-            out_road->corner_point_ptr[write_index][0] = point_x;
-            out_road->corner_point_ptr[write_index][1] = point_y;
-            out_road->corner_point_ptr[write_index][2] = point_z;
-        } else {
-            out_road->corner_points[0][write_index] = point_x;
-            out_road->corner_points[1][write_index] = point_y;
-            out_road->corner_points[2][write_index] = point_z;
-        }
-        write_index++;
     }
-
-    if (allocated && write_index <= MIN_CORNER_POINTS_PER_ROAD) {
-        /* 有效点数缩至内联容量后切换 union；写入坐标后不能再写 corner_point_ptr。 */
-        for (uint16_t i = 0; i < write_index; i++) {
-            out_road->corner_points[0][i] = allocated[i][0];
-            out_road->corner_points[1][i] = allocated[i][1];
-            out_road->corner_points[2][i] = allocated[i][2];
-        }
-        free(allocated);
-    }
-
-    out_road->corner_point_count = write_index;
 }
 
 static yyjson_mut_val* serializeRoad(yyjson_mut_doc* doc, const DominoRoad* road) {
@@ -273,7 +190,6 @@ static yyjson_mut_val* serializeRoad(yyjson_mut_doc* doc, const DominoRoad* road
 }
 
 static void deserializeRoad(yyjson_val* obj, DominoRoad* out_road) {
-    uint64_t kind_u = 0;
     out_road->id = (domino_road_id_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_road->distance = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "distance"));
     out_road->corner_point_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "corner_point_count"));
@@ -281,11 +197,7 @@ static void deserializeRoad(yyjson_val* obj, DominoRoad* out_road) {
     out_road->cost = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "cost"));
     serdeReadU8Array(yyjson_obj_get(obj, "speed"), out_road->speed, 4);
     serdeReadU8Array(yyjson_obj_get(obj, "weight"), out_road->weight, 4);
-    kind_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
-    if (kind_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Road type exceeds its numeric range");
-    }
-    out_road->type = (uint8_t)kind_u;
+    out_road->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_road->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_road->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     serdeReadU8Array(yyjson_obj_get(obj, "num"), out_road->num, 2);
@@ -353,20 +265,8 @@ static void deserializeRoadLine(yyjson_val* obj, DominoRoadLine* out_road_line) 
     out_road_line->fork_road_count = (uint16_t)fork_count_u;
 
     yyjson_val* fork_ids = yyjson_obj_get(obj, "fork_road_ids");
-    if (out_road_line->fork_road_count > 0) {
-        if (!yyjson_is_arr(fork_ids) || yyjson_arr_size(fork_ids) != (size_t)out_road_line->fork_road_count) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Road line fork IDs do not match its declared count");
-        }
-        size_t idx;
-        size_t cnt;
-        yyjson_val* id_val;
-        yyjson_arr_foreach(fork_ids, idx, cnt, id_val) {
-            out_road_line->fork_road_id_list[idx] = (domino_fork_road_id_t)yyjson_get_uint(id_val);
-        }
-    } else if (fork_ids) {
-        if (!yyjson_is_arr(fork_ids) || yyjson_arr_size(fork_ids) != 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Road line fork IDs do not match its declared count");
-        }
+    for (uint16_t index = 0; index < out_road_line->fork_road_count; index++) {
+        out_road_line->fork_road_id_list[index] = (domino_fork_road_id_t)yyjson_get_uint(yyjson_arr_get(fork_ids, index));
     }
 
     serdeReadSintVec2FromJson(obj, "start_location", &out_road_line->start_location.x, &out_road_line->start_location.y);
@@ -388,9 +288,6 @@ static void deserializeRoadLine(yyjson_val* obj, DominoRoadLine* out_road_line) 
     uint64_t type_u = yyjson_get_uint(yyjson_obj_get(obj, "type"));
     uint64_t status_u = yyjson_get_uint(yyjson_obj_get(obj, "status"));
     uint64_t region_u = yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
-    if (road_index_u > 255U || type_u > 255U || status_u > 255U || region_u > 255U) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Road line index, type, status or region exceeds its numeric range");
-    }
     out_road_line->road_index = (uint8_t)road_index_u;
     out_road_line->type = (domino_type_t)type_u;
     out_road_line->status = (domino_status_t)status_u;

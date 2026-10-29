@@ -32,7 +32,7 @@ static uint32_t processCommandBatchLocked(void) {
 }
 
 /**
- * @brief 每批最多 64 次回收或非阻塞投递；投递失败释放未交付载荷后报告并终止进程。
+ * @brief 每批最多 64 次回收或非阻塞投递；投递失败直接报告并终止进程。
  * @return 是否耗尽本批预算，不代表确认仍有可处理的堆项。
  */
 static bool processHeapBatch(void) {

@@ -18,7 +18,7 @@ void metaSave(const char* save_path);
  */
 yyjson_doc* metaLoad(void);
 
-/** @brief 写注册表中的所有模块数据分片。 */
+/** @brief 先执行注册的保存前审计，再创建目录并写出全部模块分片。 */
 void saveAllShards(const char* save_path);
 
 /** @brief 读取所有模块 meta，再按注册表顺序加载模块数据。

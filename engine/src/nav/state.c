@@ -1,12 +1,11 @@
 #include "state.h"
 
+#include <assert.h>
 #include <inttypes.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "../host/entry.h"
 #include "domino_shared_common.h"
 #include "graph.h"
 #include "klib/kvec.h"
@@ -63,17 +62,6 @@ static void navStateDestroyPathCaches(void) {
         navStateResetPathCache(cache);
         free(cache);
         g_nav_path_cache_slots[slot_index] = nullptr;
-    }
-}
-
-static void advanceNextId(_Atomic uint32_t* next_id_ptr, uint32_t max_id) {
-    if (max_id == 0U) {
-        return;
-    }
-    uint32_t observed = atomic_load_explicit(next_id_ptr, memory_order_relaxed);
-    const uint32_t required_next_id = max_id + 1U;
-    while (observed < required_next_id &&
-           !atomic_compare_exchange_weak_explicit(next_id_ptr, &observed, required_next_id, memory_order_relaxed, memory_order_relaxed)) {
     }
 }
 
@@ -139,43 +127,22 @@ void navStateMarkCanonical(void) {
     g_nav_compaction_required = false;
 }
 
-void navStateValidateLoadedData(domino_fork_road_id_t* out_max_fork_id, domino_road_line_id_t* out_max_road_line_id) {
-    const size_t fork_count = kv_size(domino_all_fork_road_list);
-    const size_t road_line_count = kv_size(domino_all_road_line_list);
-    if (road_line_count > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded road line count exceeds ID map capacity: count=%zu", road_line_count);
-    }
-
-    /* Storage 已建立 ID 到数组下标的映射并拒绝重复 ID，此处复用已加载的 map。 */
-    domino_fork_road_id_t max_fork_id = 0U;
-    for (size_t index = 0U; index < fork_count; index++) {
-        const domino_fork_road_id_t fork_road_id = kv_A(domino_all_fork_road_list, index).id;
-        if (fork_road_id == 0U || fork_road_id == UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded fork road has invalid ID: index=%zu id=%" PRIu32, index, fork_road_id);
-        }
-        if (fork_road_id > max_fork_id) {
-            max_fork_id = fork_road_id;
+void navStateValidateLoadedCapacity(void) {
+    const size_t entity_counts[] = {kv_size(domino_all_fork_road_list), kv_size(domino_all_road_list), kv_size(domino_all_road_line_list)};
+    const char* const entity_names[] = {"fork road", "road", "road line"};
+    for (size_t index = 0U; index < sizeof(entity_counts) / sizeof(entity_counts[0]); index++) {
+        if (entity_counts[index] > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
+            DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded %s count exceeds Nav capacity: count=%zu limit=%zu", entity_names[index],
+                                   entity_counts[index], DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX);
         }
     }
-
-    domino_road_line_id_t max_road_line_id = 0U;
-    for (size_t index = 0U; index < road_line_count; index++) {
-        const domino_road_line_id_t road_line_id = kv_A(domino_all_road_line_list, index).id;
-        if (road_line_id == 0U || road_line_id == UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "loaded road line has invalid ID: index=%zu id=%" PRIu32, index, road_line_id);
-        }
-        if (road_line_id > max_road_line_id) {
-            max_road_line_id = road_line_id;
+    for (size_t index = 0U; index < kv_size(domino_all_fork_road_nav_data_segment_list); index++) {
+        const DominoNavDataSegment* segment = &kv_A(domino_all_fork_road_nav_data_segment_list, index);
+        if (segment->total_count > MAX_FORK_ROAD_COUNT_PER_NETWORK) {
+            DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded fork road segment exceeds network capacity: segment=%zu count=%" PRIu32 " limit=%u",
+                                   index, segment->total_count, (unsigned)MAX_FORK_ROAD_COUNT_PER_NETWORK);
         }
     }
-
-    *out_max_fork_id = max_fork_id;
-    *out_max_road_line_id = max_road_line_id;
-}
-
-void navStateAdvanceNextIds(domino_fork_road_id_t max_fork_id, domino_road_line_id_t max_road_line_id) {
-    advanceNextId(&g_domino_global_increment_id.fork_road_increment_id, max_fork_id);
-    advanceNextId(&g_domino_global_increment_id.road_line_increment_id, max_road_line_id);
 }
 
 void navStateValidateRuntimeData(void) {
@@ -242,18 +209,12 @@ void navStateRefreshIdMapIndices(void) {
     for (uint32_t index = 0U; index < (uint32_t)fork_count; index++) {
         DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, index);
         const khint_t slot = dominoForkRoadIdMap_get(dominoForkRoadIdMap, fork_road->id);
-        if (fork_road->id == 0U || !kh_exist(dominoForkRoadIdMap, slot)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot refresh missing fork road ID mapping: id=%" PRIu32, fork_road->id);
-        }
         kh_val(dominoForkRoadIdMap, slot) = index;
         fork_road->temp_index = 0U;
     }
     for (uint32_t index = 0U; index < (uint32_t)road_count; index++) {
         const DominoRoad* road = &kv_A(domino_all_road_list, index);
         const khint_t slot = dominoRoadIdMap_get(dominoRoadIdMap, road->id);
-        if (road->id == 0U || !kh_exist(dominoRoadIdMap, slot)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot refresh missing road ID mapping: id=%" PRIu64, road->id);
-        }
         kh_val(dominoRoadIdMap, slot) = index;
     }
 }
@@ -268,10 +229,7 @@ DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoF
         return ERR_NOT_FOUND;
     }
     uint32_t index = kh_val(dominoForkRoadIdMap, slot);
-    if (index >= kv_size(domino_all_fork_road_list) || kv_A(domino_all_fork_road_list, index).id != fork_road_id) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "fork road ID map points to an invalid entity: id=%" PRIu32 " index=%" PRIu32 " count=%zu",
-                               fork_road_id, index, kv_size(domino_all_fork_road_list));
-    }
+    assert(index < kv_size(domino_all_fork_road_list) && kv_A(domino_all_fork_road_list, index).id == fork_road_id);
     *out_fork_road = &kv_A(domino_all_fork_road_list, index);
     return CODE_OK;
 }
@@ -286,10 +244,7 @@ DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road
         return ERR_NOT_FOUND;
     }
     uint32_t index = kh_val(dominoRoadIdMap, slot);
-    if (index >= kv_size(domino_all_road_list) || kv_A(domino_all_road_list, index).id != road_id) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "road ID map points to an invalid entity: id=%" PRIu64 " index=%" PRIu32 " count=%zu", road_id,
-                               index, kv_size(domino_all_road_list));
-    }
+    assert(index < kv_size(domino_all_road_list) && kv_A(domino_all_road_list, index).id == road_id);
     *out_road = &kv_A(domino_all_road_list, index);
     return CODE_OK;
 }
@@ -313,10 +268,7 @@ DominoRoadLine* dominoGetRoadLineByID(domino_road_line_id_t road_line_id) {
         return nullptr;
     }
     uint32_t index = kh_val(dominoRoadLineIdMap, slot);
-    if (index >= kv_size(domino_all_road_line_list) || kv_A(domino_all_road_line_list, index).id != road_line_id) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "road line ID map points to an invalid entity: id=%" PRIu32 " index=%" PRIu32 " count=%zu",
-                               road_line_id, index, kv_size(domino_all_road_line_list));
-    }
+    assert(index < kv_size(domino_all_road_line_list) && kv_A(domino_all_road_line_list, index).id == road_line_id);
     return &kv_A(domino_all_road_line_list, index);
 }
 

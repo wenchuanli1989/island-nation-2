@@ -1,53 +1,71 @@
 # Engine 校验责任与精简记录
 
-本记录对应 2026-10-14 的工作树增量。以本轮开始时的源码快照为基线，保留此前所有已暂存、未暂存及未跟踪的开发内容；没有提交或改动暂存区。
+本记录对应当前源码。此次重构采用当前格式的可信完整存档契约：文件由正确业务状态生成、完整持久化并正确读取；所有模块 meta 与实体来自同一提交。存档版本保持 15，保留版本拒绝及现有 CRC 配置和摘要策略，不提供历史格式迁移。
 
-本文保留历史检查结论；下表前四项生命周期调用链已更新，其余早期冻结屏障及失败传播描述不代表当前实现。当前由引擎对外 Init／Start／Stop／Destroy 校验调用状态与线程，受引擎编排的内部模块及辅助链遵循资源有效的前置条件，不重复检查模块、索引或固定队列是否初始化，也不维护完整阶段状态。公开道路增删等直接业务入口仍校验访问资格；shared logger／queue 保留独立公共边界校验。Init 准备资源并加载，Start 启动线程，Stop 停止线程并结算，Destroy 保存并释放；仅 Init 的实例同样执行引擎 Stop → Destroy。现行接口以 [公共 API 说明](include/README.md) 和 [AGENTS.md](../AGENTS.md) 为准。
+## 校验责任
 
-2026-10-15 补充：移除为保证后续分配不失败而提前扩容或占位的步骤；实际插入失败直接返回错误，人物执行器停止普通推进，不为分配失败新增重试或回滚。
+- 公共入口负责访问资格、新输入和当前业务状态；shared queue/logger 保持独立公共契约。
+- 加载按可信字段类型解码，构建数组、ID map、进程内引用和运行字段；不逐层复核相同持久事实。
+- 实际分配失败、容器容量、分配字节数溢出、格式化及 IO 结果仍在实际操作处检查。
+- 同一独占操作复用已取得的查询结果和仍有效的条件；跨异步消息继续检查请求身份、版本和当前资格。
+- 当前业务时间及新时长运算保持 32 位毫秒限制；0 与 UINT32_MAX 都合法。
 
-## 校验放置原则
+## 已实施的精简
 
-- 外部参数、存档内容、可写业务状态、资源失败、容量及算术范围由真正接收或使用它们的边界负责。
-- 同次同步操作中已经验证、且未发生修改的结果直接向下传递，内部函数通过明确前置条件使用。引擎保证的资源初始化与有效期也由内部任务存储、唤醒、导航查询、消息投递及加载辅助链直接使用；保留公共业务入口的访问资格校验。
-- 跨线程、跨等待或重新取得写入权后，身份、版本、授权及状态可能变化，仍须重新检查。
-- 人物与 data 数组在执行期保持稳定。任务池扩容或交换删除后，不能沿用任务指针或哈希槽位，须保存 ID 后重新定位。
-- 32 位累计未冻结现实毫秒契约保持不变，0 和 UINT32_MAX 都有效；绝对时刻加法及时间先后检查保留。
+| 路径 | 当前职责 |
+| --- | --- |
+| storage meta/shard → deserialize | 删除重复类型、范围、分片数量、ID 唯一性和引用内容审计；当前完整格式为全部十三个模块生成 meta，空实体模块也保留 meta。保留资源容量、解析返回值与 IO 检查。 |
+| storage → references/reset | 主表及索引全部稳定后绑定指针并复位人物运行字段；不保留校验专用 seen 数组或 validated 标志。 |
+| storage save | 注册表在分片写入前统一审计 Human/Data 同序身份、绑定、位置引用及任务图一次；Human 和 HumanAI 序列化复用该结果。 |
+| human Start | 复用可信加载与受控提交建立的持久事实；只检查当前执行器能力、明确许可、恢复结算点和新截止点范围。 |
+| planner → executor | 请求仅携带必要值快照；生产入口已确认的同楼、低精力、空闲与容量条件不在 planner 重复扫描。结果提交重新核对请求身份、日程版本和当前资格，再直接入池；成功后转移行为块所有权。 |
+| sleep Start/Advance | 不再全量扫描任务和行为状态机；保留本次支持形态、活动槽、建筑、状态、时间先后、截止点及版本上限。删除已无调用的 CommitSleepTaskDraft。 |
+| nav InitAfter | 保留 Nav 独立容量上限，直接重建未持久化的邻接；删除 canonical 分段全量内容复核及最大 ID 扫描/游标修复，游标直接由完整 meta 恢复。 |
+| nav save/queries | 保存前图审计仍在；排序后直接刷新已有 map 下标。封装索引和自产 Floyd 前驱链只保留内部断言；可写邻接、状态及寻路业务结果检查保留。 |
+| main loop → dispatch | 成功出队的消息地址直接分派，不重复判空；未知类型仍返回业务错误。 |
 
-## 调用链与责任分配
+## 不变量与边界
 
-| 调用链 | 本轮精简 | 仍负责的关键检查 |
-| --- | --- | --- |
-| `EngineInit → 各模块 Init → storage load → nav InitAfter` | 引擎保证内部初始化顺序，内部不重复检查重入；使用静态初值或 Destroy 复位后的空状态，创建固定资源并加载，不创建线程或提前采样时钟 | 引擎公共路径与重入；资源创建、存档及导航完整性；shared 公共边界 |
-| `EngineStart → logger/human/game_timer Start → main loop → thaw` | 使用 Init 已准备的资源，引擎按顺序启动线程并进入 RUNNING，再解冻和通知；内部模块不另存阶段状态 | 引擎 INITIALIZED 状态及客户端身份；human 业务启动校验、线程创建、就绪同步及解冻时钟；shared logger 公共边界 |
-| `EngineStop → freeze/notify → main/human/game_timer join → human settlement → logger Stop` | 运行过时由引擎发布退出并按序 join、结算；仅 Init 时跳过 human／game_timer Stop、全部 join 和结算，仍调用 logger Stop；资源保留到 Destroy | 引擎生命周期及客户端身份；合法结算时刻、执行线程停写、join、日志排空及保存前快照条件 |
-| `EngineDestroy → 各模块 Destroy → engine reset` | 引擎保证业务线程已结束或从未创建，按序保存并释放全部已初始化资源；内部不重复检查顺序，完成后资源归空，可再次 Init | 引擎 STOPPED 状态及客户端身份；保存、实际资源释放及 shared 公共边界 |
-| `EnginePushMsg → queue → main loop → dispatch` | dispatch 使用成功出队的消息，不再次判空 | 队列入口指针、容量、停止状态、锁、消息 ID 上限；dispatch 消息类型 |
-| `Authorize/Submit → applyCommand → SleepTask → Store` | 复用已定位人物/data；入池直接接收已验证草案；任务提交后实际写入许可，删除提前扩容、空占位及占位回滚 | 人物、许可、建筑、活动槽、任务容量、版本、时间边界；分配失败先停止执行，再回复命令 |
-| `planner request → draft → executor result → Commit` | 私有规划 inbox 使用唯一生产者的固定消息契约；避免二次释放结果载荷 | 混合 inbox 消息形态、请求身份、owner、通道、版本、当前资格及完整草案语义 |
-| `advanceHuman → Start/AdvanceSleepTask → needs → scheduleWakeup` | 复用人物、活动任务、许可和 data；同刻结算后预测阈值不重新扫描需求；规则时长上限以静态断言保证 | 可写任务/行为语义、需求范围、活动形态、时间先后、绝对到期溢出、执行版本 |
-| `StoreRemoveTask → hash delete → vector swap-delete` | 复用首次定位的槽位与下标；删除后仅对换入任务重新查哈希 | 终态、父子/停止引用、归属、版本上限及槽位关联 |
-| `executor scheduleWakeup → game_timer ScheduleAt → command queue → game_timer thread → Consume` | 独立参数登记并按值传递 `data_id`；人物直接保存有效 ID 和截止点，不维护唤醒关联表或版本 | 入口参数、实际分配失败、容量/时间溢出、取消、`data_id` 转人物 ID 范围、当前非零 game_timer ID 匹配、生命周期内 game_timer ID 唯一 |
-| `time Freeze → version window → publish` | Freeze 已开启写入窗口，发布阶段不重复置奇数 | 原子字段、版本前后校验、采样窗口与 32 位业务毫秒范围 |
-| `storage Init → meta → module/shard → deserialize → reference validate/bind` | 元数据只解析一次计数；统一实体零初始化；删除加载前的数组和 ID map 预留，按需插入，data 指针在对应加载完成后绑定 | JSON 类型/范围、实际分片编号、数量、重复 ID、跨模块引用、分配及 IO 错误 |
-| `storage Destroy → shards → module meta → root meta → transaction` | 模块 meta 直接返回摘要供根 meta 使用；删除缓存再反查及固定注册表的重复键扫描；内部不重复检查已验证路径 | 停写前提、路径追加长度、磁盘状态、CRC/size、JSON 序列化、事务 IO 失败 |
-| `Navigation → segment → path planning → cache → route fill` | 复用已定位分段；完整缓存下删除辅助函数判空和不可达空结果；销毁交由支持 null 的容器接口 | 可写实体状态/分组/下标、邻接一致性、顶点上限、矩阵分配、不可达路径及输出容量 |
-| `LogVa/LogMsgN → module filter → private queue → writer` | 将过滤时得到的模块下标放入私有队列，writer 不再扫描模块表；固定内部缓冲不重复判空 | 公共空实例、等级/模块、正文、格式化、资源/IO/同步与停止错误 |
-| `common/host/social → getters / persistence references` | common 空表判断由 khashl 承担；social 保存用一次指针身份比较；嵌套反序列化只清零一次 | ID 语义、实际分配、实体身份及可变引用 |
+1. 人物与 data 同序配对，运行期数组稳定；任务池增删或扩容之后重新按 ID 定位任务。
+2. 加载只接收当前格式正确完整快照，包含正确 ID 游标；手工导入、损坏或不完整世界不属于此契约。
+3. 运行期睡眠许可、规划请求和计时登记不持久化。合法活动存档加载后仍须重新授权，旧异步消息仍须按当前身份过滤。
+4. 低精力自主规划请求由唯一执行线程生成；期间日程修改推进版本，结果消费时重验版本和当前资格。自然需求结算只衰减，不会使原低精力条件失效。
+5. Nav 已登记实体 ID 不得改写，map 由加载、道路新增及排序刷新维护；邻接和状态的公开可写性不被误当作不可变保证。
+6. Nav 实体上限为 2^30，与 storage 的 khashl 容量不同；每路网 3000 路口和邻接写入容量保护继续保留。
+7. 准确保留实际资源失败与新运算边界；删除不再需要的临时资源时，其分配及失败分支一起删除。
 
-## 重点不变量
+## 验证
 
-1. 私有 logger 模块表初始化后只读，writer join 后才销毁，队列中的模块下标在整个消费期有效。
-2. 存档加载先完成全部 meta 解析与摘要登记，再读取分片；保存先写全部分片，再按同一注册表生成 meta，期间世界停止写入。
-3. Human/Data 两表同序配对；冻结边界确认 `human->data` 正是 StoreValidate 已检查的同索引对象。
-4. 同步自建睡眠草案由内部构造函数建立完整有效记录；异步草案重新执行记录和当前资格校验。Store 仍承担实际入池失败。
-5. human 唤醒由 executor 直接登记 `data_id = human_id`，以当前非零 `wakeup_game_timer_id` 拒绝旧消息，`wakeup_due_ms` 保留同一截止点去重。game_timer ID 在队列生命周期内不回绕，唯一性仍为内部不变量；取消或消费时同时复位人物唤醒 ID 和截止点。
-6. nav 缓存只在分配和填充成功后提交；借用者不得修改缓存数组，实体搬迁前仍执行缓存失效。
+通过 `playground/validation_contract/run.py` 在隔离副本中验证两条生命周期、同进程重建、保存重载、运行命令与冻结、活跃睡眠恢复、AI 草案移交、计时器到期回收、导航增删排序与邻接重建、32 位时间边界，以及公开错误输入、未重新授权、非法调用顺序、错误线程、版本和 CRC 拒绝。
 
-## 覆盖与复查
+已通过：
 
-实现按十个互不重叠的文件范围并行开展，另行检查 engine 公共入口和 client-hub/engine-remote 的实际调用。模块负责人完成调用点自查后，安排第一轮核心、human、storage、nav/social 交叉复查，再由不同 agent 进行第二轮运行链和持久化链复查，最后由主 agent 对最终增量和跨文件签名核对。
+- `scripts/build.sh debug` 完整构建，普通运行模式通过。
+- `playground/validation_contract/run.py --preset debug` 与 `--preset release` 全部集成检查；覆盖关闭/开启 CRC、导航删除恢复与路径缓存失效、保留 ID 游标空洞。
+- `scripts/build.sh sanitize` 完整构建；ASan/UBSan/LSan 下空世界和样例世界各完成两轮保存重载，没有报告错误。
+- `scripts/build.sh format` 与最终 `git diff --check`；第三方源码保持原样。
+- 三个模块实现者完成交叉复核，主代理统一复核调用链、文档、样例和测试。
 
-历史审查覆盖 queue、nav 的 graph/mutation/persistence/Floyd、host/social 生命周期等区域，当时没有依据证明可删的保护保持原样。后续生命周期边界调整以上述现行说明为准，真实同步失败和外部数据检查继续保留。
+系统默认 libc 缺少 `TIME_MONOTONIC`，验证使用本机 glibc 2.43 sysroot 的临时副本，并补入宿主 `libgcc_s.so.1`；通过 `DOMINO_GLIBC_ROOT` 选择，未修改系统安装或项目工具链。未运行性能基准或完整异步过期场景的压力测试；本轮重点并发复核及 ThreadSanitizer 情况见下文，不将局部验证扩展为全部并发正确性的证明。
 
-验证限于当前源码、调用点、快照差异、格式与空白检查。没有编译、构建、运行、测试或 Sanitizer；以上记录不代表性能、并发行为或崩溃恢复已经得到运行验证，也不表示基线已有的其他问题已全部修复。
+
+## game_timer、time、queue、logger、human 重点复核
+
+2026-10-28 使用四个 agent 分工审查并交叉复核，保持可信完整存档前提。time 原子快照及采样窗口、GameTimer 请求锁与迁移取消、queue 版本等待与排空、human 单写执行及异步所有权没有发现新的确定功能缺陷。
+
+发现并修复 logger 的同文件配置问题：默认文件与显式模块文件各自使用缓冲流时，按 FIRST、SECOND、THIRD、FOURTH 入队，Stop 后稳定出现 SECOND、THIRD、FIRST、FOURTH。Init 现按打开文件的 dev/inode 识别同文件及路径别名，复用输出流；按当前 stdout 目标解析文件别名，统一采用配置的追加流，避免非追加重定向流的独立偏移覆盖。只修改本实例的输出绑定，不改变或关闭 stdout。Stop 同步每个所有者一次，Destroy 逆序跳过共享引用，最后关闭唯一所有者；没有新增日志热路径 IO。
+
+新增定向检查：
+
+- queue：环绕扩容 FIFO、跨尾批量消费、实际阻塞生产者的 Flush 唤醒、通知先于 Wait、非空队列版本等待、混合等待者广播、8 字节消息和销毁重建。
+- logger：独立实例、等级及目标、Init-only、复用、4 个生产者共 384 条记录排空与单生产者 FIFO、按值复制、截断、配置文件别名，以及独立子进程中的非追加 stdout 重定向别名。
+- time/game_timer：4 个 reader 的 32 轮冻结/解冻阶段握手、重复冻结不变、单 reader 时间不倒退、命令/堆/事件队列三阶段取消、0/MAX 截止点、64 位载荷及目标队列生命周期。
+- human：继续执行已有的提交、规划结果采纳、冻结恢复、活动存档重新授权、计时到期回收和 32 位边界回归。
+
+Release 定向与完整集成通过；ASan/UBSan/LSan 下定向检查、stdout 别名和人物回归通过。Debug 定向与完整集成通过，随后补充的 stdout 别名也纳入最终 Debug 验证。修复另经两名未实现该修复的 agent 复核。
+
+ThreadSanitizer 构建成功，但运行在 `__tsan_func_entry` 内部崩溃、退出 66，没有给出竞态报告。独立 `thread-smoke` 只执行 C23 线程创建、一次原子写和 join，不调用任何引擎或 shared 模块，也复现同样崩溃。因此本环境的 TSan 运行结果不能用于证明这些模块无竞态；保留这个最小用例用于环境诊断，没有切换线程 API 或掩盖失败。
+
+### 现存规范冲突
+
+宪法 3.1 的“前64字节”与 3.3 的“首字段固定为64位”不一致。公共 queue 契约及实现写入前 8 字节，GameTimer 等按此组织消息；改写 64 字节会覆盖类型与载荷。本轮保留 64 位实现并报告单位冲突，未获宪法修改授权，未修改宪法。其余本轮改动与当前生命周期、资源、同步及时间约束一致。

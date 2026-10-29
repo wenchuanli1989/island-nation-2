@@ -72,21 +72,3 @@ void serdeReadNameDescription(yyjson_val* object, domino_name_id_t* out_name_id,
         *out_description_id = new_id;
     }
 }
-
-yyjson_val* serdeValidateShardRoot(yyjson_val* root, const char* expected_type, uint32_t expected_shard_id) {
-    /* obj_get 和 equals_str 同时拒绝非对象根、缺失字段及错误字段类型。 */
-    yyjson_val* type_val = yyjson_obj_get(root, "type");
-    if (!yyjson_equals_str(type_val, expected_type)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid shard root or type (expected_type=%s, shard=%u)", expected_type, expected_shard_id);
-    }
-
-    yyjson_val* shard_id_val = yyjson_obj_get(root, "shard_id");
-    if (!yyjson_is_uint(shard_id_val) || yyjson_get_uint(shard_id_val) != expected_shard_id) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid shard ID in JSON (type=%s, expected_shard=%u)", expected_type, expected_shard_id);
-    }
-    yyjson_val* entities = yyjson_obj_get(root, "entities");
-    if (!yyjson_is_arr(entities)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "shard entities field is not an array (type=%s, shard=%u)", expected_type, expected_shard_id);
-    }
-    return entities;
-}

@@ -18,7 +18,6 @@
 #include "planner.h"
 #include "rules.h"
 #include "store.h"
-#include "task/entry.h"
 #include "task/sleep.h"
 
 KHASHL_MAP_INIT(KH_LOCAL, HumanSleepApprovalMap, humanSleepApprovalMap, domino_human_id_t, domino_building_id_t, kh_hash_uint32, kh_eq_generic)
@@ -98,14 +97,6 @@ static const char* planReasonName(DominoHumanPlanReason reason) {
     switch (reason) {
         case DOMINO_HUMAN_PLAN_REASON_LOW_ENERGY:
             return "low_energy";
-        case DOMINO_HUMAN_PLAN_REASON_ENERGY_SUFFICIENT:
-            return "energy_sufficient";
-        case DOMINO_HUMAN_PLAN_REASON_NO_AUTHORIZATION:
-            return "no_authorization";
-        case DOMINO_HUMAN_PLAN_REASON_BUSY:
-            return "busy";
-        case DOMINO_HUMAN_PLAN_REASON_CAPACITY:
-            return "capacity";
         case DOMINO_HUMAN_PLAN_REASON_TIME_RANGE:
             return "time_range";
     }
@@ -161,7 +152,7 @@ static void requestSleepPlan(DominoHuman* human_ptr, domino_building_id_t approv
     const bool already_pending_flag = human_ptr->plan_submit_pending_flag;
     markPlanPending(human_ptr, DOMINO_HUMAN_PLAN_TRIGGER_ENERGY);
     if (g_execution.inflight_plan_count == DOMINO_HUMAN_PLAN_INFLIGHT_MAX) {
-        if (!already_pending_flag && g_execution.inflight_plan_count == DOMINO_HUMAN_PLAN_INFLIGHT_MAX) {
+        if (!already_pending_flag) {
             logPlanEvent(human_ptr->human_id, 0U, "pending", "inflight_window_full", CODE_OK);
         }
         return;
@@ -176,10 +167,8 @@ static void requestSleepPlan(DominoHuman* human_ptr, domino_building_id_t approv
         .schedule_revision = data_ptr->schedule_revision,
         .now_ms = now_ms,
         .reasons = data_ptr->pending_plan_reasons,
-        .current_building_id = data_ptr->current_building_id,
         .approved_sleep_building_id = approval,
         .energy = data_ptr->energy,
-        .task_count = data_ptr->task_count,
     };
     dominoHumanPlannerSubmit(&request);
     human_ptr->active_plan_request_id = request.request_id;
@@ -195,7 +184,7 @@ static bool isCoreSleep(const DominoTask* task_ptr) {
            task_ptr->cancel_scope == DOMINO_TASK_CANCEL_NONE;
 }
 
-/** @brief 校验活动槽并返回已定位任务；调用方不得跨任务池增删保留该指针。 */
+/** @brief 可信清单和受控写入保证槽位归属；仅检查当前执行器支持范围，不跨任务池增删保留指针。 */
 static DominoTask* getActiveTask(const DominoHumanData* data_ptr) {
     DominoTask* active_task_ptr = nullptr;
     for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
@@ -204,11 +193,6 @@ static DominoTask* getActiveTask(const DominoHumanData* data_ptr) {
             continue;
         }
         DominoTask* task_ptr = dominoGetTaskByID(task_id);
-        if (!task_ptr || task_ptr->owner_human_id != data_ptr->human_id || task_ptr->channel_index != channel ||
-            task_ptr->status != DOMINO_TASK_STATUS_RUNNING) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "human=%" PRIu32 " active task=%" PRIu32 " channel=%u has missing or inconsistent task data",
-                                   data_ptr->human_id, task_id, (unsigned)channel);
-        }
         if (active_task_ptr || !isCoreSleep(task_ptr)) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "human=%" PRIu32 " active task=%" PRIu32 " exceeds executor core sleep support",
                                    data_ptr->human_id, task_id);
@@ -252,14 +236,10 @@ static DOMINO_CODE validateApproval(domino_human_id_t human_id, domino_building_
 static void validateFrozenWorld(void) {
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
-    dominoHumanStoreValidate(now_ms);
+    /* 可信加载建立持久事实，Init 后只有受控提交会增添 PLANNED；Start 只确认当前执行条件。 */
     for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
         const DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
         const DominoHumanData* data_ptr = human_ptr->data;
-        if (data_ptr != &kv_A(domino_all_human_data_list, index) || data_ptr->human_id != human_ptr->human_id) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "human data binding mismatch human=%" PRIu32 " index=%zu", human_ptr->human_id, index);
-        }
-        /* 绑定指向 StoreValidate 刚校验的同索引 data；此处只补充执行器支持范围。 */
         const DominoTask* active_task_ptr = nullptr;
         for (uint8_t task_index = 0U; task_index < data_ptr->task_count; task_index++) {
             const DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[task_index]);
@@ -282,7 +262,8 @@ static void validateFrozenWorld(void) {
         const DominoBehavior* behavior_ptr = &active_task_ptr->behaviors_ptr[0];
         const domino_building_id_t approval = getApproval(human_ptr->human_id);
         if (approval == 0U || approval != behavior_ptr->target_building_id || approval != data_ptr->current_building_id ||
-            behavior_ptr->progress.accounted_at_ms != now_ms || now_ms - data_ptr->needs_updated_at_ms >= DOMINO_HUMAN_NEED_MINUTE_MS) {
+            behavior_ptr->progress.accounted_at_ms != now_ms || data_ptr->needs_updated_at_ms > now_ms ||
+            now_ms - data_ptr->needs_updated_at_ms >= DOMINO_HUMAN_NEED_MINUTE_MS) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID,
                                    "human=%" PRIu32 " active sleep approval or frozen settlement is inconsistent at now_ms=%" PRIu32,
                                    human_ptr->human_id, now_ms);
@@ -295,13 +276,22 @@ static void validateFrozenWorld(void) {
     }
 }
 
+/** @brief 调用方已确认三槽为空并独占有效人物；需求范围由可信加载及受控结算维护，仅检查本次时刻。 */
+static DOMINO_CODE settleIdleNeeds(DominoHumanData* data_ptr, domino_runtime_ms_t now_ms) {
+    if (now_ms < data_ptr->needs_updated_at_ms) {
+        return ERR_INVALID_PARAM;
+    }
+    dominoHumanApplyNaturalNeeds(data_ptr, now_ms);
+    return CODE_OK;
+}
+
 void dominoHumanExecutionSettle(domino_runtime_ms_t now_ms) {
     for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
         DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
         DominoTask* active_task_ptr = getActiveTask(human_ptr->data);
         const DOMINO_CODE code = active_task_ptr
                                      ? dominoHumanAdvanceSleepTask(active_task_ptr, human_ptr->data, getApproval(human_ptr->human_id), now_ms)
-                                     : dominoHumanSettleNeeds(human_ptr->data, now_ms);
+                                     : settleIdleNeeds(human_ptr->data, now_ms);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "cannot settle frozen human=%" PRIu32 " now_ms=%" PRIu32, human_ptr->human_id, now_ms);
         }
@@ -393,7 +383,7 @@ static void advanceHuman(DominoHuman* human_ptr) {
         scheduleWakeup(human_ptr, planned_begin_ms);
         return;
     }
-    code = dominoHumanSettleNeeds(data_ptr, now_ms);
+    code = settleIdleNeeds(data_ptr, now_ms);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot advance human=%" PRIu32, human_id);
     }
@@ -463,17 +453,21 @@ static void applyPlanResult(DominoHumanPlanEnvelope* envelope_ptr) {
     }
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
-    DOMINO_CODE code = dominoHumanSettleNeeds(human_ptr->data, now_ms);
+    DOMINO_CODE code = settleIdleNeeds(human_ptr->data, now_ms);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot apply human plan result human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id,
                                request_ptr->request_id);
     }
     domino_task_id_t task_id;
-    code = dominoHumanCommitSleepTaskDraft(&envelope_ptr->task, human_ptr->data, approval, request_ptr->schedule_revision, now_ms, &task_id);
-    if (code == ERR_GAME_STATE_INVALID || code == ERR_ALREADY_EXISTS || code == ERR_NOT_FOUND) {
-        logPlanEvent(request_ptr->human_id, request_ptr->request_id, "rejected", "commit_eligibility_changed", code);
-        markPlanPending(human_ptr, request_ptr->reasons);
-        return;
+    /* 请求身份、版本和当前资格已在本次独占操作中核对；结算只自然衰减，不会撤销低精力或空闲条件。 */
+    const domino_runtime_ms_t target_active_ms = dominoHumanEstimateSleepMs(human_ptr->data->energy);
+    if (target_active_ms > UINT32_MAX - now_ms) {
+        code = ERR_OUT_OF_RANGE;
+    } else {
+        code = dominoHumanStoreAddValidatedTask(&envelope_ptr->task, human_ptr->data, &task_id);
+        if (code == CODE_OK) {
+            envelope_ptr->task.behaviors_ptr = nullptr;
+        }
     }
     if (code == ERR_OUT_OF_RANGE || code == ERR_CAPACITY_EXCEEDED) {
         logPlanEvent(request_ptr->human_id, request_ptr->request_id, "rejected", "time_or_capacity_limit", code);

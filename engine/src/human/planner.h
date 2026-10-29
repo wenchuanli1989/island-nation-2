@@ -26,6 +26,7 @@ void dominoHumanPlannerStart(void);
 void dominoHumanPlannerNotifyTimeChanged(void);
 
 /** @brief 非阻塞复制并提交内嵌值快照；仅成功入队后请求成立。
+ * @pre 执行线程已结算当前需求并确认有效同楼许可、三槽为空、无非终态任务、容量未满且精力已到睡眠阈值。
  * @note 执行线程限制总在途量不超过 DOMINO_HUMAN_PLAN_INFLIGHT_MAX，每人最多一个有效请求；
  * Submit 仅由执行线程调用；在途上限保证入口有空间，协议破坏或基础设施故障直接打印 stderr 并 exit。
  * request_id 由执行线程单调分配，不能复用消息 ID。

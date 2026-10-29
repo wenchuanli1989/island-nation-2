@@ -30,7 +30,23 @@
       "crc32c": 0,
       "size": 0
     },
+    "asset": {
+      "crc32c": 0,
+      "size": 0
+    },
     "building": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "city": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "country": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "fork_road": {
       "crc32c": 0,
       "size": 0
     },
@@ -39,6 +55,26 @@
       "size": 0
     },
     "human_ai": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "island": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "movable_object": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "org": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "road": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "road_line": {
       "crc32c": 0,
       "size": 0
     }

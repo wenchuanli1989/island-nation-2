@@ -2,7 +2,9 @@
 
 #include "../host/entry.h"
 #include "../human/entry.h"
+#include "../human/store.h"
 #include "../social/entry.h"
+#include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
@@ -177,38 +179,12 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
     return obj;
 }
 
-/** @brief 新的持久化状态必须显式提供合法的无符号数，禁止缺省为零或窄化截断。 */
-static void readHumanUnsigned(yyjson_val* object, const char* key, uint64_t maximum, uint64_t* value_ptr) {
-    yyjson_val* value = yyjson_obj_get(object, key);
-    if (!yyjson_is_uint(value)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human field must be an unsigned integer: field=%s", key);
-    }
-    uint64_t parsed = yyjson_get_uint(value);
-    if (parsed > maximum) {
-        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human field exceeds its allowed range: field=%s value=%llu maximum=%llu", key,
-                               (unsigned long long)parsed, (unsigned long long)maximum);
-    }
-    *value_ptr = parsed;
-}
-
-#define HUMAN_READ_UINT(object, record, field, maximum)            \
-    do {                                                           \
-        uint64_t parsed_value;                                     \
-        readHumanUnsigned(object, #field, maximum, &parsed_value); \
-        (record)->field = (typeof((record)->field))parsed_value;   \
-    } while (0)
-
 static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data) {
-    memset(out_human_data, 0, sizeof(DominoHumanData));
-
-    HUMAN_READ_UINT(obj, out_human_data, human_id, UINT32_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, random_state, UINT64_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, schedule_revision, UINT32_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, needs_updated_at_ms, UINT32_MAX);
+    out_human_data->human_id = (typeof(out_human_data->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
+    out_human_data->random_state = (typeof(out_human_data->random_state))yyjson_get_uint(yyjson_obj_get(obj, "random_state"));
+    out_human_data->schedule_revision = (typeof(out_human_data->schedule_revision))yyjson_get_uint(yyjson_obj_get(obj, "schedule_revision"));
+    out_human_data->needs_updated_at_ms = (typeof(out_human_data->needs_updated_at_ms))yyjson_get_uint(yyjson_obj_get(obj, "needs_updated_at_ms"));
     yyjson_val* task_ids = yyjson_obj_get(obj, "task_id_list");
-    if (!yyjson_is_arr(task_ids)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human task IDs must be an array: human_id=%u", out_human_data->human_id);
-    }
     if (yyjson_arr_size(task_ids) > DOMINO_HUMAN_TASK_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%zu", out_human_data->human_id,
                                yyjson_arr_size(task_ids));
@@ -216,30 +192,11 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->task_count = (uint8_t)yyjson_arr_size(task_ids);
     for (size_t index = 0; index < out_human_data->task_count; index++) {
         yyjson_val* task_id = yyjson_arr_get(task_ids, index);
-        if (!yyjson_is_uint(task_id) || yyjson_get_uint(task_id) == 0) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human task ID must be a nonzero unsigned integer: human_id=%u index=%zu",
-                                   out_human_data->human_id, index);
-        }
-        if (yyjson_get_uint(task_id) > UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human task ID exceeds uint32 range: human_id=%u index=%zu value=%llu", out_human_data->human_id,
-                                   index, (unsigned long long)yyjson_get_uint(task_id));
-        }
         out_human_data->task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
     }
     yyjson_val* slots = yyjson_obj_get(obj, "active_task_id_list");
-    if (!yyjson_is_arr(slots) || yyjson_arr_size(slots) != DOMINO_HUMAN_TASK_CHANNEL_COUNT) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human active task IDs must contain one slot per channel: human_id=%u", out_human_data->human_id);
-    }
     for (size_t index = 0; index < DOMINO_HUMAN_TASK_CHANNEL_COUNT; index++) {
         yyjson_val* task_id = yyjson_arr_get(slots, index);
-        if (!yyjson_is_uint(task_id)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human active task ID must be an unsigned integer: human_id=%u channel=%zu",
-                                   out_human_data->human_id, index);
-        }
-        if (yyjson_get_uint(task_id) > UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "Human active task ID exceeds uint32 range: human_id=%u channel=%zu value=%llu",
-                                   out_human_data->human_id, index, (unsigned long long)yyjson_get_uint(task_id));
-        }
         out_human_data->active_task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
     }
     out_human_data->family_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "family_org_id"));
@@ -255,16 +212,16 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->sleep_address = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "sleep_address"));
     out_human_data->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
     out_human_data->health = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "health"));
-    HUMAN_READ_UINT(obj, out_human_data, energy, UINT8_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, food, UINT8_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, water, UINT8_MAX);
+    out_human_data->energy = (typeof(out_human_data->energy))yyjson_get_uint(yyjson_obj_get(obj, "energy"));
+    out_human_data->food = (typeof(out_human_data->food))yyjson_get_uint(yyjson_obj_get(obj, "food"));
+    out_human_data->water = (typeof(out_human_data->water))yyjson_get_uint(yyjson_obj_get(obj, "water"));
     out_human_data->emotion = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "emotion"));
     out_human_data->nutrition = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "nutrition"));
-    HUMAN_READ_UINT(obj, out_human_data, hygiene, UINT8_MAX);
+    out_human_data->hygiene = (typeof(out_human_data->hygiene))yyjson_get_uint(yyjson_obj_get(obj, "hygiene"));
     out_human_data->sleep = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "sleep"));
     out_human_data->exercise = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "exercise"));
-    HUMAN_READ_UINT(obj, out_human_data, recreation, UINT8_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, social, UINT8_MAX);
+    out_human_data->recreation = (typeof(out_human_data->recreation))yyjson_get_uint(yyjson_obj_get(obj, "recreation"));
+    out_human_data->social = (typeof(out_human_data->social))yyjson_get_uint(yyjson_obj_get(obj, "social"));
     out_human_data->family_love = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "family_love"));
     out_human_data->couple_love = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "couple_love"));
     out_human_data->friendship = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "friendship"));
@@ -286,7 +243,7 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->org_info = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "org_info"));
     out_human_data->hold_asset_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hold_asset_list_count"));
     out_human_data->own_asset_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "own_asset_list_count"));
-    HUMAN_READ_UINT(obj, out_human_data, current_building_id, UINT32_MAX);
+    out_human_data->current_building_id = (typeof(out_human_data->current_building_id))yyjson_get_uint(yyjson_obj_get(obj, "current_building_id"));
 
     serdeReadU32Array(yyjson_obj_get(obj, "own_asset_id_list"), out_human_data->own_asset_id_list, DOMINO_MAX_ASSET_COUNT_PER_HUMAN);
     serdeReadU32Array(yyjson_obj_get(obj, "hold_asset_id_list"), out_human_data->hold_asset_id_list, DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN);
@@ -346,8 +303,8 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->face_shape = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "face_shape"));
     out_human_data->body_shape = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "body_shape"));
     out_human_data->voice = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "voice"));
-    HUMAN_READ_UINT(obj, out_human_data, height, UINT8_MAX);
-    HUMAN_READ_UINT(obj, out_human_data, weight, UINT8_MAX);
+    out_human_data->height = (typeof(out_human_data->height))yyjson_get_uint(yyjson_obj_get(obj, "height"));
+    out_human_data->weight = (typeof(out_human_data->weight))yyjson_get_uint(yyjson_obj_get(obj, "weight"));
 
     out_human_data->hat = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hat"));
     out_human_data->hair = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hair"));
@@ -404,16 +361,9 @@ static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* hu
 
 /** @brief 仅解析局部值，成功后由加载循环同步提交 Human 与 Data。 */
 static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHumanData* out_human_data) {
-    memset(out_human, 0, sizeof(DominoHuman));
-    if (!yyjson_is_obj(obj)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human record must be an object");
-    }
-    HUMAN_READ_UINT(obj, out_human, human_id, UINT32_MAX);
-    if (out_human->human_id == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human ID must be nonzero");
-    }
+    out_human->human_id = (typeof(out_human->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
     out_human->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
-    HUMAN_READ_UINT(obj, out_human, movable_object_id, UINT32_MAX);
+    out_human->movable_object_id = (typeof(out_human->movable_object_id))yyjson_get_uint(yyjson_obj_get(obj, "movable_object_id"));
     if (out_human->movable_object_id == 0) {
         out_human->position_info.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
         out_human->position_info.y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
@@ -424,17 +374,8 @@ static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHuma
     out_human->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
 
     yyjson_val* data = yyjson_obj_get(obj, "data");
-    if (!yyjson_is_obj(data)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human data must be an object: human_id=%u", out_human->human_id);
-    }
     deserializeHumanData(data, out_human_data);
-    if (out_human->human_id != out_human_data->human_id) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human data ID disagrees with owner: human_id=%u data_human_id=%u", out_human->human_id,
-                               out_human_data->human_id);
-    }
 }
-
-#undef HUMAN_READ_UINT
 
 /** @brief 哈希插入成功后按需追加同索引 Human/Data；失败直接终止。 */
 static void loadOneHuman(yyjson_val* entity_value) {
@@ -446,17 +387,14 @@ static void loadOneHuman(yyjson_val* entity_value) {
     if (absent < 0) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human ID map entry: human_id=%u", human.human_id);
     }
-    if (absent == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_EXISTS, "Duplicate human in save data: human_id=%u", human.human_id);
-    }
     size_t index = kv_size(domino_all_human_list);
     kv_push(DominoHuman, domino_all_human_list, human);
     kv_push(DominoHumanData, domino_all_human_data_list, data);
     kh_val(dominoHumanIdMap, map_slot) = (uint32_t)index;
 }
 
-/** @brief 加载期检查 ID 引用；保存期同时复用查询结果检查已绑定指针。 */
-static void validateHumanReferences(bool check_bindings_flag) {
+/** @brief 业务线程已停止；保存前只审计一次人物身份、绑定指针与任务业务状态。 */
+void serdeValidateHumanForSave(void) {
     if (domino_all_human_list.n != domino_all_human_data_list.n || domino_all_human_list.n != kh_size(dominoHumanIdMap)) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human table counts disagree: humans=%zu data=%zu mapped=%u", domino_all_human_list.n,
                                domino_all_human_data_list.n, kh_size(dominoHumanIdMap));
@@ -464,8 +402,7 @@ static void validateHumanReferences(bool check_bindings_flag) {
     for (size_t index = 0; index < domino_all_human_list.n; index++) {
         const DominoHuman* human = &domino_all_human_list.a[index];
         const DominoHumanData* data = &domino_all_human_data_list.a[index];
-        if (human->human_id == 0 || data->human_id != human->human_id || dominoGetHumanByID(human->human_id) != human ||
-            (check_bindings_flag && human->data != data)) {
+        if (human->human_id == 0 || data->human_id != human->human_id || dominoGetHumanByID(human->human_id) != human || human->data != data) {
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human data or binding: index=%zu human_id=%u", index, human->human_id);
         }
         if (data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
@@ -474,7 +411,7 @@ static void validateHumanReferences(bool check_bindings_flag) {
         }
         if (human->movable_object_id != 0) {
             const DominoMovableObject* movable_object = dominoGetMovableObjectByID(human->movable_object_id);
-            if (!movable_object || (check_bindings_flag && human->movable_object != movable_object)) {
+            if (!movable_object || human->movable_object != movable_object) {
                 DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human movable-object reference: human_id=%u movable_object_id=%u", human->human_id,
                                        human->movable_object_id);
             }
@@ -484,10 +421,12 @@ static void validateHumanReferences(bool check_bindings_flag) {
                                    data->current_building_id);
         }
     }
+    domino_runtime_ms_t now_ms;
+    dominoTimeGetRuntimeMs(&now_ms);
+    dominoHumanStoreValidate(now_ms);
 }
 
 void serdeSaveHuman(const char* save_path) {
-    validateHumanReferences(true);
     /* 预检已确认数量等于使用 32 位计数的 ID map。 */
     uint32_t total = (uint32_t)domino_all_human_list.n;
     uint32_t shard_count = storageEntityShardCount(total, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA);
@@ -523,33 +462,19 @@ void serdeSaveHuman(const char* save_path) {
 }
 
 void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count) {
-    if (shard_count != storageEntityShardCount(total_count, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human shard count disagrees with total: total=%u shards=%u", total_count, shard_count);
-    }
     storageValidateLoadCount(total_count, sizeof(DominoHuman));
     storageValidateLoadCount(total_count, sizeof(DominoHumanData));
     for (uint32_t shard = 0; shard < shard_count; shard++) {
         yyjson_doc* doc = storageReadShardFile("human", shard, save_path);
-        yyjson_val* entities = serdeValidateShardRoot(yyjson_doc_get_root(doc), "human", shard);
+        yyjson_val* entities = yyjson_obj_get(yyjson_doc_get_root(doc), "entities");
         size_t index;
         size_t count;
         yyjson_val* entity;
         yyjson_arr_foreach(entities, index, count, entity) {
-            if (domino_all_human_list.n >= total_count) {
-                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human records exceed declared total: total=%u shard=%u", total_count, shard);
-            }
             loadOneHuman(entity);
         }
         yyjson_doc_free(doc);
     }
-    if (domino_all_human_list.n != total_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human record count disagrees with total: expected=%u actual=%zu", total_count,
-                               domino_all_human_list.n);
-    }
-}
-
-void serdeValidateHumanReferences(void) {
-    validateHumanReferences(false);
 }
 
 void serdeBindHumanReferences(void) {
