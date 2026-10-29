@@ -58,12 +58,6 @@ DOMINO_CODE dominoHumanStoreAddValidatedTask(const DominoTask* draft_ptr, Domino
  */
 DOMINO_CODE dominoHumanStoreRemoveTask(domino_task_id_t task_id);
 
-/** @brief 按人物清单统一校验任务及行为、唯一归属、父子/待交接关系、三通道及时间。
- * @pre 任务存储已 Init 且尚未 Destroy，无并发修改。
- * @note 用于保存前统一审计；调用前由 storage 检查人物/data 同序身份、ID 索引及任务清单容量。
- *       世界事实不一致均为致命错误，直接打印并终止进程；可信加载和 Start 不重复全量审计。
- */
-void dominoHumanStoreValidate(domino_runtime_ms_t now_ms);
 /** @brief 可信加载完成后清空人物调度运行态；保留任务自身的执行版本及持久事实，不执行业务动作。 */
 void dominoHumanStoreResetRuntime(void);
 

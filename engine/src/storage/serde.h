@@ -224,7 +224,7 @@ void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name);
  */
 void serdeSaveHuman(const char* save_path);
 void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count);
-/** @brief 保存前统一审计人物/data 身份、绑定指针与任务业务状态。 */
+/** @brief 保存前统一检查人物/data 身份、索引、容量、位置引用及绑定指针。 */
 void serdeValidateHumanForSave(void);
 void serdeBindHumanReferences(void);
 

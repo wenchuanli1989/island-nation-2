@@ -2,9 +2,7 @@
 
 #include "../host/entry.h"
 #include "../human/entry.h"
-#include "../human/store.h"
 #include "../social/entry.h"
-#include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
@@ -393,7 +391,7 @@ static void loadOneHuman(yyjson_val* entity_value) {
     kh_val(dominoHumanIdMap, map_slot) = (uint32_t)index;
 }
 
-/** @brief 业务线程已停止；保存前只审计一次人物身份、绑定指针与任务业务状态。 */
+/** @brief 业务线程已停止；保存前统一检查人物/data 身份、索引、容量、位置引用及绑定指针。 */
 void serdeValidateHumanForSave(void) {
     if (domino_all_human_list.n != domino_all_human_data_list.n || domino_all_human_list.n != kh_size(dominoHumanIdMap)) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human table counts disagree: humans=%zu data=%zu mapped=%u", domino_all_human_list.n,
@@ -421,9 +419,6 @@ void serdeValidateHumanForSave(void) {
                                    data->current_building_id);
         }
     }
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    dominoHumanStoreValidate(now_ms);
 }
 
 void serdeSaveHuman(const char* save_path) {
