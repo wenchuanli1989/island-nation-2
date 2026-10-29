@@ -119,12 +119,6 @@ static void ingestIncrementIds(yyjson_val* inc) {
 }
 
 void saveAllShards(const char* save_path) {
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        if (module_type->validate_save_fn) {
-            module_type->validate_save_fn();
-        }
-    }
     if (dominoMkdir(save_path) != 0) {
         int mkdir_errno = errno;
         DOMINO_EXIT_WITH_ERROR(ERR_DIRECTORY_CREATE, "failed to create save directory (path=%s, errno=%d)", save_path, mkdir_errno);

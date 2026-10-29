@@ -16,8 +16,6 @@ void dominoNavModuleInitAfter(void) {
 
 void dominoNavModuleDestroyBefore(void) {
     if (navStateNeedsCompaction()) {
-        navStateValidateRuntimeData();
-
         navStateInvalidateAllPathCaches();
         navPersistenceCompact();
         navStateMarkCanonical();

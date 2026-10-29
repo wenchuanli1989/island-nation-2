@@ -146,6 +146,10 @@ static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task
 
 /** @brief 人物 AI 事实归属 human.data；此分片仅保存人物 ID 及其任务和行为。 */
 static yyjson_mut_val* serializeAI(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
+    if (human_data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI task count exceeds capacity: human_id=%u count=%u", human_data->human_id,
+                               human_data->task_count);
+    }
     yyjson_mut_val* object = yyjson_mut_obj(doc);
     if (!object || !yyjson_mut_obj_add_uint(doc, object, "human_id", human_data->human_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI record fields");
@@ -211,8 +215,10 @@ void serdeBindHumanAIReferences(void) {
 }
 
 void serdeSaveHumanAI(const char* save_path) {
-    /* 引用预检已确认人物数量等于使用 32 位计数的 ID map。 */
     const size_t total_count = kv_size(domino_all_human_list);
+    if (total_count > UINT32_MAX) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI record count exceeds storage limit: count=%zu", total_count);
+    }
     uint32_t shard_count = storageEntityShardCount((uint32_t)total_count, DOMINO_STORAGE_SHARD_HUMAN_AI);
     for (uint32_t shard = 0; shard < shard_count; shard++) {
         yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);

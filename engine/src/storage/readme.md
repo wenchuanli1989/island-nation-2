@@ -2,11 +2,11 @@
 
 本文档说明 `engine/src/storage` 的当前实现。Storage 子系统负责把引擎内存态保存到 `g_domino_engine_launch_config.storage_path` 指向的存档目录，并在引擎启动时从该目录恢复。
 
-加载、保存中的 IO、分配、JSON 解析、完整性及保存前业务审计错误在检测处调用 `DOMINO_EXIT_WITH_ERROR`，同步打印上下文和错误码到 stderr，再执行 `exit(EXIT_FAILURE)`。不再逐层返回致命错误或等待宿主终止；失败保留已修改的内存和磁盘步骤，不回滚或重试。成功路径继续释放临时 JSON、缓冲区和索引，并完成正常存档提交。
+加载、保存中的 IO、分配、JSON 解析、完整性及容量范围错误在检测处调用 `DOMINO_EXIT_WITH_ERROR`，同步打印上下文和错误码到 stderr，再执行 `exit(EXIT_FAILURE)`。不再逐层返回致命错误或等待宿主终止；失败保留已修改的内存和磁盘步骤，不回滚或重试。成功路径继续释放临时 JSON、缓冲区和索引，并完成正常存档提交。
 
 根 `meta.json` 不存在表示新世界，`metaLoad()` 返回 `nullptr`；已有存档必须完整包含当前注册表的全部 13 个模块 meta。加载时或提交完成后的旧备份清理失败不影响 active 存档，统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不进入日志队列，输出后继续。再次提交前必须成功清理旧备份并刷新目录；失败由提交边界直接报告致命错误一次，避免先打印非致命告警再打印退出错误。
 
-加载契约明确限定为：当前版本、正确运行数据、同一次完整持久化得到的存档。加载只恢复字段、容器、ID 映射和当前进程的指针，不重新验证字段类型、窄化范围、重复 ID、元数据计数一致性或跨模块关系。任务与行为的正确性由可信加载及运行时输入、状态变更边界保证，保存前不再重复全量审计。人物保存预检仍检查身份、索引、容量、绑定指针及位置引用；导航在整理保存布局前审计路网。
+加载契约明确限定为：当前版本、正确运行数据、同一次完整持久化得到的存档。加载只恢复字段、容器、ID 映射和当前进程的指针，不重新验证字段类型、窄化范围、重复 ID、元数据计数一致性或跨模块关系。实体身份、索引、绑定指针、引用及业务状态的正确性由可信加载及运行时输入、状态变更边界保证，保存前不再重复审计。保存直接序列化当前事实；导航仍按需整理数组、重建分段并刷新 ID 索引，实际写出所需的容量与算术范围检查保留在使用边界。
 
 版本拒绝、可选 CRC32C/size 策略、JSON 解析及构造返回值、真实分配失败、容器容量、分配大小溢出、路径格式化与磁盘操作结果继续检查。JSON 语法错误为 `ERR_INVALID_JSON`，版本不支持为 `ERR_UNSUPPORTED_VERSION`，CRC32C 不匹配为 `ERR_CHECKSUM_MISMATCH`；容量超限、内存大小溢出和路径缓冲不足分别为 `ERR_CAPACITY_EXCEEDED`、`ERR_MEMORY_OVERFLOW` 和 `ERR_BUFFER_TOO_SMALL`。这些错误使用本次操作的结果，不因持久化内容可信而省略。
 
@@ -47,7 +47,7 @@ storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺
 1. 使用引擎初始化时已校验并持有的 `storage_path`。
 2. `storageSubModuleInit()` 分配本轮保存的临时分片摘要缓存；空的模块记录、计数及校验策略由静态初值或上一轮 Destroy 保证。
 3. `txnPrepareSaveParent()` 递归创建目标父目录，`txnBuildStagingPath()` 再生成隐藏 staging 路径：`.{base}.__txn__.{ms}-{pid}`。
-4. `saveAllShards(staging_path)` 先执行注册的 `validate_save_fn`（人物身份、索引、容量、绑定指针及位置引用预检只执行一次），再创建 staging 目录并按 `g_storage_module_types[]` 写所有模块数据分片；`regions` 是注册表首项，对应固定单文件 `regions.json`。
+4. `saveAllShards(staging_path)` 创建 staging 目录并按 `g_storage_module_types[]` 写所有模块数据分片；`regions` 是注册表首项，对应固定单文件 `regions.json`。
 5. `metaSave(staging_path)` 写所有 `{type}.meta.json`，然后写根 `meta.json`。
 6. `txnCommitReplace(staging_path, save_path)` 先恢复并持久化 active，清理已有旧备份，再刷 staging 目录并提交；若原存档存在，先移动到 `{save_path}.prev`，每次 rename 后都刷父目录。
 7. active rename 并刷父目录成功后，删除 `.prev` 并再次刷父目录；这两个清理步骤失败仅通过 `DOMINO_PRINT_MESSAGE` 直接向 stdout 输出非致命诊断，已完成的提交保留，交给下一次 Init 收敛状态。
@@ -210,12 +210,12 @@ root
 - 多个分组可以交错追加；读取增量尾时按 `region_index + type + status` 过滤，因此无需把尾部再次分组排序。
 - 计数归零的分组在运行期继续保留，后续新增仍复用原增量边界；直到保存压实时才删除空分组。
 - 道路增删在修改点检查分组和计数范围，实体、ID map 和邻接关系修改成功后统一增减计数；新分组才在此时追加。
-- 新增分组时不扫描全局实体数组验证分组是否遗漏；加载直接恢复可信布局，保存前校验实体关系并从实体数组重建分组。
+- 新增分组时不扫描全局实体数组验证分组是否遗漏；加载直接恢复可信布局，保存前从实体数组重建分组，复用业务边界已保证的实体关系。
 - 增删会使受影响的 Floyd 缓存失效，并标记布局需要整理；导航直接消费当前基础段和增量尾。
 
 保存前 `dominoNavModuleDestroyBefore()` 会先整理 fork road/road 数组：活跃实体按 `region_index + type + id` 排序并位于数组
 前缀，逻辑删除项位于后缀。排序后单遍扫描活跃前缀，用 `kv_push` 生成分组，再统一填写增量边界；不再为容量或活跃数量预扫实体。
-整理完成后直接刷新已有 ID map 的下标；实体和映射的一致性在排序前校验，刷新不重复检查。因此落盘的每个 segment 必须满足：
+整理完成后直接刷新已有 ID map 的下标；实体和映射的一致性由可信加载及运行期增删入口保证，保存时不再重复扫描校验。因此落盘的每个 segment 必须满足：
 
 - `init_index/init_count` 无缝覆盖该分组在活跃前缀中的连续区间。
 - `increment_index` 等于整个活跃前缀长度；当前保存时已将运行期增量整理进基础段。
@@ -319,21 +319,21 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 - 非移动对象人类会保存 `position_x/y/z`。
 - 每个人物必须提供独占的嵌套 `data` 对象，对应 4096 字节的 `DominoHumanData`；`data.human_id` 必须与人物的非零 `human_id` 一致。身高、体重、需求、情绪、财富、组织关系、当前位置和导航地址等属性均位于其中，人物 `task_id_list`、`active_task_id_list`、`schedule_revision`、`needs_updated_at_ms` 和 `random_state` 也由此保存。
 - 六项需求 `energy/food/water/hygiene/recreation/social` 保存 `uint8_t` 的 0～100 整数分，`DOMINO_HUMAN_NEED_MAX=100`，不保存缩放值或独立小数余量；例如 `energy=20` 表示 20 分精力。正确存档保证六项需求和 `height/weight` 的字段类型与范围；后两者范围仍为 `0..UINT8_MAX`。`needs_updated_at_ms` 保留累计未冻结现实毫秒，后续自然变化仅补结算完整分钟，存档保留未满一分钟的待结算时间，不将结算基准强制推进到保存时刻。
-- 人物与 data 数组严格一一对应且同序，共用 `human_id -> array index` 映射，不维护独立 data／AI 索引。加载先登记数据，全部主表稳定后直接绑定 `human->data`；保存核对两数组数量、同索引 ID 及指针一致。人物 data 不允许缺失或为 null。指针、预留 `other_info`、人物核心调度标识及 data 的 `pending_plan_reasons` 不进入存档；加载只重置运行字段，不清空持久事实。
-- `data.task_id_list` 只保存有效的持有任务 ID，保留提交顺序；JSON 数组长度恢复为 `uint8_t task_count`，不另存数量，不写未使用尾部。数组长度最多 32，加载保留容量检查，非零 ID 与去重由可信存档及运行期任务增删入口保证；保存前保留有效数量的容量检查。有效前缀之外的尾部不属于持久数据。三个活动槽完整写出，包括零值；加载直接读取三个槽位，不使用遇 0 终止的普通前缀数组辅助函数。
+- 人物与 data 数组严格一一对应且同序，共用 `human_id -> array index` 映射，不维护独立 data／AI 索引。加载先登记数据，全部主表稳定后直接绑定 `human->data`；同序身份及绑定关系由可信加载和运行期修改入口维护，保存直接使用同索引记录。人物 data 不允许缺失或为 null。指针、预留 `other_info`、人物核心调度标识及 data 的 `pending_plan_reasons` 不进入存档；加载只重置运行字段，不清空持久事实。
+- `data.task_id_list` 只保存有效的持有任务 ID，保留提交顺序；JSON 数组长度恢复为 `uint8_t task_count`，不另存数量，不写未使用尾部。数组长度最多 32，加载保留容量检查，非零 ID 与去重由可信存档及运行期任务增删入口保证；序列化任务 ID 数组前保留有效数量的容量检查。有效前缀之外的尾部不属于持久数据。三个活动槽完整写出，包括零值；加载直接读取三个槽位，不使用遇 0 终止的普通前缀数组辅助函数。
 
 `serde_human_ai.c`：
 
 - 每个人物恰有一条 `{human_id, tasks}` 记录，人物任务嵌套在 `tasks` 数组中，每个任务再嵌套自己的行为块；`tasks` 按 `data.task_id_list` 的有效前缀顺序保存；加载按 ID 导入可信任务，不重新排序或补齐人物任务清单，也不分配人物去重位图。本模块按 128 人分片，不重复保存人物需求或随机状态。
 - 任务与行为保存状态、计划／实际时间、有效进度、行为游标、父子关系及停止意图。任务另保存 `channel_index`（0 为主通道，1、2 为同级次通道），三者均允许任意已定义任务类型，不通过类型推断所属通道。所有业务时间均为 32 位累计未冻结现实毫秒；0 和 `UINT32_MAX` 都是合法数值，由状态和显式标志区分是否启动或结束。
 - `DominoTask` 直接保存 `behaviors_ptr` 和 `execution_version`，serde 逐字段写入任务事实，并将指针指向的行为内容写入嵌套数组，不写裸指针或执行版本。加载重新分配连续行为块，填入任务的 `behaviors_ptr` 后交给 `dominoHumanStoreImportTask()`；导入依赖调用方保证任务池已初始化、任务身份正确、独占行为块有效且 ID 唯一，只检查池容量与实际资源操作。成功后由任务池拥有该独占块；导入返回容量错误或资源操作失败时，serde 直接打印到 stderr 后 exit。运行期提交层先校验草案语义、人物归属和目标建筑，再由 `dominoHumanStoreAddValidatedTask()` 复用已取得的人物 data，检查容量、版本上限、ID 分配和入池资源错误。每次导入将该任务的 `uint64_t execution_version` 初始化为 1，新建任务同样从 1 开始，随后重置人物运行态不修改任务版本。后续由执行线程在检查 `UINT64_MAX` 后直接递增本任务版本，达到上限则返回 `ERR_OUT_OF_RANGE` 且版本不变；不同任务无需保持版本不同，也不增加全局版本计数器。执行器在消费异步结果时重新核对请求身份、版本和当前资格。
-- 加载完成后只绑定人物/位置指针并重置人物调度字段，不再调用全世界语义审计。保存前 `serdeValidateHumanForSave()` 统一检查人物/data 同序身份、索引、容量、绑定指针及位置引用；Human 与 HumanAI 分片写出复用这一轮预检结果，不重复人物扫描。任务与行为语义、唯一归属、父子及待交接关系、活动槽、行为游标和持久时间关系由可信加载及运行时输入、状态变更边界保证，保存前不再全量复查。
+- 加载完成后只绑定人物/位置指针并重置人物调度字段，不再调用全世界语义审计。人物/data 同序身份、索引、绑定指针、位置引用以及任务与行为语义、唯一归属、父子及待交接关系、活动槽、行为游标和持久时间关系由可信加载及运行时输入、状态变更边界保证。Human 与 HumanAI 直接按当前记录写出分片，不另设保存前数据审计；数量窄化和固定数组容量仍在写出使用边界检查。
 - JSON 字段类型、窄化范围与关系完整性不在读取时复查；行为数、人物任务数组长度、任务池容量、聚合分配大小和行为块分配结果仍检查。未启动或未结束状态下不生效的时间字段按原值保留；有效进度与关键引用的约束由可信加载及运行时输入、状态变更边界保证。
 - 已定义的任务／行为类型统一保存和加载，任务可包含多个行为，公共状态、时间和游标关系由可信加载及运行时输入、状态变更边界保证。`parameters` 按行为类型读写：睡眠保存 `target_active_ms`，其余类型目前保存空对象，随专有参数定义扩充。当前执行器只执行独立单行为核心睡眠，无需建筑或地点许可；退出时停止全部业务线程后统一结算，加载后直接续跑并重建计时唤醒。通用任务执行与其他地点服务资格仍待扩充。
 
 `serde_social.c`：
 
-- `org`、`building`、`city`、`country` 都有可选嵌套 data，保存前会校验 `data_id` 与 data 指针一致。
+- `org`、`building`、`city`、`country` 都有可选嵌套 data，`data_id` 与绑定指针的一致性由可信加载及运行期修改入口维护，保存直接写出已有绑定。
 - `asset` 可引用 `movable_object`；无移动对象时保存 `position_x/y/z`。
 
 `serde_nav.c`：
@@ -352,7 +352,7 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 3. 在 `serde_registry.c` 增加 `countX()`。
 4. 在 `g_storage_module_types[]` 中按 `type_name` 字典序加入一行；`regions` 固定保留在首位。
 5. 在 `serde.h` 声明 `serdeSaveX()` 与 `serdeLoadX()`。
-6. 如有跨模块 ID 引用，注册不可失败的 `bind_references_fn`，在全部主表稳定后绑定可信 ID；如需统一保存前审计，注册只读 `validate_save_fn`，其结果供本轮写出复用。
+6. 如有跨模块 ID 引用，注册不可失败的 `bind_references_fn`，在全部主表稳定后绑定可信 ID；运行时输入及状态变更边界负责维护引用和业务约束，保存复用这些结论。
 7. 如需模块 meta 扩展字段，在 `g_storage_module_types[]` 中配置 `write_meta_extra_fn` / `read_meta_extra_fn`。
 
 ## 当前边界

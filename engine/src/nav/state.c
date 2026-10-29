@@ -7,9 +7,7 @@
 #include <stdlib.h>
 
 #include "domino_shared_common.h"
-#include "graph.h"
 #include "klib/kvec.h"
-#include "road_id.h"
 #include "storage_view.h"
 
 DominoForkRoadVec domino_all_fork_road_list;
@@ -145,67 +143,11 @@ void navStateValidateLoadedCapacity(void) {
     }
 }
 
-void navStateValidateRuntimeData(void) {
-    const size_t fork_count = kv_size(domino_all_fork_road_list);
-    const size_t road_count = kv_size(domino_all_road_list);
-    if (kh_size(dominoForkRoadIdMap) != fork_count || kh_size(dominoRoadIdMap) != road_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "nav entity and ID map counts differ: forks=%zu fork_map=%zu roads=%zu road_map=%zu", fork_count,
-                               (size_t)kh_size(dominoForkRoadIdMap), road_count, (size_t)kh_size(dominoRoadIdMap));
-    }
-
-    uint64_t adjacency_edge_count = 0U;
-    for (size_t index = 0U; index < fork_count; index++) {
-        const DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, index);
-        const khint_t map_slot = dominoForkRoadIdMap_get(dominoForkRoadIdMap, fork_road->id);
-        if (fork_road->id == 0U || fork_road->id == UINT32_MAX || !kh_exist(dominoForkRoadIdMap, map_slot) ||
-            kh_val(dominoForkRoadIdMap, map_slot) != index || fork_road->to_fork_road_count > MAX_EDGES_PER_VERTEX ||
-            (fork_road->status != 0U && fork_road->to_fork_road_count != 0U)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid fork road ID, mapping or adjacency: index=%zu id=%" PRIu32 " status=%u edges=%u", index,
-                                   fork_road->id, (unsigned)fork_road->status, (unsigned)fork_road->to_fork_road_count);
-        }
-
-        adjacency_edge_count += fork_road->to_fork_road_count;
-    }
-
-    uint64_t passable_road_count = 0U;
-    for (size_t index = 0U; index < road_count; index++) {
-        const DominoRoad* road = &kv_A(domino_all_road_list, index);
-        const domino_fork_road_id_t start_id = navExtractRoadStartForkRoadId(road->id);
-        const domino_fork_road_id_t target_id = navExtractRoadTargetForkRoadId(road->id);
-        const khint_t map_slot = dominoRoadIdMap_get(dominoRoadIdMap, road->id);
-        if (start_id == target_id || !kh_exist(dominoRoadIdMap, map_slot) || kh_val(dominoRoadIdMap, map_slot) != index) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "invalid road endpoints or ID mapping: index=%zu id=%" PRIu64, index, road->id);
-        }
-        DominoForkRoad* start = nullptr;
-        DominoForkRoad* target = nullptr;
-        if (navStateFindForkRoadById(start_id, &start) == ERR_NOT_FOUND || navStateFindForkRoadById(target_id, &target) == ERR_NOT_FOUND) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "road references missing fork road: road=%" PRIu64 " start=%" PRIu32 " target=%" PRIu32,
-                                   road->id, start_id, target_id);
-        }
-        if (road->status != 0U) {
-            continue;
-        }
-        const bool is_passable = dominoNavEdgeWeightIsPassable(road->weight[0]);
-        if (start->status != 0U || target->status != 0U || start->region_index != road->region_index || target->region_index != road->region_index ||
-            start->type != road->type || target->type != road->type || navGraphHasEdge(start, target_id) != is_passable) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "road endpoints, network or adjacency are inconsistent: road=%" PRIu64 " region=%u network=%u",
-                                   road->id, (unsigned)road->region_index, (unsigned)road->type);
-        }
-        passable_road_count += is_passable ? 1U : 0U;
-    }
-    /* ID map 的精确下标校验保证 road ID 唯一；每条可通行 road 都匹配一条不同的出边。
-     * 总数相等即不存在额外或重复出边，无需再逐边查询端点和 road。 */
-    if (adjacency_edge_count != passable_road_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "nav adjacency count differs from passable road count: edges=%" PRIu64 " roads=%" PRIu64,
-                               adjacency_edge_count, passable_road_count);
-    }
-}
-
 void navStateRefreshIdMapIndices(void) {
     const size_t fork_count = kv_size(domino_all_fork_road_list);
     const size_t road_count = kv_size(domino_all_road_list);
 
-    /* 排序前已校验数组与 ID map 的一致性，排序只改变实体所在的数组下标。 */
+    /* 可信加载与增删入口维护实体和 ID map；排序只改变实体所在的数组下标。 */
     for (uint32_t index = 0U; index < (uint32_t)fork_count; index++) {
         DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, index);
         const khint_t slot = dominoForkRoadIdMap_get(dominoForkRoadIdMap, fork_road->id);

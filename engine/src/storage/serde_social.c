@@ -10,7 +10,7 @@
 
 /*
  * social 中 org/building/city/country 都采用外层实体 + 可选 data 嵌套的布局。
- * 保存时校验 data_id、data 指针和全局 data_id map 指向同一份数据；加载直接重建可信存档的数据向量和 map。
+ * 保存复用业务边界维护的实体与 data 绑定关系；加载直接重建可信存档的数据向量和 map。
  */
 
 static yyjson_mut_val* serializeOrgData(yyjson_mut_doc* doc, const DominoOrgData* org_data) {
@@ -60,17 +60,7 @@ static yyjson_mut_val* serializeOrg(yyjson_mut_doc* doc, const DominoOrg* org) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize organization JSON: id=%u, data_id=%u", org->id, org->data_id);
     }
 
-    if (!org->data && org->data_id != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Organization data record is missing: id=%u, data_id=%u", org->id, org->data_id);
-    }
-    if (org->data && org->data_id == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Organization data record has no data ID: id=%u, data_id=%u", org->id, org->data_id);
-    }
     if (org->data) {
-        if (dominoGetOrgDataByID(org->data_id) != org->data) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Organization data reference does not match the data ID index: id=%u, data_id=%u", org->id,
-                                   org->data_id);
-        }
         if (!yyjson_mut_obj_add_val(doc, obj, "data", serializeOrgData(doc, org->data))) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize organization JSON: id=%u, data_id=%u", org->id, org->data_id);
         }
@@ -176,17 +166,7 @@ static yyjson_mut_val* serializeBuilding(yyjson_mut_doc* doc, const DominoBuildi
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize building JSON: id=%u, data_id=%u", building->id, building->data_id);
     }
 
-    if (!building->data && building->data_id != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Building data record is missing: id=%u, data_id=%u", building->id, building->data_id);
-    }
-    if (building->data && building->data_id == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Building data record has no data ID: id=%u, data_id=%u", building->id, building->data_id);
-    }
     if (building->data) {
-        if (dominoGetBuildingDataByID(building->data_id) != building->data) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Building data reference does not match the data ID index: id=%u, data_id=%u", building->id,
-                                   building->data_id);
-        }
         if (!yyjson_mut_obj_add_val(doc, obj, "data", serializeBuildingData(doc, building->data))) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize building JSON: id=%u, data_id=%u", building->id, building->data_id);
         }
@@ -292,17 +272,7 @@ static yyjson_mut_val* serializeCity(yyjson_mut_doc* doc, const DominoCity* city
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize city JSON: id=%u, data_id=%u", city->id, city->data_id);
     }
 
-    if (!city->data && city->data_id != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "City data record is missing: id=%u, data_id=%u", city->id, city->data_id);
-    }
-    if (city->data && city->data_id == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "City data record has no data ID: id=%u, data_id=%u", city->id, city->data_id);
-    }
     if (city->data) {
-        if (dominoGetCityDataByID(city->data_id) != city->data) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "City data reference does not match the data ID index: id=%u, data_id=%u", city->id,
-                                   city->data_id);
-        }
         if (!yyjson_mut_obj_add_val(doc, obj, "data", serializeCityData(doc, city->data))) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize city JSON: id=%u, data_id=%u", city->id, city->data_id);
         }
@@ -405,17 +375,7 @@ static yyjson_mut_val* serializeCountry(yyjson_mut_doc* doc, const DominoCountry
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize country JSON: id=%u, data_id=%u", country->id, country->data_id);
     }
 
-    if (!country->data && country->data_id != 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Country data record is missing: id=%u, data_id=%u", country->id, country->data_id);
-    }
-    if (country->data && country->data_id == 0) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Country data record has no data ID: id=%u, data_id=%u", country->id, country->data_id);
-    }
     if (country->data) {
-        if (dominoGetCountryDataByID(country->data_id) != country->data) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Country data reference does not match the data ID index: id=%u, data_id=%u", country->id,
-                                   country->data_id);
-        }
         if (!yyjson_mut_obj_add_val(doc, obj, "data", serializeCountryData(doc, country->data))) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize country JSON: id=%u, data_id=%u", country->id, country->data_id);
         }
@@ -485,17 +445,6 @@ static yyjson_mut_val* serializeAsset(yyjson_mut_doc* doc, const DominoAsset* as
     }
 
     domino_movable_object_id_t movable_object_id = asset->movable_object_id;
-    if (movable_object_id != 0) {
-        DominoMovableObject* movable_object = dominoGetMovableObjectByID(movable_object_id);
-        if (!movable_object) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Asset movable object is missing: asset_id=%u, movable_object_id=%u", asset->id,
-                                   movable_object_id);
-        }
-        if (movable_object != asset->movable_object) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Asset movable object reference does not match its ID: asset_id=%u, movable_object_id=%u",
-                                   asset->id, movable_object_id);
-        }
-    }
     if (!yyjson_mut_obj_add_uint(doc, obj, "movable_object_id", movable_object_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize asset JSON: asset_id=%u", asset->id);
     }

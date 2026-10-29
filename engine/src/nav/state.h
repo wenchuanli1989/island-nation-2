@@ -38,13 +38,9 @@ void navStateMarkCanonical(void);
  */
 void navStateValidateLoadedCapacity(void);
 
-/**
- * @brief 保存前只读校验实体、ID 映射和邻接关系，不一致时直接打印到 stderr 并 exit。
- * @note Nav 已初始化；加载校验和新增入口保证实体数量不超过 DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX。
+/** @brief 刷新 fork road 与 road ID map 的数组下标；仅在保存前实体 canonical 排序后调用。
+ * @pre 可信加载与增删入口保证实体身份、ID map 完整及数量在 Nav 上限内；调用期间无并发修改。
  */
-void navStateValidateRuntimeData(void);
-
-/** @brief 刷新 fork road 与 road ID map 的数组下标；仅在保存前图校验完成、实体 canonical 排序后调用。 */
 void navStateRefreshIdMapIndices(void);
 
 /**

@@ -103,7 +103,7 @@ static void deserializeForkRoad(yyjson_val* obj, DominoForkRoad* out_fork_road) 
     serdeReadU8Array(yyjson_obj_get(obj, "num"), out_fork_road->num, 2);
 }
 
-/** @brief 写出转折点；serializeRoad 已校验堆存储情况下的 corner_point_ptr。 */
+/** @brief 写出转折点；可信加载及业务边界保证与数量对应的内联或堆存储有效。 */
 static yyjson_mut_val* serdeWriteCornerPoints(yyjson_mut_doc* doc, const DominoRoad* road) {
     yyjson_mut_val* arr = yyjson_mut_arr(doc);
     if (!arr) {
@@ -156,9 +156,6 @@ static void serdeReadCornerPoints(yyjson_val* json_corner_points, DominoRoad* ou
 }
 
 static yyjson_mut_val* serializeRoad(yyjson_mut_doc* doc, const DominoRoad* road) {
-    if (road->corner_point_count > MIN_CORNER_POINTS_PER_ROAD && !road->corner_point_ptr) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Road corner point storage is missing: id=%llu", (unsigned long long)road->id);
-    }
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
     if (!obj) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate entity JSON data");

@@ -2,7 +2,6 @@
 
 #include "../host/entry.h"
 #include "../human/entry.h"
-#include "../social/entry.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
@@ -10,6 +9,10 @@
 
 /** @brief 保存人物扩展数据与 AI 事实；任务内容由 human_ai 模块保存，调度运行字段不落盘。 */
 static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
+    if (human_data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%u", human_data->human_id,
+                               human_data->task_count);
+    }
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
 
     if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human_data->human_id) ||
@@ -320,7 +323,7 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->bag = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "bag"));
 }
 
-/** @brief 序列化已完成引用及绑定指针预检的同索引 Human/Data；调用期间实体主表保持不变。 */
+/** @brief 序列化同索引 Human/Data；可信加载及业务边界保证配对与引用，调用期间实体主表保持不变。 */
 static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* human, const DominoHumanData* human_data) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
 
@@ -391,39 +394,12 @@ static void loadOneHuman(yyjson_val* entity_value) {
     kh_val(dominoHumanIdMap, map_slot) = (uint32_t)index;
 }
 
-/** @brief 业务线程已停止；保存前统一检查人物/data 身份、索引、容量、位置引用及绑定指针。 */
-void serdeValidateHumanForSave(void) {
-    if (domino_all_human_list.n != domino_all_human_data_list.n || domino_all_human_list.n != kh_size(dominoHumanIdMap)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Human table counts disagree: humans=%zu data=%zu mapped=%u", domino_all_human_list.n,
-                               domino_all_human_data_list.n, kh_size(dominoHumanIdMap));
-    }
-    for (size_t index = 0; index < domino_all_human_list.n; index++) {
-        const DominoHuman* human = &domino_all_human_list.a[index];
-        const DominoHumanData* data = &domino_all_human_data_list.a[index];
-        if (human->human_id == 0 || data->human_id != human->human_id || dominoGetHumanByID(human->human_id) != human || human->data != data) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human data or binding: index=%zu human_id=%u", index, human->human_id);
-        }
-        if (data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%u", human->human_id,
-                                   data->task_count);
-        }
-        if (human->movable_object_id != 0) {
-            const DominoMovableObject* movable_object = dominoGetMovableObjectByID(human->movable_object_id);
-            if (!movable_object || human->movable_object != movable_object) {
-                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human movable-object reference: human_id=%u movable_object_id=%u", human->human_id,
-                                       human->movable_object_id);
-            }
-        }
-        if (data->current_building_id != 0 && !dominoGetBuildingByID(data->current_building_id)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "Invalid human building reference: human_id=%u building_id=%u", human->human_id,
-                                   data->current_building_id);
-        }
-    }
-}
-
 void serdeSaveHuman(const char* save_path) {
-    /* 预检已确认数量等于使用 32 位计数的 ID map。 */
-    uint32_t total = (uint32_t)domino_all_human_list.n;
+    const size_t total_count = kv_size(domino_all_human_list);
+    if (total_count > UINT32_MAX) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human count exceeds storage limit: count=%zu", total_count);
+    }
+    uint32_t total = (uint32_t)total_count;
     uint32_t shard_count = storageEntityShardCount(total, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA);
     for (uint32_t shard = 0; shard < shard_count; shard++) {
         uint32_t start = shard * DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA;

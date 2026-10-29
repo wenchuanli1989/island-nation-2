@@ -220,12 +220,10 @@ void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name);
  * @brief 以下内部序列化回调由 storage 按注册表顺序调用。
  * @pre 世界容器和 ID 映射已由引擎初始化；加载从空容器开始，每类只调用一次，保存发生在世界资源释放前。
  * @note 加载信任当前格式存档的字段、数量、ID 和引用；仍检查本次资源分配、容量和 IO 失败。
- * 保存回调仅由 saveAllShards 调用，全部保存前审计完成后才开始写出分片。
+ * 保存回调仅由 saveAllShards 调用，直接写出业务边界已保证正确的运行时数据，保留容量及本次资源操作检查。
  */
 void serdeSaveHuman(const char* save_path);
 void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count);
-/** @brief 保存前统一检查人物/data 身份、索引、容量、位置引用及绑定指针。 */
-void serdeValidateHumanForSave(void);
 void serdeBindHumanReferences(void);
 
 void serdeSaveHumanAI(const char* save_path);

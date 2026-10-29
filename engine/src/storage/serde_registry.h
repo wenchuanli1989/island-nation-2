@@ -35,9 +35,6 @@ typedef void (*StorageWriteModuleMetaExtraFn)(yyjson_mut_doc* doc, yyjson_mut_va
 /** @brief 读取当前格式可信元数据中的模块扩展字段。 */
 typedef void (*StorageReadModuleMetaExtraFn)(yyjson_val* root, const char* type_name);
 
-/** @brief 保存前审计当前业务状态；不得修改实体或其他模块状态。 */
-typedef void (*StorageValidateModuleForSaveFn)(void);
-
 /** @brief 从可信持久化 ID 绑定运行时引用；该操作不分配资源且不可失败。 */
 typedef void (*StorageBindModuleReferencesFn)(void);
 
@@ -50,7 +47,6 @@ typedef struct {
     void (*load_fn)(const char* save_path, uint32_t total, uint32_t shard_count);
     StorageWriteModuleMetaExtraFn write_meta_extra_fn;
     StorageReadModuleMetaExtraFn read_meta_extra_fn;
-    StorageValidateModuleForSaveFn validate_save_fn;
     StorageBindModuleReferencesFn bind_references_fn;
     uint32_t max_per_shard;
 } StorageModuleType;

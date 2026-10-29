@@ -123,7 +123,6 @@ const StorageModuleType g_storage_module_types[] = {
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveHumanAI,
         .load_fn = serdeLoadHumanAI,
-        .validate_save_fn = serdeValidateHumanForSave,
         .bind_references_fn = serdeBindHumanAIReferences,
     },
     {

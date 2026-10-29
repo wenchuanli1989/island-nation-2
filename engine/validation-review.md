@@ -16,12 +16,12 @@
 | --- | --- |
 | storage meta/shard → deserialize | 删除重复类型、范围、分片数量、ID 唯一性和引用内容审计；当前完整格式为全部十三个模块生成 meta，空实体模块也保留 meta。保留资源容量、解析返回值与 IO 检查。 |
 | storage → references/reset | 主表及索引全部稳定后绑定指针并复位人物运行字段；不保留校验专用 seen 数组或 validated 标志。 |
-| storage save | 注册表在分片写入前统一审计 Human/Data 同序身份、绑定、位置引用及任务图一次；Human 和 HumanAI 序列化复用该结果。 |
+| storage save | 删除保存前的实体身份、绑定、引用及业务状态审计和注册表校验回调；直接序列化业务边界维护的事实，保留写出所需的容量、算术范围、JSON 构造与 IO 检查。 |
 | human Start／首次推进 | Start 只创建线程并等待就绪；删除 validateFrozenWorld，不全量复核持久事实。首次运行分批恢复执行，复用现有任务遍历拒绝尚不支持的挂起恢复；活动任务支持范围由 getActiveTask 检查，截止点范围在实际计算时检查。 |
 | planner → executor | 请求仅携带必要值快照；生产入口已确认的低精力、空闲与容量条件不在 planner 重复扫描。结果提交重新核对请求身份、日程版本和当前资格，再直接入池；成功后转移行为块所有权。 |
 | sleep Start/Advance | 不再全量扫描任务和行为状态机；睡眠不绑定建筑或地点许可。保留本次支持形态、活动槽、状态、时间先后、截止点及版本上限。删除已无调用的 CommitSleepTaskDraft。 |
 | nav InitAfter | 保留 Nav 独立容量上限，直接重建未持久化的邻接；删除 canonical 分段全量内容复核及最大 ID 扫描/游标修复，游标直接由完整 meta 恢复。 |
-| nav save/queries | 保存前图审计仍在；排序后直接刷新已有 map 下标。封装索引和自产 Floyd 前驱链只保留内部断言；可写邻接、状态及寻路业务结果检查保留。 |
+| nav save/queries | 删除保存前实体、ID 映射和邻接图审计；保留 canonical 排序、分段重建与已有 map 下标刷新。封装索引和自产 Floyd 前驱链只保留内部断言；容量保护、运行期邻接、状态及寻路业务结果检查保留。 |
 | main loop → dispatch | 成功出队的消息地址直接分派，不重复判空；未知类型仍返回业务错误。 |
 
 ## 不变量与边界
