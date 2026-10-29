@@ -78,7 +78,7 @@ DOMINO_CODE dominoHumanValidateBehaviorRecord(const DominoBehavior* behavior_ptr
 
     if (behavior_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP) {
         const domino_runtime_ms_t target_active_ms = behavior_ptr->parameters.sleep.target_active_ms;
-        if (behavior_ptr->target_building_id == 0 || target_active_ms == 0 || progress_ptr->active_elapsed_ms > target_active_ms ||
+        if (target_active_ms == 0 || progress_ptr->active_elapsed_ms > target_active_ms ||
             (progress_ptr->status >= DOMINO_BEHAVIOR_STATUS_ACTIVE && progress_ptr->status <= DOMINO_BEHAVIOR_STATUS_PAUSED &&
              progress_ptr->active_elapsed_ms == target_active_ms) ||
             (progress_ptr->status == DOMINO_BEHAVIOR_STATUS_DONE && progress_ptr->active_elapsed_ms != target_active_ms)) {

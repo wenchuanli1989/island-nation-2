@@ -160,7 +160,7 @@ typedef struct DominoBehaviorProgress {
 typedef struct DominoBehavior {
     DominoBehaviorProgress progress;          ///< 这一步的实际执行记录，例如是否开始、已经做了多久、是否正在等待。
     DominoBehaviorParameters parameters;      ///< 由 type 决定使用哪组专有参数；目前定义了睡眠所需的目标有效时长。
-    domino_building_id_t target_building_id;  ///< 这一步要前往或使用的建筑 ID；0 表示未指定，睡眠行为必须指定有效建筑。
+    domino_building_id_t target_building_id;  ///< 这一步要前往或使用的建筑 ID；0 表示未指定，睡眠不依赖此字段。
     domino_runtime_ms_t planned_begin_ms;     ///< 预计开始这一步的时刻，不代表已经实际开始。
     domino_runtime_ms_t planned_end_ms;       ///< 预计结束这一步的时刻；与计划开始之差是预计耗时，不是已完成时长。
     DOMINO_BEHAVIOR_TYPE type;                ///< 这一步具体做什么，取 DOMINO_BEHAVIOR_TYPE，例如移动、吃饭或睡觉。

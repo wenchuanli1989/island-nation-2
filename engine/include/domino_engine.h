@@ -62,8 +62,7 @@ static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096
  * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行／规划线程、game_timer 和主循环。
  * @note 所有线程创建完成后进入 RUNNING，解冻并唤醒业务线程；本阶段不再创建固定队列、映射表或同步对象。
  * @param client_data_out_ptr 可为 nullptr；非空时仅写入 game_date_time_ns。
- * @note 已加载活动睡眠须在 Start 前显式授权，不从建筑引用推断许可。
- * 返回只表示启动完成，不表示所有人物已经完成规划或开始任务；启动失败直接打印致命错误并退出进程。
+ * @note 返回只表示启动完成，不表示所有人物已经恢复执行、完成规划或开始任务；启动失败直接打印致命错误并退出进程。
  */
 extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 
@@ -71,7 +70,7 @@ extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
  * @brief 客户端进入 STOPPING，停止已启动的线程并排空日志，保留资源供 Destroy 保存和释放。
  * @pre 引擎处于 INITIALIZED 或 RUNNING，且由 Init 登记的客户端线程串行调用；已冻结的运行实例同样可以停止。
  * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 game_timer，统一结算人物，再排空日志并 join writer。
- * 仅 Init、未 Start 时各模块跳过线程 join，logger 关闭入队并刷新输出；保持已加载及配置的事实，不结算人物或要求睡眠授权。
+ * 仅 Init、未 Start 时各模块跳过线程 join，logger 关闭入队并刷新输出；保持已加载及配置的事实，不结算人物。
  * 停止或结算失败直接终止进程，不保存。
  * 成功后进入 STOPPED，世界、队列、同步对象和日志文件均保留，全部线程已退出，尚未保存；随后显式调用 Destroy，不支持直接 Start 或 Thaw。
  */
@@ -104,22 +103,13 @@ extern void dominoEngineFreezeTime(void);
 extern void dominoEngineThawTime(void);
 
 /**
- * @brief 客户端显式确认人物在指定当前建筑持续获准睡眠，并允许后续自主睡眠；许可仅保留在本次初始化的运行态中。
- * @note Init 后尚未 Start 时直接配置，运行时交执行线程同步处理；暂停期间拒绝提交。成功表示许可成立，不承诺已创建自主任务。
- * 自主睡眠要求三槽为空、无任何非终态任务且有容量，按精力阈值选择主通道；不寻找地点或重排日程。
- * 本批不支持运行期间撤权或搬离。
- * 加载 ACTIVE 睡眠须在 Start 前重新确认许可；此接口不能补授已过去时段的许可。
- */
-extern DOMINO_CODE dominoEngineAuthorizeSleep(domino_human_id_t human_id, domino_building_id_t building_id);
-
-/**
- * @brief 客户端确认睡眠许可并提交单行为睡眠，成功时输出任务 ID 并安排执行；失败保持输出不变。
- * @note Init 后尚未 Start 时仅提交 PLANNED，运行中由执行线程校验、提交并随后启动；暂停期间拒绝提交。成功同时保留后续自主睡眠许可。
- * 后续自主安排使用主通道，须满足完全空闲、无非终态任务及容量条件；不自动寻找地点。
+ * @brief 客户端提交无需建筑或地点许可的单行为睡眠，成功时输出任务 ID 并安排执行；失败保持输出不变。
+ * @note Init 后尚未 Start 时仅提交 PLANNED，运行中由执行线程校验、提交并随后启动；暂停期间拒绝提交。
+ * 无需显式提交即可自主睡眠：完全空闲、无非终态任务且有容量的人物按精力阈值选择主通道，不寻找地点或重排日程。
+ * 已加载的活动睡眠从保存进度继续执行，无需重新授权。
  * 只支持同步睡眠内核的单活动形态，三个通道仍可任选。调用须与其他客户端生命周期和睡眠 API 串行。
  */
-extern DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, domino_building_id_t building_id, uint8_t channel_index,
-                                           domino_task_id_t* task_id_out_ptr);
+extern DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr);
 
 /**
  * @brief 客户端向引擎主循环发送消息。

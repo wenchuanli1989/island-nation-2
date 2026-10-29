@@ -71,38 +71,19 @@ static DOMINO_CODE checkClientWorldAccess(void) {
     return CODE_OK;
 }
 
-DOMINO_CODE dominoEngineAuthorizeSleep(domino_human_id_t human_id, domino_building_id_t building_id) {
+DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr) {
     DOMINO_CODE code = checkClientWorldAccess();
     if (code == CODE_OK) {
-        code = dominoHumanExecutionAuthorizeSleep(human_id, building_id);
+        code = dominoHumanExecutionSubmitSleep(human_id, channel_index, task_id_out_ptr);
     }
     if (code != CODE_OK) {
         if (atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "sleep authorization rejected human=%" PRIu32 " building=%" PRIu32 " (%s, code=%d)", human_id, building_id,
+                              "sleep submission rejected human=%" PRIu32 " channel=%u (%s, code=%d)", human_id, (unsigned)channel_index,
                               dominoErrorCodeToString(code), (int)code);
         } else {
-            DOMINO_PRINT_MESSAGE("sleep authorization rejected human=%" PRIu32 " building=%" PRIu32 " (%s, code=%d)", human_id, building_id,
+            DOMINO_PRINT_MESSAGE("sleep submission rejected human=%" PRIu32 " channel=%u (%s, code=%d)", human_id, (unsigned)channel_index,
                                  dominoErrorCodeToString(code), (int)code);
-        }
-    }
-    return code;
-}
-
-DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, domino_building_id_t building_id, uint8_t channel_index,
-                                    domino_task_id_t* task_id_out_ptr) {
-    DOMINO_CODE code = checkClientWorldAccess();
-    if (code == CODE_OK) {
-        code = dominoHumanExecutionSubmitSleep(human_id, building_id, channel_index, task_id_out_ptr);
-    }
-    if (code != CODE_OK) {
-        if (atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "sleep submission rejected human=%" PRIu32 " building=%" PRIu32 " channel=%u (%s, code=%d)", human_id, building_id,
-                              (unsigned)channel_index, dominoErrorCodeToString(code), (int)code);
-        } else {
-            DOMINO_PRINT_MESSAGE("sleep submission rejected human=%" PRIu32 " building=%" PRIu32 " channel=%u (%s, code=%d)", human_id, building_id,
-                                 (unsigned)channel_index, dominoErrorCodeToString(code), (int)code);
         }
     }
     return code;

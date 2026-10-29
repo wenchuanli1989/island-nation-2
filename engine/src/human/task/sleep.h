@@ -7,18 +7,17 @@
 
 /** @file sleep.h
  * @brief 单个核心睡眠行为的同步内核；复用现有任务、行为和人物需求，不读取时钟或登记计时器。
- * @note 访问世界的入口调用前须完成模块初始化、可信存档加载及人物 data 绑定；调用方独占相关人物、任务和建筑的写入。
+ * @note 访问世界的入口调用前须完成模块初始化、可信存档加载及人物 data 绑定；调用方独占相关人物和任务的写入。
  * data_ptr 与已提交 task_ptr 由调用方在同次操作中取得，须属于同一人物；不得跨数组扩容、删除或重排保留借用指针。
  * 已提交任务及需求记录的完整语义由可信存档和受控写入维持；Start/Advance 只检查本次支持形态、业务条件及时间。
  * now_ms 使用同一世界累计未冻结现实毫秒，调用顺序不得倒退，0 与 UINT32_MAX 均可作为时刻。
- * approved_sleep_building_id 由可信调用方确认睡眠许可；内核仅复核非零 ID、建筑存在、人物确实同楼及行为目标一致。
+ * 睡眠不依赖建筑或地点许可，构造的行为不指定目标建筑。
  * 首版只执行无父子／停止关系的单行为睡眠，允许选择任一通道，但不与其他活动任务并行。
  * 参数、资格和记录校验仅返回业务结果，由调用方决定诊断和错误处理；分配失败在检测处直接终止进程。
  */
 
 /** @brief 从值快照构造单行为睡眠草案，不读取世界、不分配任务 ID、不修改需求或日程。
  * @param human_id 快照所属人物的非零 ID。
- * @param approved_sleep_building_id 快照中已明确授权的非零睡眠建筑 ID。
  * @param channel_index 三个通道之一。
  * @param energy snapshot_ms 时的预测精力，须在 0..100 且不高于睡眠触发阈值。
  * @param snapshot_ms 计划开始的累计未冻结现实毫秒。
@@ -26,55 +25,49 @@
  * @return CODE_OK 成功；空输出返回 ERR_NULL_POINTER；非法 ID/通道返回 ERR_INVALID_PARAM；精力值或到期时刻越界返回
  * ERR_OUT_OF_RANGE；未达到睡眠触发条件返回 ERR_GAME_STATE_INVALID；分配失败直接打印致命错误并终止进程。
  * @note 成功后调用方独占行为块，须提交转移或释放；失败保持输出不变。
- * 本函数仅校验值输入，不证明人物、建筑、授权或通道目前仍有效。
+ * 本函数仅校验值输入，不证明人物或通道目前仍有效。
  */
-DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
-                                           uint8_t energy, domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr);
+DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, uint8_t energy, domino_runtime_ms_t snapshot_ms,
+                                           DominoTask* draft_out_ptr);
 
 /** @brief 精力不高于触发阈值时提交 PLANNED 睡眠任务，不立即启动或修改需求。
  * @param data_ptr 调用方已取得的绑定人物 data。
- * @param approved_sleep_building_id 调用方已明确授权的人物当前建筑。
  * @param channel_index 三个通道之一。
  * @param now_ms 预测自然需求并构造计划的时刻。
  * @param task_id_out_ptr 成功时写入新任务 ID；失败保持原值。
- * @return CODE_OK 成功；空参数返回 ERR_NULL_POINTER；非法通道/授权或倒退时刻返回 ERR_INVALID_PARAM；资格改变返回
- * ERR_GAME_STATE_INVALID；已有未终结睡眠返回 ERR_ALREADY_EXISTS；建筑不存在返回 ERR_NOT_FOUND；任务容量耗尽返回
+ * @return CODE_OK 成功；空参数返回 ERR_NULL_POINTER；非法通道或倒退时刻返回 ERR_INVALID_PARAM；资格改变返回
+ * ERR_GAME_STATE_INVALID；已有未终结睡眠返回 ERR_ALREADY_EXISTS；任务容量耗尽返回
  * ERR_CAPACITY_EXCEEDED；记录损坏或时间范围错误直接传播；分配失败直接打印致命错误并终止进程。
  * @note 要求三个活动槽均为空，且本人没有未终结的睡眠任务；不自动回收终态任务。
  * 行为块仅在 store 接收成功后转移所有权；失败不修改人物、需求或任务清单。
  */
-DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
-                                       domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr);
+DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, uint8_t channel_index, domino_runtime_ms_t now_ms,
+                                       domino_task_id_t* task_id_out_ptr);
 
 /** @brief 从 now_ms 首次激活已提交的 PLANNED 睡眠，结算启动前自然需求，并占用其通道。
  * @param task_ptr 调用方已取得的已提交、尚未启动的单行为睡眠任务。
  * @param data_ptr 任务所属人物的绑定 data。
- * @param approved_sleep_building_id 调用方重新确认授权的人物当前建筑，须与行为目标相同。
  * @param now_ms 不早于任务和行为计划开始的实际启动时刻。
  * @return CODE_OK 成功；状态/资格不满足或尚未到计划开始时刻返回 ERR_GAME_STATE_INVALID；倒退至已结算时刻之前返回
- * ERR_INVALID_PARAM；时间或版本溢出返回 ERR_OUT_OF_RANGE；空参数、非法建筑等结果直接传播。失败不修改需求、任务或槽位。
+ * ERR_INVALID_PARAM；时间或版本溢出返回 ERR_OUT_OF_RANGE；空参数结果直接传播。失败不修改需求、任务或槽位。
  * @note 三个活动槽均须为空；已满足精力目标时拒绝启动。按启动时需求重新估算目标时长，
  * 将本任务和行为计划修订为 [now_ms, now_ms + target_active_ms)，有变化才递增 schedule_revision。
  * 不调整其他任务，不处理日程冲突；实际进度从零开始，过去的计划时间不产生睡眠收益。
  */
-DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                      domino_runtime_ms_t now_ms);
+DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_runtime_ms_t now_ms);
 
 /** @brief 同步推进 RUNNING/ACTIVE 睡眠及人物自然需求，完成后清槽并保留终态任务。
  * @param task_ptr 调用方已取得的已启动独立睡眠任务；已终结的同类任务重复调用无效果。
  * @param data_ptr 任务所属人物的绑定 data。
- * @param approved_sleep_building_id 自上次结算至 now_ms 持续有效的睡眠授权建筑。
  * @param now_ms 不早于行为 accounted_at_ms 的本次结算时刻。
  * @return CODE_OK 成功；不支持的状态或资格返回 ERR_GAME_STATE_INVALID；倒退至结算/结束时刻之前返回 ERR_INVALID_PARAM；
- * 任务与需求结算记录不一致返回 ERR_INVALID_DATA；完成时版本溢出返回 ERR_OUT_OF_RANGE；空参数、非法建筑等结果直接传播。
+ * 任务与需求结算记录不一致返回 ERR_INVALID_DATA；完成时版本溢出返回 ERR_OUT_OF_RANGE；空参数结果直接传播。
  * 所有错误均发生在效果写回前。
- * @note 地点或资格变更前，调用方须按旧事实结算到变更生效时刻；本批不处理搬离、撤权或取消。
- * 加载不会自动赋予资格，继续推进前仍须由调用方确认授权。自然变化和每点恢复按时序结算，同刻先衰减后恢复。
+ * @note 可信加载后可从保存的进度继续结算；自然变化和每点恢复按时序结算，同刻先衰减后恢复。
  * 有效睡眠最多累计至已接受目标；延迟处理时，其后的时间只自然衰减。完成记录处理时刻，递增一次 execution_version。
  * 任务终结后如需继续结算人物时间，应使用空闲需求入口或当时活动任务的结算入口，不能继续依靠本任务推进。
  * 不隐式启动后续任务，不重复 start；挂起、等待、停止交接及多通道联合结算留待执行器接入。
  */
-DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                        domino_runtime_ms_t now_ms);
+DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_runtime_ms_t now_ms);
 
 #endif

@@ -2,25 +2,11 @@
 
 #include <stdlib.h>
 
-#include "../../social/entry.h"
 #include "../behavior/sleep.h"
 #include "../needs.h"
 #include "../rules.h"
 #include "../store.h"
 #include "domino_shared_common.h"
-
-static DOMINO_CODE validateSleepBuilding(const DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id) {
-    if (approved_sleep_building_id == 0U) {
-        return ERR_INVALID_PARAM;
-    }
-    if (!dominoGetBuildingByID(approved_sleep_building_id)) {
-        return ERR_NOT_FOUND;
-    }
-    if (data_ptr->current_building_id != approved_sleep_building_id) {
-        return ERR_GAME_STATE_INVALID;
-    }
-    return CODE_OK;
-}
 
 /** @brief 空闲时三个槽均为空；运行时仅指定通道包含指定任务，不推断通道与类型的对应关系。 */
 static DOMINO_CODE validateActiveSlots(const DominoHumanData* data_ptr, uint8_t channel_index, domino_task_id_t active_task_id) {
@@ -52,8 +38,8 @@ static DOMINO_CODE validateSleepTask(const DominoTask* task_ptr) {
 }
 
 /** @brief 值输入和绝对到期时刻已通过预检；分配独占行为块并构造无关系的有效 PLANNED 草案。 */
-static void buildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
-                                domino_runtime_ms_t target_active_ms, domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr) {
+static void buildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, domino_runtime_ms_t target_active_ms,
+                                domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr) {
     DominoBehavior* behavior_ptr = calloc(1U, sizeof(*behavior_ptr));
     if (!behavior_ptr) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Sleep behavior allocation failed: human=%u bytes=%zu", human_id, sizeof(*behavior_ptr));
@@ -61,7 +47,6 @@ static void buildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t
     *behavior_ptr = (DominoBehavior){
         .progress.status = DOMINO_BEHAVIOR_STATUS_PENDING,
         .parameters.sleep.target_active_ms = target_active_ms,
-        .target_building_id = approved_sleep_building_id,
         .planned_begin_ms = snapshot_ms,
         .planned_end_ms = snapshot_ms + target_active_ms,
         .type = DOMINO_BEHAVIOR_TYPE_SLEEP,
@@ -79,12 +64,12 @@ static void buildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t
     };
 }
 
-DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
-                                           uint8_t energy, domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr) {
+DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, uint8_t energy, domino_runtime_ms_t snapshot_ms,
+                                           DominoTask* draft_out_ptr) {
     if (!draft_out_ptr) {
         return ERR_NULL_POINTER;
     }
-    if (human_id == 0U || approved_sleep_building_id == 0U || channel_index >= DOMINO_HUMAN_TASK_CHANNEL_COUNT) {
+    if (human_id == 0U || channel_index >= DOMINO_HUMAN_TASK_CHANNEL_COUNT) {
         return ERR_INVALID_PARAM;
     }
     if (energy > DOMINO_HUMAN_NEED_MAX) {
@@ -97,18 +82,13 @@ DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, domino_bu
     if (target_active_ms > UINT32_MAX - snapshot_ms) {
         return ERR_OUT_OF_RANGE;
     }
-    buildSleepTaskDraft(human_id, approved_sleep_building_id, channel_index, target_active_ms, snapshot_ms, draft_out_ptr);
+    buildSleepTaskDraft(human_id, channel_index, target_active_ms, snapshot_ms, draft_out_ptr);
     return CODE_OK;
 }
 
 /** @brief 对当前人物预检一次提交资格，并输出此刻的有效睡眠时长；调用方持有同次写入权。 */
-static DOMINO_CODE validateSleepSubmission(const DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                           domino_runtime_ms_t now_ms, domino_runtime_ms_t* target_active_out_ptr) {
-    DOMINO_CODE code = validateSleepBuilding(data_ptr, approved_sleep_building_id);
-    if (code != CODE_OK) {
-        return code;
-    }
-    code = dominoHumanValidateNeedSettlement(data_ptr, now_ms);
+static DOMINO_CODE validateSleepSubmission(const DominoHumanData* data_ptr, domino_runtime_ms_t now_ms, domino_runtime_ms_t* target_active_out_ptr) {
+    DOMINO_CODE code = dominoHumanValidateNeedSettlement(data_ptr, now_ms);
     if (code != CODE_OK) {
         return code;
     }
@@ -135,8 +115,8 @@ static DOMINO_CODE validateSleepSubmission(const DominoHumanData* data_ptr, domi
     return CODE_OK;
 }
 
-DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id, uint8_t channel_index,
-                                       domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr) {
+DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, uint8_t channel_index, domino_runtime_ms_t now_ms,
+                                       domino_task_id_t* task_id_out_ptr) {
     if (!data_ptr || !task_id_out_ptr) {
         return ERR_NULL_POINTER;
     }
@@ -144,12 +124,12 @@ DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_buildin
         return ERR_INVALID_PARAM;
     }
     domino_runtime_ms_t target_active_ms;
-    DOMINO_CODE code = validateSleepSubmission(data_ptr, approved_sleep_building_id, now_ms, &target_active_ms);
+    DOMINO_CODE code = validateSleepSubmission(data_ptr, now_ms, &target_active_ms);
     if (code != CODE_OK) {
         return code;
     }
     DominoTask draft = {0};
-    buildSleepTaskDraft(data_ptr->human_id, approved_sleep_building_id, channel_index, target_active_ms, now_ms, &draft);
+    buildSleepTaskDraft(data_ptr->human_id, channel_index, target_active_ms, now_ms, &draft);
     code = dominoHumanStoreAddValidatedTask(&draft, data_ptr, task_id_out_ptr);
     if (code != CODE_OK) {
         free(draft.behaviors_ptr);
@@ -157,8 +137,7 @@ DOMINO_CODE dominoHumanSubmitSleepTask(DominoHumanData* data_ptr, domino_buildin
     return code;
 }
 
-DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                      domino_runtime_ms_t now_ms) {
+DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_runtime_ms_t now_ms) {
     if (!data_ptr) {
         return ERR_NULL_POINTER;
     }
@@ -170,14 +149,10 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* dat
     if (now_ms < task_ptr->planned_begin_ms || now_ms < behavior_ptr->planned_begin_ms) {
         return ERR_GAME_STATE_INVALID;
     }
-    if (task_ptr->status != DOMINO_TASK_STATUS_PLANNED || behavior_ptr->target_building_id != approved_sleep_building_id) {
+    if (task_ptr->status != DOMINO_TASK_STATUS_PLANNED) {
         return ERR_GAME_STATE_INVALID;
     }
     code = validateActiveSlots(data_ptr, task_ptr->channel_index, 0U);
-    if (code != CODE_OK) {
-        return code;
-    }
-    code = validateSleepBuilding(data_ptr, approved_sleep_building_id);
     if (code != CODE_OK) {
         return code;
     }
@@ -223,8 +198,7 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHumanData* dat
     return CODE_OK;
 }
 
-DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_building_id_t approved_sleep_building_id,
-                                        domino_runtime_ms_t now_ms) {
+DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* data_ptr, domino_runtime_ms_t now_ms) {
     if (!data_ptr) {
         return ERR_NULL_POINTER;
     }
@@ -243,15 +217,10 @@ DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHumanData* d
         }
         return CODE_OK;
     }
-    if (task_ptr->status != DOMINO_TASK_STATUS_RUNNING || progress_ptr->status != DOMINO_BEHAVIOR_STATUS_ACTIVE ||
-        behavior_ptr->target_building_id != approved_sleep_building_id) {
+    if (task_ptr->status != DOMINO_TASK_STATUS_RUNNING || progress_ptr->status != DOMINO_BEHAVIOR_STATUS_ACTIVE) {
         return ERR_GAME_STATE_INVALID;
     }
     code = validateActiveSlots(data_ptr, task_ptr->channel_index, task_ptr->task_id);
-    if (code != CODE_OK) {
-        return code;
-    }
-    code = validateSleepBuilding(data_ptr, approved_sleep_building_id);
     if (code != CODE_OK) {
         return code;
     }

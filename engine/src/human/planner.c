@@ -29,13 +29,12 @@ void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr) {
     }
 }
 
-/** @brief 唯一生产者已确认空闲、同楼许可、容量及低精力；不可变快照只需构造睡眠草案。 */
+/** @brief 唯一生产者已确认空闲、容量及低精力；不可变快照只需构造睡眠草案。 */
 static void buildPlan(DominoHumanPlanEnvelope* envelope_ptr) {
     const DominoHumanPlanRequest* request_ptr = &envelope_ptr->request;
     envelope_ptr->status = DOMINO_HUMAN_PLAN_NO_PLAN;
-    const DOMINO_CODE code =
-        dominoHumanBuildSleepTaskDraft(request_ptr->human_id, request_ptr->approved_sleep_building_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY,
-                                       request_ptr->energy, request_ptr->now_ms, &envelope_ptr->task);
+    const DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY, request_ptr->energy,
+                                                            request_ptr->now_ms, &envelope_ptr->task);
     if (code == ERR_OUT_OF_RANGE) {
         // 快照已验证；剩余可表示时长不足属于本次计划无法成立，不代表当前时钟失效。
         envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_TIME_RANGE;

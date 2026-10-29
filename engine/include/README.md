@@ -16,7 +16,7 @@
 
 Destroy 返回前，模块实例状态已恢复为空或初始值：common／host／social 的容器指针、数量、容量与索引指针清空，game_timer 整体复位，引擎线程句柄存储及配置清空。time 在存档和世界资源清理完成后执行 `dominoTimeModuleDestroy()`，由引擎保证在客户端线程的 `DESTROYING` 路径中调用，将累计基准、采样起点和快照版本归零并保持冻结；它只清理内存，不修改已保存时间，下一次 Init 仍从文件恢复。
 
-生命周期和睡眠修改接口由 Init 成功登记的客户端线程串行调用。普通冻结、解冻及退出停钟均由客户端直接写入 time，不经过主循环转发，因此这些时间写入不会并发。正常顺序为 `Init（冻结）→ AuthorizeSleep／SubmitSleep → Start → Freeze／Thaw → Stop → Destroy`；仅 Init、未 Start 时仍须调用 Stop → Destroy。Stop 完成后不能直接 Start、Thaw 或继续业务修改；需要再次运行时须先 Destroy，再重新 Init。
+生命周期和睡眠修改接口由 Init 成功登记的客户端线程串行调用。普通冻结、解冻及退出停钟均由客户端直接写入 time，不经过主循环转发，因此这些时间写入不会并发。正常顺序为 `Init（冻结）→ 可选 SubmitSleep → Start → Freeze／Thaw → Stop → Destroy`；仅 Init、未 Start 时仍须调用 Stop → Destroy。睡眠不依赖建筑或地点许可，低精力且完全空闲的人物直接自主规划；已加载活动睡眠从保存进度继续执行。Stop 完成后不能直接 Start、Thaw 或继续业务修改；需要再次运行时须先 Destroy，再重新 Init。
 
 引擎对外 Init／Start／Stop／Destroy 校验完整生命周期与调用线程：Init 只接受 `UNINITIALIZED`，Start 只接受 `INITIALIZED`，Stop 接受 `INITIALIZED` 或 `RUNNING` 并进入 `STOPPED`，Destroy 只接受 `STOPPED` 并恢复 `UNINITIALIZED`。重复调用或错误顺序均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。内部 game_timer、executor 和 planner 不另存完整生命周期状态，也不重复检查启动、停止或销毁顺序；引擎在运行过的 Stop 路径中先发布 `STOPPING` 并唤醒，再调用内部 Stop 进行 join。仅 Init 的路径跳过 human／game_timer Stop 和人物结算，仍调用 logger Stop 关闭入队并刷新；两条路径均可随后 Destroy 并再次 Init。
 
@@ -25,7 +25,7 @@ Destroy 返回前，模块实例状态已恢复为空或初始值：common／hos
 | 接口 | 成功与失败边界 |
 |------|------|
 | `dominoEngineInit()` | 仅接受 `UNINITIALIZED`。准备日志文件、主循环及 human/game_timer 队列、运行映射表和同步对象，加载当前格式可信世界、检查资源容量并绑定运行时引用；保持时间冻结，不创建线程。 |
-| `dominoEngineStart()` | 仅接受 `INITIALIZED`。客户端使用 Init 已准备的资源，在冻结时钟下先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 game_timer，最后创建主循环。成功后进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不承担启动协调或发布启动回执。首次启动分批扫描人物建立调度，就绪不表示全部人物已经登记 game_timer、完成规划或启动任务；启动或解冻的致命错误直接打印 stderr 并退出进程。 |
+| `dominoEngineStart()` | 仅接受 `INITIALIZED`。客户端使用 Init 已准备的资源，在冻结时钟下先启动 logger，再调用 human Start 建立执行／规划线程，随后启动 game_timer，最后创建主循环。成功后进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不承担启动协调或发布启动回执。Start 不预扫世界，首次运行分批恢复执行并建立调度，在实际推进边界检查执行器支持范围；就绪不表示全部人物已经登记 game_timer、完成规划或启动任务。启动或解冻的致命错误直接打印 stderr 并退出进程。 |
 | `dominoEngineFreezeTime()` | 客户端直接调用 time 冻结时钟，不向主循环发控制请求，不通知业务线程、不等回执。业务线程只在批次入口检查冻结，当前有限批次完整执行；原本等待中的线程保持等待。普通冻结不统一结算人物，也不保证可立即保存；冻结后的时刻范围校验失败直接打印 stderr 并退出进程。 |
 | `dominoEngineThawTime()` | 客户端直接解冻时钟，再通知主循环、executor、planner 和 game_timer，不向主循环发控制请求，也不等待线程恢复回执。恢复续接留队消息和已有调度，不做全员扫描；时钟切换失败直接打印 stderr 并退出进程。 |
 | `dominoEngineStop()` | 仅由客户端在 `INITIALIZED` 或 `RUNNING` 调用。仅 Init 时引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新；运行过的实例先进入 `STOPPING`，冻结并校验时刻，再唤醒主循环和业务线程，暂停时无需解冻。依次 join 主循环、human 执行／规划线程和 game_timer，统一结算人物，再调用 logger Stop 排空日志、join writer 并刷新输出，完成后进入 `STOPPED`。世界、队列、同步对象和日志文件仍保留，全部线程已退出，尚未保存；所有投递者结束前保持目标队列有效。 |
@@ -33,9 +33,9 @@ Destroy 返回前，模块实例状态已恢复为空或初始值：common／hos
 
 Init／Start／Stop／Destroy、Freeze／Thaw 返回 `void`，正常完成后返回，致命错误直接通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并调用 `exit(EXIT_FAILURE)`。初始化、开始、停止、冻结、解冻、销毁及运行阶段采用同一致命错误策略，不再提供实例首错查询或 `FAILED` 生命周期状态，不跨线程传递致命错误。标准退出处理仍可执行；调用方不能依靠致命错误后的正常返回执行重试、保存或清理。正常状态检查、启动就绪、退出状态、唤醒、线程 join 与资源释放顺序仍由生命周期协议保证。保存失败时，磁盘事务由后续新进程加载恢复。
 
-Init 成功且尚未 Start 时可配置睡眠授权、提交待执行睡眠；运行后的暂停状态仍拒绝同步睡眠授权和提交，避免等待暂停中的业务消费者。`dominoEnginePushMsg()`／`dominoEnginePopMsg()` 和底层消息队列操作不受冻结影响；消息可留队，阻塞取消息仍可能等到业务线程恢复。日志也持续工作。业务线程每轮先检查退出、再检查冻结，暂停等待可由解冻或退出通知解除；当前批次的状态修改、规划请求、规划回传和 game_timer 登记完整执行，下一轮才等待。
+`dominoEngineSubmitSleep(human_id, channel_index, &task_id)` 在 Init 成功且尚未 Start 时提交待执行睡眠，运行时由执行线程提交并推进；运行后的暂停状态拒绝同步提交，避免等待暂停中的业务消费者。`dominoEnginePushMsg()`／`dominoEnginePopMsg()` 和底层消息队列操作不受冻结影响；消息可留队，阻塞取消息仍可能等到业务线程恢复。日志也持续工作。业务线程每轮先检查退出、再检查冻结，暂停等待可由解冻或退出通知解除；当前批次的状态修改、规划请求、规划回传和 game_timer 登记完整执行，下一轮才等待。
 
-睡眠授权、任务提交、查询和消息收发继续返回其业务或控制结果；队列空、正常排空结束、没有可行规划等不自动成为致命错误。运行阶段的非致命错误及正常日志通过日志模块输出，初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。错误日志本身不会退出，只有显式调用公共退出方法才终止进程。
+任务提交、查询和消息收发继续返回其业务或控制结果；队列空、正常排空结束、没有可行规划等不自动成为致命错误。运行阶段的非致命错误及正常日志通过日志模块输出，初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。错误日志本身不会退出，只有显式调用公共退出方法才终止进程。
 
 日志初始化、启动、停止和销毁返回 `void`；日志队列满时向所属模块的输出流同步提示一次并等待直到入队，日志服务自身的致命错误直接打印 stderr 并 exit。业务队列使用非阻塞 Produce，达到最大容量立即返回 `ERR_QUEUE_FULL`，由业务边界决定拒绝请求或因必要消息无法交付而直接退出。第三方库保留既有终止行为。
 

@@ -13,7 +13,6 @@ typedef struct DominoHumanPlanRequest {
     uint32_t schedule_revision;
     domino_runtime_ms_t now_ms;
     uint32_t reasons;
-    domino_building_id_t approved_sleep_building_id;
     uint8_t energy;
 } DominoHumanPlanRequest;
 
@@ -38,19 +37,12 @@ typedef struct DominoHumanPlanEnvelope {
     DominoHumanPlanReason reason;
 } DominoHumanPlanEnvelope;
 
-typedef enum HumanExecutionCommandType {
-    HUMAN_EXECUTION_AUTHORIZE_SLEEP,
-    HUMAN_EXECUTION_SUBMIT_SLEEP,
-} HumanExecutionCommandType;
-
-/** @brief COMMAND 只携带独占值；结果通过控制条件变量返回，不借用客户端输出地址。
+/** @brief COMMAND 携带睡眠提交的独占值；结果通过控制条件变量返回，不借用客户端输出地址。
  * @note 执行时必须匹配唯一待处理请求；身份不匹配属于内部协议错误，直接致命退出。
  */
 typedef struct HumanExecutionCommand {
     uint64_t request_id;
     domino_human_id_t human_id;
-    domino_building_id_t building_id;
-    HumanExecutionCommandType type;
     uint8_t channel_index;
 } HumanExecutionCommand;
 
