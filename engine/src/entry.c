@@ -231,7 +231,7 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
                           DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     dominoCommonModuleInit();
     dominoHostModuleInit();
-    dominoNavModuleInitBefore();
+    dominoNavModuleInit();
     dominoSocialModuleInit();
     dominoHumanModuleInit();
     dominoGameTimerModuleInit();
@@ -338,7 +338,7 @@ void dominoEngineDestroy(void) {
     dominoStorageModuleDestroy();
     dominoHumanModuleDestroy();
     dominoSocialModuleDestroy();
-    dominoNavModuleDestroyAfter();
+    dominoNavModuleDestroy();
     dominoHostModuleDestroy();
     dominoCommonModuleDestroy();
     /* 存档已保留退出时刻；现在才清空本实例的内存时钟。 */

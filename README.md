@@ -37,7 +37,7 @@ client-hub 与 engine-remote/local 当前仍只管理各自的日志资源，公
 | Stop | 已初始化或运行中 | 已停止 |
 | Destroy | 已停止 | 未初始化 |
 
-仅 Init 的引擎 Stop 跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 InitBefore → InitAfter → DestroyBefore → DestroyAfter 调用；time 无独立 Init，由引擎保证在客户端 DESTROYING 路径中复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
+仅 Init 的引擎 Stop 跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 Init → InitAfter → DestroyBefore → Destroy 调用；time 无独立 Init，由引擎保证在客户端 DESTROYING 路径中复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
 
 ### 当前引擎生命周期
 

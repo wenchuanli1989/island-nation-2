@@ -4,7 +4,7 @@
 #include "persistence.h"
 #include "state.h"
 
-void dominoNavModuleInitBefore(void) {
+void dominoNavModuleInit(void) {
     navStateInit();
 }
 
@@ -24,6 +24,6 @@ void dominoNavModuleDestroyBefore(void) {
     }
 }
 
-void dominoNavModuleDestroyAfter(void) {
+void dominoNavModuleDestroy(void) {
     navStateDestroy();
 }

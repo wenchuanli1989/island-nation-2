@@ -6,7 +6,7 @@
 #include "nav/state.h"
 
 int dominoEnginePlayground(int argc, char* argv[]) {
-    dominoNavModuleInitBefore();
+    dominoNavModuleInit();
     dominoNavModuleInitAfter();
     DOMINO_CODE result = CODE_OK;
 
@@ -114,6 +114,6 @@ int dominoEnginePlayground(int argc, char* argv[]) {
 
 cleanup:
     dominoNavModuleDestroyBefore();
-    dominoNavModuleDestroyAfter();
+    dominoNavModuleDestroy();
     return result == CODE_OK ? 0 : 1;
 }

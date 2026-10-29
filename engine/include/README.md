@@ -20,7 +20,7 @@ Destroy 返回前，模块实例状态已恢复为空或初始值：common／hos
 
 引擎对外 Init／Start／Stop／Destroy 校验完整生命周期与调用线程：Init 只接受 `UNINITIALIZED`，Start 只接受 `INITIALIZED`，Stop 接受 `INITIALIZED` 或 `RUNNING` 并进入 `STOPPED`，Destroy 只接受 `STOPPED` 并恢复 `UNINITIALIZED`。重复调用或错误顺序均通过 `DOMINO_EXIT_WITH_ERROR` 输出 stderr 并退出。内部 game_timer、executor 和 planner 不另存完整生命周期状态，也不重复检查启动、停止或销毁顺序；引擎在运行过的 Stop 路径中先发布 `STOPPING` 并唤醒，再调用内部 Stop 进行 join。仅 Init 的路径跳过 human／game_timer Stop 和人物结算，仍调用 logger Stop 关闭入队并刷新；两条路径均可随后 Destroy 并再次 Init。
 
-无线程世界和存储模块按 Init → Destroy 使用，nav 按 InitBefore → InitAfter → DestroyBefore → DestroyAfter 使用，顺序由引擎保证。受引擎编排的内部辅助入口同样按资源有效的前置条件执行，不逐层复检已由调用链保证的模块、索引或固定队列初始化条件，也不为此增加状态或查询接口。公开道路增删等可直接调用的业务入口保留自身访问资格和输入检查，内部导航查询与路径辅助函数直接使用已建立的资源。shared logger／queue 是独立公共接口，继续检查各自的生命周期；引擎日志包装层不重复校验。资源分配、线程创建／join、锁、文件操作及业务参数检查仍保留。普通资源释放辅助函数、队列 BeginFlush／WakeAll 不属于四阶段生命周期入口。
+无线程世界和存储模块按 Init → Destroy 使用，nav 按 Init → InitAfter → DestroyBefore → Destroy 使用，顺序由引擎保证。受引擎编排的内部辅助入口同样按资源有效的前置条件执行，不逐层复检已由调用链保证的模块、索引或固定队列初始化条件，也不为此增加状态或查询接口。公开道路增删等可直接调用的业务入口保留自身访问资格和输入检查，内部导航查询与路径辅助函数直接使用已建立的资源。shared logger／queue 是独立公共接口，继续检查各自的生命周期；引擎日志包装层不重复校验。资源分配、线程创建／join、锁、文件操作及业务参数检查仍保留。普通资源释放辅助函数、队列 BeginFlush／WakeAll 不属于四阶段生命周期入口。
 
 | 接口 | 成功与失败边界 |
 |------|------|
