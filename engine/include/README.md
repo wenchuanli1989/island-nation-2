@@ -24,7 +24,7 @@ Destroy 返回前，模块实例状态已恢复为空或初始值：common／hos
 
 | 接口 | 成功与失败边界 |
 |------|------|
-| `dominoEngineInit()` | 仅接受 `UNINITIALIZED`。准备日志文件、主循环及 human/game_timer 队列、运行映射表和同步对象，加载并校验世界；保持时间冻结，不创建线程。 |
+| `dominoEngineInit()` | 仅接受 `UNINITIALIZED`。准备日志文件、主循环及 human/game_timer 队列、运行映射表和同步对象，加载当前格式可信世界、检查资源容量并绑定运行时引用；保持时间冻结，不创建线程。 |
 | `dominoEngineStart()` | 仅接受 `INITIALIZED`。客户端使用 Init 已准备的资源，在冻结时钟下先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 game_timer，最后创建主循环。成功后进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不承担启动协调或发布启动回执。首次启动分批扫描人物建立调度，就绪不表示全部人物已经登记 game_timer、完成规划或启动任务；启动或解冻的致命错误直接打印 stderr 并退出进程。 |
 | `dominoEngineFreezeTime()` | 客户端直接调用 time 冻结时钟，不向主循环发控制请求，不通知业务线程、不等回执。业务线程只在批次入口检查冻结，当前有限批次完整执行；原本等待中的线程保持等待。普通冻结不统一结算人物，也不保证可立即保存；冻结后的时刻范围校验失败直接打印 stderr 并退出进程。 |
 | `dominoEngineThawTime()` | 客户端直接解冻时钟，再通知主循环、executor、planner 和 game_timer，不向主循环发控制请求，也不等待线程恢复回执。恢复续接留队消息和已有调度，不做全员扫描；时钟切换失败直接打印 stderr 并退出进程。 |
