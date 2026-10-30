@@ -149,7 +149,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 
 该目录须包含配套的 glibc 运行库、开发头文件、启动对象、动态加载器、GCC 的 `libgcc_s.so.1`，以及 Linux 内核 ABI 头文件。
 当前独立安装来自 Ubuntu 官方 `resolute-updates` 的 `2.43-2ubuntu2.4` 软件包，解包后保留 `usr/include` 和
-`usr/lib/x86_64-linux-gnu` 布局，并提供 `lib -> usr/lib`、`lib64 -> usr/lib64` 链接；软件包版本及 SHA256 记录在安装目录的 `installation.json` 中。
+`usr/lib/x86_64-linux-gnu` 布局，并提供 `lib -> usr/lib`、`lib64 -> usr/lib64` 链接；`scripts/setup-glibc.sh` 将软件包版本及 SHA256 记录在安装目录的 `glibc-packages.sha256` 中。
 安装不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。工具链同时选择编译用 sysroot、ELF 加载器和运行期库搜索路径，生成的程序可直接运行；运行时须保留该安装目录。
 改变或取消 `DOMINO_GLIBC_ROOT` 时，构建脚本会自动清理对应目录的编译产物并重建 CMake 配置缓存，重新检测工具链。
 系统 glibc 仍须满足上述环境要求；当前宿主机的 glibc 2.39 不支持 `TIME_MONOTONIC`，须指定独立安装的 2.43 才能编译当前源码。
@@ -176,27 +176,51 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 
 ### Codex Cloud
 
-支持 Ubuntu 22.04／24.04／26.04 的 Linux x86_64 环境，需要联网及 root 或免密 sudo。在
+独立脚本 `setup-codex-cloud.sh` 面向 **Debian 13（trixie）Linux x86_64**，普通用户即可执行，需要联网。在
 [Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
 
 | 配置 | 内容 |
 | --- | --- |
-| Install script（旧版界面为 Setup script） | `bash setup-dev.sh --cloud` |
-| Environment variables | `DOMINO_GLIBC_ROOT=/opt/domino/glibc-2.43` |
-| Public internet access | 启用 Package managers，并额外允许 `apt.kitware.com`、`apt.llvm.org` |
+| Install script（旧版界面为 Setup script） | `bash setup-codex-cloud.sh` |
+| Start instructions | 每个新 shell 先 `source /workspace/.local/domino/env.sh` |
+| Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可指定其他可写绝对路径，不含空白、双引号或反斜杠） |
+| Public internet access | 启用 Package managers；确保允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
 
-Cloud 模式复用现有 APT 安装与工具注册流程，按 Ubuntu 发行版选择软件源，跳过远程开发使用的 Git 身份、SSH 和 root 密码配置。
-设置 `DOMINO_GLIBC_ROOT` 时，调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至指定目录，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`。
-请将变量配置在 Cloud 环境设置中，供安装和后续任务共同使用；构建沿用现有独立 glibc 工具链，不替换系统 glibc。
+脚本独立于 Ubuntu 远程开发安装入口 `setup-dev.sh`，默认将工具链和 glibc 安装到 `/workspace/.local/domino`，不调用 `sudo`、不修改系统软件源、密钥、alternatives 或 dpkg 数据库。基础镜像须已提供 APT、Debian 签名密钥、curl、GnuPG、dpkg-deb、GCC/G++、Make、Git、Perl 和系统 Python 3.13；缺少时脚本会明确报错。
+
+脚本将 APT 配置、索引、缓存和日志隔离到安装目录，仅读取系统 dpkg 状态解析缺失依赖。校验 LLVM 官方密钥指纹和软件源签名后，下载并解包 Debian `trixie-backports` 的 CMake（>= 4.2.1）、Clang 22、格式化／分析／调试工具、ThinLTO 插件及 Sanitizer 运行库，不执行软件包维护脚本。安装根目录的 `packages.versions` 和 `packages.sha256` 记录本次工具软件包版本与摘要。
+
+Debian 13 系统 glibc 不提供当前源码所需的 `TIME_MONOTONIC`。脚本调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至安装根目录的 `glibc-2.43/`，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`；不添加 Ubuntu APT 源，不替换系统 glibc。
+
+安装生成 `env.sh`，每个新 shell 都须先 source 它，以启用工具 PATH 并设置 `DOMINO_GLIBC_ROOT`；自定义安装目录时同步调整 source 路径。该文件会覆盖旧 Cloud 配置中的 `/opt/domino/glibc-2.43`，无需继续配置旧变量。工具包装器只为工具进程及其子进程设置依赖库路径，独立 glibc 不加入全局 `LD_LIBRARY_PATH`。脚本从仓库读取 glibc 辅助脚本和校验清单，须连同仓库使用，可重复执行以刷新安装。
 
 在仓库根目录使用现有命令构建、运行：
 
 ```bash
+bash setup-codex-cloud.sh
+source /workspace/.local/domino/env.sh
 ./scripts/build.sh debug
 (cd build-debug && ./bin/domino-playground)
+./scripts/build.sh release
+(cd build-release && ./bin/domino-playground)
 ```
 
 默认 Playground 完成一次引擎生命周期后退出，存档位于 `build-debug/runtime/sandbox/`；再次运行会加载该存档。
+
+**用户目录安装验证（2026-10-30）**：在实际 Codex Cloud Debian 13.6 环境中，以 `agent`（UID 1000、无 sudo）完成首次安装和重复安装，使用 Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。
+
+- `debug`、`release`（含 ThinLTO）、`sanitize` 全量构建通过；Debug／Release 默认 Playground 的启动、保存和重载通过，ELF 加载器和 RUNPATH 指向用户目录下的 glibc。
+- ASan／UBSan／LeakSanitizer 的默认 Playground 及重载检查通过。当前默认执行沙箱会触发 LeakSanitizer 的 ptrace 限制，需要放宽执行沙箱后以同一普通用户运行；不需要 root，也未关闭泄漏检测。
+- 工具版本检查、LLDB Python 模块加载、重复 source 激活以及已读取的系统 APT 配置、签名密钥和 dpkg 状态摘要检查通过；系统 glibc 保持 2.41。未复测其他构建预设、完整静态分析、调试器附加或新环境恢复。
+
+**原系统级脚本的 Debian 13 验证记录（2026-10-30）**：使用官方 Debian 13.7 amd64 rootfs、PRoot 5.5、Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。以下为改为用户目录安装前的历史记录，不代表当前脚本的验证结果。
+
+- 全新安装、重复安装、修复旧 sysroot 的 ABI 头文件断链均通过，系统 glibc 保持 2.41。
+- `debug`、`release`、`release-native`、`sanitize`、`tsan`、`profile` 六种配置全量构建通过，零警告、零错误；ELF 加载器和 RUNPATH 均指向独立 glibc。
+- Debug／Release／Release-native／Profile 的服务端、默认 Playground 及存档重载通过；`human_task_store` 回归通过。
+- LeakSanitizer 不能在 PRoot 的 ptrace 环境中运行；复制 Sanitizer 可执行文件，仅调整副本的加载器和 RUNPATH 到宿主可访问路径后，服务端及 Playground 的 ASan／UBSan／LeakSanitizer 检查通过。TSan 编译通过，但运行时内部崩溃；同一工具链的独立 `thrd_create`／`thrd_join` 最小程序也能复现，尚不能完成 TSan 运行检查。
+
+以上历史验证覆盖 Debian 13 用户态安装、编译和上述运行路径；当时未接入真实 Codex Cloud 托管实例，其平台网络、权限和内核行为未完成端到端验证。
 
 ### 开发环境安装（Ubuntu 26.04 服务器）
 
@@ -209,7 +233,7 @@ sudo LLVM_VERSION=22 bash setup-dev.sh
 ```
 
 脚本可单独复制到服务器运行，不要求安装 Docker 或下载整个仓库；root 用户可直接执行 `bash setup-dev.sh`。
-脚本默认模式仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
+脚本仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
 脚本沿用原 Dockerfile 的开发环境配置：设置 root 的 Git 身份为 `domino <domino@domino.com>`、创建 SSH 密钥，并启用 root 密码登录，密码为 `123456`。
 
 ### 开发环境（Docker + VSCode Remote）
