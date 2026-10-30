@@ -13,17 +13,14 @@
 
 static void deserializeBehavior(yyjson_val* object, DominoBehavior* behavior_ptr) {
     AI_READ_UINT(object, behavior_ptr, type);
-    AI_READ_UINT(object, behavior_ptr, target_building_id);
     AI_READ_UINT(object, behavior_ptr, planned_begin_ms);
     AI_READ_UINT(object, behavior_ptr, planned_end_ms);
     AI_READ_UINT(object, behavior_ptr, started_at_ms);
     AI_READ_UINT(object, behavior_ptr, ended_at_ms);
     AI_READ_UINT(object, behavior_ptr, accounted_at_ms);
     AI_READ_UINT(object, behavior_ptr, active_elapsed_ms);
-    AI_READ_UINT(object, behavior_ptr, wait_until_ms);
     AI_READ_UINT(object, behavior_ptr, status);
     AI_READ_BOOL(object, behavior_ptr, started_flag);
-    AI_READ_BOOL(object, behavior_ptr, effect_committed_flag);
 }
 
 /** @brief 行为数量以嵌套数组为唯一来源，完成字段解析后由调用方分配连续块。 */
@@ -59,17 +56,14 @@ static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavi
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
     }
     if (!yyjson_mut_obj_add_uint(doc, object, "type", behavior->type) ||
-        !yyjson_mut_obj_add_uint(doc, object, "target_building_id", behavior->target_building_id) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", behavior->planned_begin_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", behavior->planned_end_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", behavior->started_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", behavior->ended_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "accounted_at_ms", behavior->accounted_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "active_elapsed_ms", behavior->active_elapsed_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "wait_until_ms", behavior->wait_until_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "status", behavior->status) ||
-        !yyjson_mut_obj_add_bool(doc, object, "started_flag", behavior->started_flag) ||
-        !yyjson_mut_obj_add_bool(doc, object, "effect_committed_flag", behavior->effect_committed_flag)) {
+        !yyjson_mut_obj_add_bool(doc, object, "started_flag", behavior->started_flag)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
     }
     return object;

@@ -40,7 +40,7 @@ DominoBehavior* dominoGetBehaviorByTaskIDAndSequenceIndex(domino_task_id_t task_
 DOMINO_CODE dominoHumanStoreImportTask(const DominoTask* task_ptr);
 /** @brief 提交已校验的无 ID PLANNED 草案，按提交顺序追加到人物任务数组；成功接管行为块。
  * @pre 任务存储已 Init，调用方独占任务池与人物清单写入权，尚未 Destroy。
- * @note 参数均非空；受控构造器保证草案完整语义，调用方已确认当前目标建筑及归属，data_ptr 为 owner 已加载绑定的有效任务清单。
+ * @note 参数均非空；受控构造器保证草案完整语义，调用方已确认人物归属，data_ptr 为 owner 已加载绑定的有效任务清单。
  * draft_ptr 不能借用任务池，须独占行为块；任务及行为尚未启动且有效进度为零。
  * 可信存档及 store 增删入口保证已有任务的存在性和归属；本接口负责容量、版本上限、取号及入池资源错误。
  * 从全局原子计数器取号，回绕时跳过 0 和仍在任务池中的 ID；失败允许消耗候选 ID，不回退计数器。

@@ -196,7 +196,6 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHuman* human_p
     behavior_ptr->active_elapsed_ms = 0U;
     behavior_ptr->status = DOMINO_BEHAVIOR_STATUS_ACTIVE;
     behavior_ptr->started_flag = true;
-    behavior_ptr->effect_committed_flag = false;
     data_ptr->active_task_id_list[task_ptr->channel_index] = task_ptr->task_id;
     return CODE_OK;
 }

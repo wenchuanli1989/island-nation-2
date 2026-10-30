@@ -90,25 +90,22 @@ typedef enum {
     DOMINO_TASK_PRIORITY_COUNT,      ///< 枚举取值上界，仅用于计数和范围检查。
 } DOMINO_TASK_PRIORITY;
 
-/** @brief 任务中的一个具体步骤，包含要做什么、去哪里、计划何时做，以及实际进度。
+/** @brief 任务中的一个具体步骤，包含行为类型、计划区间和实际执行进度。
  * @note 行为身份由所属任务 ID 与行为数组下标确定，不另建全局行为索引。
  * @note 计划时间使用累计未冻结的现实毫秒，区间为 [planned_begin_ms, planned_end_ms)，与实际进度分开记录。
  * @note 当前睡眠的目标有效时长由 planned_end_ms - planned_begin_ms 推导；首次启动时修订区间，执行期间保持区间长度不变。
  * @note 实际时刻同样使用累计未冻结的现实毫秒；0 是合法时刻，字段是否有效由状态和标志决定。
  */
 typedef struct DominoBehavior {
-    domino_building_id_t target_building_id;  ///< 这一步要前往或使用的建筑 ID；0 表示未指定，睡眠不依赖此字段。
-    domino_runtime_ms_t planned_begin_ms;     ///< 预计开始这一步的时刻，不代表已经实际开始。
-    domino_runtime_ms_t planned_end_ms;       ///< 预计结束这一步的时刻；与计划开始之差是预计耗时，不是已完成时长。
-    domino_runtime_ms_t started_at_ms;        ///< 第一次真正开始的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
-    domino_runtime_ms_t ended_at_ms;          ///< 完成、跳过、失败或取消的时刻；仅在终态有效。
-    domino_runtime_ms_t accounted_at_ms;      ///< 进度和效果已经算到哪个时刻；后续只结算此后的有效区间，避免重复计算。
-    domino_runtime_ms_t active_elapsed_ms;    ///< 累计实际有效执行了多久，单位毫秒；不含冻结和无收益等待。
-    domino_runtime_ms_t wait_until_ms;        ///< 等到哪个绝对时刻再检查；仅在 WAITING 状态下有效，0 也是合法时刻，不是等待时长。
-    DOMINO_BEHAVIOR_TYPE type;                ///< 这一步具体做什么，取 DOMINO_BEHAVIOR_TYPE，例如移动、吃饭或睡觉。
-    domino_status_t status;                   ///< 这一步当前的状态，取 DOMINO_BEHAVIOR_STATUS，例如正在执行、等待或已经完成。
-    bool started_flag;                        ///< 是否曾真正启动；未开始就跳过或取消时为 false，不能靠开始时刻是否为 0 判断。
-    bool effect_committed_flag;               ///< 扣款、消耗食物等一次性效果是否已提交，用于避免重复执行；不表示行为已经完成。
+    domino_runtime_ms_t planned_begin_ms;   ///< 预计开始这一步的时刻，不代表已经实际开始。
+    domino_runtime_ms_t planned_end_ms;     ///< 预计结束这一步的时刻；与计划开始之差是预计耗时，不是已完成时长。
+    domino_runtime_ms_t started_at_ms;      ///< 第一次真正开始的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
+    domino_runtime_ms_t ended_at_ms;        ///< 完成、跳过、失败或取消的时刻；仅在终态有效。
+    domino_runtime_ms_t accounted_at_ms;    ///< 进度和效果已经算到哪个时刻；后续只结算此后的有效区间，避免重复计算。
+    domino_runtime_ms_t active_elapsed_ms;  ///< 累计实际有效执行了多久，单位毫秒；不含冻结和无收益等待。
+    DOMINO_BEHAVIOR_TYPE type;              ///< 这一步具体做什么，取 DOMINO_BEHAVIOR_TYPE，例如移动、吃饭或睡觉。
+    domino_status_t status;                 ///< 这一步当前的状态，取 DOMINO_BEHAVIOR_STATUS，例如正在执行、等待或已经完成。
+    bool started_flag;                      ///< 是否曾真正启动；未开始就跳过或取消时为 false，不能靠开始时刻是否为 0 判断。
 } DominoBehavior;
 
 /** @brief 任务独占连续行为块，拥有独立游标；0 是合法时刻，启动与终结由标志及状态判断。
