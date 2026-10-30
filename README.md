@@ -174,6 +174,30 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 
 ---
 
+### Codex Cloud
+
+支持 Ubuntu 22.04／24.04／26.04 的 Linux x86_64 环境，需要联网及 root 或免密 sudo。在
+[Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
+
+| 配置 | 内容 |
+| --- | --- |
+| Install script（旧版界面为 Setup script） | `bash setup-dev.sh --cloud` |
+| Environment variables | `DOMINO_GLIBC_ROOT=/opt/domino/glibc-2.43` |
+| Public internet access | 启用 Package managers，并额外允许 `apt.kitware.com`、`apt.llvm.org` |
+
+Cloud 模式复用现有 APT 安装与工具注册流程，按 Ubuntu 发行版选择软件源，跳过远程开发使用的 Git 身份、SSH 和 root 密码配置。
+设置 `DOMINO_GLIBC_ROOT` 时，调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至指定目录，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`。
+请将变量配置在 Cloud 环境设置中，供安装和后续任务共同使用；构建沿用现有独立 glibc 工具链，不替换系统 glibc。
+
+在仓库根目录使用现有命令构建、运行：
+
+```bash
+./scripts/build.sh debug
+(cd build-debug && ./bin/domino-playground)
+```
+
+默认 Playground 完成一次引擎生命周期后退出，存档位于 `build-debug/runtime/sandbox/`；再次运行会加载该存档。
+
 ### 开发环境安装（Ubuntu 26.04 服务器）
 
 在 Ubuntu 26.04 服务器上直接执行：
@@ -185,7 +209,7 @@ sudo LLVM_VERSION=22 bash setup-dev.sh
 ```
 
 脚本可单独复制到服务器运行，不要求安装 Docker 或下载整个仓库；root 用户可直接执行 `bash setup-dev.sh`。
-脚本仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
+脚本默认模式仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
 脚本沿用原 Dockerfile 的开发环境配置：设置 root 的 Git 身份为 `domino <domino@domino.com>`、创建 SSH 密钥，并启用 root 密码登录，密码为 `123456`。
 
 ### 开发环境（Docker + VSCode Remote）

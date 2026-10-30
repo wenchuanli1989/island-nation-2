@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Ubuntu 26.04 开发环境；sudo bash setup-dev.sh
+# 远程开发环境：sudo bash setup-dev.sh；Codex Cloud：bash setup-dev.sh --cloud
 set -euo pipefail
+
+[[ $# -eq 0 || ( $# -eq 1 && "${1:-}" == --cloud ) ]] || { echo "用法: bash $0 [--cloud]（LLVM_VERSION 默认 22）" >&2; exit 1; }
+CLOUD_MODE=false
+[[ "${1:-}" != --cloud ]] || CLOUD_MODE=true
 
 # shellcheck source=/dev/null
 source /etc/os-release
-[[ "${ID:-}:${VERSION_ID:-}" == ubuntu:26.04 ]] || { echo "错误: 仅支持 Ubuntu 26.04" >&2; exit 1; }
+case "${ID:-}:${VERSION_ID:-}:$CLOUD_MODE" in
+    ubuntu:26.04:*|ubuntu:22.04:true|ubuntu:24.04:true) ;;
+    *) echo "错误: 默认模式仅支持 Ubuntu 26.04；--cloud 支持 Ubuntu 22.04/24.04/26.04" >&2; exit 1 ;;
+esac
+if [[ "$CLOUD_MODE" == true && $EUID -ne 0 ]]; then
+    exec sudo -nE bash "$0" "$@"
+fi
 [[ $EUID -eq 0 ]] || { echo "请使用 sudo bash $0 运行" >&2; exit 1; }
-[[ $# -eq 0 ]] || { echo "用法: sudo bash $0（可通过 LLVM_VERSION 指定版本，默认 22）" >&2; exit 1; }
 LLVM_VERSION="${LLVM_VERSION:-22}"
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 umask 022
@@ -19,15 +28,17 @@ wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc \
     | gpg --batch --yes --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
 wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
     | gpg --batch --yes --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ resolute main' \
+echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${VERSION_CODENAME} main" \
     > /etc/apt/sources.list.d/kitware.list
-echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-${LLVM_VERSION} main" \
+echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" \
     > /etc/apt/sources.list.d/llvm.list
 chmod 644 /usr/share/keyrings/{kitware,llvm}-archive-keyring.gpg
 
 apt-get update
+DEV_PACKAGES=(vim openssh-server sudo pahole)
+[[ "$CLOUD_MODE" == false ]] || DEV_PACKAGES=()
 apt-get install -y \
-    build-essential cmake git vim curl openssh-server sudo pahole \
+    build-essential cmake git curl "${DEV_PACKAGES[@]}" \
     "clang-${LLVM_VERSION}" "clang-tools-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
     "clang-format-${LLVM_VERSION}" "clang-tidy-${LLVM_VERSION}" "lldb-${LLVM_VERSION}" \
     "libclang-rt-${LLVM_VERSION}-dev" "llvm-${LLVM_VERSION}-linker-tools"
@@ -37,6 +48,14 @@ for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build; do
     update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-${LLVM_VERSION}" "$LLVM_VERSION"
     update-alternatives --set "$tool" "/usr/bin/${tool}-${LLVM_VERSION}"
 done
+
+if [[ "$CLOUD_MODE" == true ]]; then
+    if [[ -n "${DOMINO_GLIBC_ROOT:-}" ]]; then
+        bash "$(dirname "${BASH_SOURCE[0]}")/scripts/setup-glibc.sh"
+    fi
+    echo "Cloud 开发环境安装完成（LLVM ${LLVM_VERSION}，CMake >= 4.2.1）。"
+    exit 0
+fi
 
 # 沿用原 Dockerfile 的开发用 Git 和 SSH 配置。
 git config --global user.name domino
