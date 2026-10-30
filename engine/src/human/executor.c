@@ -153,7 +153,7 @@ static void failTask(DominoHuman* human_ptr, DominoTask* task_ptr, domino_runtim
     task_ptr->status = DOMINO_TASK_STATUS_FAILED;
     task_ptr->ended_at_ms = now_ms;
     task_ptr->execution_version++;
-    DominoBehavior* behavior_ptr = &task_ptr->behaviors_ptr[0];
+    DominoBehavior* behavior_ptr = dominoGetBehaviorByID(task_ptr->current_behavior_id);
     behavior_ptr->status = DOMINO_BEHAVIOR_STATUS_FAILED;
     behavior_ptr->ended_at_ms = now_ms;
     if (human_ptr->data->active_task_id_list[task_ptr->channel_index] == task_ptr->task_id) {
@@ -214,12 +214,17 @@ static void requestSleepPlan(DominoHuman* human_ptr, domino_runtime_ms_t now_ms)
 }
 
 /** @brief 当前只接单行为睡眠；其他合法类型仍留在 store。 */
-static bool isCoreSleep(const DominoTask* task_ptr) {
-    return task_ptr->type == DOMINO_TASK_TYPE_SLEEP && task_ptr->behavior_count == 1U &&
-           task_ptr->behaviors_ptr[0].type == DOMINO_BEHAVIOR_TYPE_SLEEP;
+static const DominoBehavior* getCoreSleepBehavior(const DominoTask* task_ptr) {
+    if (task_ptr->type != DOMINO_TASK_TYPE_SLEEP || task_ptr->behavior_count != 1U) {
+        return nullptr;
+    }
+    const domino_behavior_id_t behavior_id =
+        task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED ? task_ptr->behavior_id_list[0] : task_ptr->current_behavior_id;
+    const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(behavior_id);
+    return behavior_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP ? behavior_ptr : nullptr;
 }
 
-/** @brief 可信清单和受控写入保证槽位归属；仅检查当前执行器支持范围，不跨任务池增删保留指针。 */
+/** @brief 可信清单和受控写入保证槽位归属；仅检查当前执行器支持范围，不跨任务或行为池增删保留指针。 */
 static DominoTask* getActiveTask(const DominoHumanData* data_ptr) {
     DominoTask* active_task_ptr = nullptr;
     for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
@@ -228,11 +233,12 @@ static DominoTask* getActiveTask(const DominoHumanData* data_ptr) {
             continue;
         }
         DominoTask* task_ptr = dominoGetTaskByID(task_id);
-        if (active_task_ptr || !isCoreSleep(task_ptr)) {
+        const DominoBehavior* behavior_ptr = getCoreSleepBehavior(task_ptr);
+        if (active_task_ptr || !behavior_ptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "human=%" PRIu32 " active task=%" PRIu32 " exceeds executor core sleep support",
                                    data_ptr->human_id, task_id);
         }
-        if (task_ptr->behaviors_ptr[0].status != DOMINO_BEHAVIOR_STATUS_ACTIVE) {
+        if (behavior_ptr->status != DOMINO_BEHAVIOR_STATUS_ACTIVE) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID,
                                    "human=%" PRIu32 " running task=%" PRIu32 " has no active sleep behavior supported by executor",
                                    data_ptr->human_id, task_id);
@@ -316,17 +322,17 @@ static void advanceHuman(DominoHuman* human_ptr) {
     domino_runtime_ms_t planned_begin_ms = 0U;
     for (uint8_t index = 0U; index < data_ptr->task_count;) {
         const DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
-        if (isCoreSleep(task_ptr) && task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED) {
+        const DominoBehavior* behavior_ptr = getCoreSleepBehavior(task_ptr);
+        if (behavior_ptr && task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED) {
             code = dominoHumanStoreRemoveTask(task_ptr->task_id);
             if (code != CODE_OK) {
                 DOMINO_EXIT_WITH_ERROR(code, "cannot advance human=%" PRIu32, human_id);
             }
-            continue;  // 删除会移动任务池；下一次重新按 ID 取指针。
+            continue;  // 删除会移动任务和行为池；下一次重新按 ID 取指针。
         }
-        if (isCoreSleep(task_ptr) && task_ptr->status == DOMINO_TASK_STATUS_PLANNED) {
-            const domino_runtime_ms_t begin_ms = task_ptr->planned_begin_ms > task_ptr->behaviors_ptr[0].planned_begin_ms
-                                                     ? task_ptr->planned_begin_ms
-                                                     : task_ptr->behaviors_ptr[0].planned_begin_ms;
+        if (behavior_ptr && task_ptr->status == DOMINO_TASK_STATUS_PLANNED) {
+            const domino_runtime_ms_t begin_ms =
+                task_ptr->planned_begin_ms > behavior_ptr->planned_begin_ms ? task_ptr->planned_begin_ms : behavior_ptr->planned_begin_ms;
             if (planned_task_id == 0U || begin_ms < planned_begin_ms) {
                 planned_task_id = task_ptr->task_id;
                 planned_begin_ms = begin_ms;
@@ -348,7 +354,7 @@ static void advanceHuman(DominoHuman* human_ptr) {
     }
     if (active_task_ptr) {
         clearPendingPlan(human_ptr);
-        const DominoBehavior* behavior_ptr = &active_task_ptr->behaviors_ptr[0];
+        const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(active_task_ptr->current_behavior_id);
         const domino_runtime_ms_t target_active_ms = behavior_ptr->planned_end_ms - behavior_ptr->planned_begin_ms;
         const domino_runtime_ms_t remaining_ms = target_active_ms - behavior_ptr->active_elapsed_ms;
         if (remaining_ms > UINT32_MAX - behavior_ptr->accounted_at_ms) {
@@ -423,10 +429,12 @@ static void applyPlanResult(DominoHumanPlanEnvelope* envelope_ptr) {
         clearPendingPlan(human_ptr);
         return;
     }
-    if (envelope_ptr->task.owner_human_id != request_ptr->human_id || envelope_ptr->task.channel_index != DOMINO_HUMAN_TASK_CHANNEL_PRIMARY) {
-        DOMINO_EXIT_WITH_ERROR(
-            ERR_INVALID_DATA, "plan draft owner/channel differs from request human=%" PRIu32 " request=%" PRIu64 " owner=%" PRIu32 " channel=%u",
-            request_ptr->human_id, request_ptr->request_id, envelope_ptr->task.owner_human_id, (unsigned)envelope_ptr->task.channel_index);
+    if (envelope_ptr->draft.task.owner_human_id != request_ptr->human_id ||
+        envelope_ptr->draft.task.channel_index != DOMINO_HUMAN_TASK_CHANNEL_PRIMARY) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA,
+                               "plan draft owner/channel differs from request human=%" PRIu32 " request=%" PRIu64 " owner=%" PRIu32 " channel=%u",
+                               request_ptr->human_id, request_ptr->request_id, envelope_ptr->draft.task.owner_human_id,
+                               (unsigned)envelope_ptr->draft.task.channel_index);
     }
     if (human_ptr->data->schedule_revision != request_ptr->schedule_revision || !canPlanSleep(human_ptr)) {
         logPlanEvent(request_ptr->human_id, request_ptr->request_id, "stale", "schedule_or_eligibility_changed", CODE_OK);
@@ -446,10 +454,7 @@ static void applyPlanResult(DominoHumanPlanEnvelope* envelope_ptr) {
     if (target_active_ms > UINT32_MAX - now_ms) {
         code = ERR_OUT_OF_RANGE;
     } else {
-        code = dominoHumanStoreAddValidatedTask(&envelope_ptr->task, human_ptr->data, &task_id);
-        if (code == CODE_OK) {
-            envelope_ptr->task.behaviors_ptr = nullptr;
-        }
+        code = dominoHumanStoreAddValidatedTask(&envelope_ptr->draft.task, envelope_ptr->draft.behaviors_ptr, human_ptr->data, &task_id);
     }
     if (code == ERR_OUT_OF_RANGE || code == ERR_CAPACITY_EXCEEDED) {
         logPlanEvent(request_ptr->human_id, request_ptr->request_id, "rejected", "time_or_capacity_limit", code);

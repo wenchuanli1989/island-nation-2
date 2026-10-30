@@ -1,5 +1,3 @@
-#include <stdlib.h>
-
 #include "../human/entry.h"
 #include "../human/store.h"
 #include "domino_shared_common.h"
@@ -11,19 +9,7 @@
 #define AI_READ_UINT(object, record, field) ((record)->field = (typeof((record)->field))yyjson_get_uint(yyjson_obj_get(object, #field)))
 #define AI_READ_BOOL(object, record, field) ((record)->field = yyjson_get_bool(yyjson_obj_get(object, #field)))
 
-static void deserializeBehavior(yyjson_val* object, DominoBehavior* behavior_ptr) {
-    AI_READ_UINT(object, behavior_ptr, type);
-    AI_READ_UINT(object, behavior_ptr, planned_begin_ms);
-    AI_READ_UINT(object, behavior_ptr, planned_end_ms);
-    AI_READ_UINT(object, behavior_ptr, started_at_ms);
-    AI_READ_UINT(object, behavior_ptr, ended_at_ms);
-    AI_READ_UINT(object, behavior_ptr, accounted_at_ms);
-    AI_READ_UINT(object, behavior_ptr, active_elapsed_ms);
-    AI_READ_UINT(object, behavior_ptr, status);
-    AI_READ_BOOL(object, behavior_ptr, started_flag);
-}
-
-/** @brief 行为数量以嵌套数组为唯一来源，完成字段解析后由调用方分配连续块。 */
+/** @brief 按可信行为 ID 数组恢复任务序列；行为实体由独立分片导入。 */
 static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
     AI_READ_UINT(object, task_ptr, task_id);
     AI_READ_UINT(object, task_ptr, owner_human_id);
@@ -31,45 +17,26 @@ static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
     AI_READ_UINT(object, task_ptr, planned_end_ms);
     AI_READ_UINT(object, task_ptr, started_at_ms);
     AI_READ_UINT(object, task_ptr, ended_at_ms);
-    AI_READ_UINT(object, task_ptr, current_behavior_index);
+    AI_READ_UINT(object, task_ptr, current_behavior_id);
     AI_READ_UINT(object, task_ptr, type);
     AI_READ_UINT(object, task_ptr, channel_index);
     AI_READ_UINT(object, task_ptr, status);
     AI_READ_UINT(object, task_ptr, priority_class);
     AI_READ_BOOL(object, task_ptr, started_flag);
-    yyjson_val* behaviors = yyjson_obj_get(object, "behaviors");
+    yyjson_val* behaviors = yyjson_obj_get(object, "behavior_id_list");
     size_t count = yyjson_arr_size(behaviors);
     if (count > DOMINO_TASK_BEHAVIOR_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI behavior count exceeds task capacity: task_id=%u count=%zu", task_ptr->task_id,
                                count);
     }
     task_ptr->behavior_count = (uint8_t)count;
+    serdeReadU32Array(behaviors, task_ptr->behavior_id_list, DOMINO_TASK_BEHAVIOR_COUNT_MAX);
 }
 
 #undef AI_READ_UINT
 #undef AI_READ_BOOL
 
-/** @brief 写入行为事实；睡眠目标时长由计划区间推导，不单独保存。 */
-static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavior* behavior) {
-    yyjson_mut_val* object = yyjson_mut_obj(doc);
-    if (!object) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
-    }
-    if (!yyjson_mut_obj_add_uint(doc, object, "type", behavior->type) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", behavior->planned_begin_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", behavior->planned_end_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", behavior->started_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", behavior->ended_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "accounted_at_ms", behavior->accounted_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "active_elapsed_ms", behavior->active_elapsed_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "status", behavior->status) ||
-        !yyjson_mut_obj_add_bool(doc, object, "started_flag", behavior->started_flag)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behavior fields");
-    }
-    return object;
-}
-
-/** @brief 显式写入任务持久化字段和行为内容，不写 behaviors_ptr 地址与 execution_version。 */
+/** @brief 显式写入任务事实及行为 ID，不写运行期 execution_version。 */
 static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task) {
     yyjson_mut_val* object = yyjson_mut_obj(doc);
     if (!object || !yyjson_mut_obj_add_uint(doc, object, "task_id", task->task_id) ||
@@ -78,27 +45,26 @@ static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task
         !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", task->planned_end_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", task->started_at_ms) ||
         !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", task->ended_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "current_behavior_index", task->current_behavior_index) ||
+        !yyjson_mut_obj_add_uint(doc, object, "current_behavior_id", task->current_behavior_id) ||
         !yyjson_mut_obj_add_uint(doc, object, "channel_index", task->channel_index) || !yyjson_mut_obj_add_uint(doc, object, "type", task->type) ||
         !yyjson_mut_obj_add_uint(doc, object, "status", task->status) ||
         !yyjson_mut_obj_add_uint(doc, object, "priority_class", task->priority_class) ||
         !yyjson_mut_obj_add_bool(doc, object, "started_flag", task->started_flag)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI task fields");
     }
-    yyjson_mut_val* behaviors = yyjson_mut_obj_add_arr(doc, object, "behaviors");
+    yyjson_mut_val* behaviors = yyjson_mut_obj_add_arr(doc, object, "behavior_id_list");
     if (!behaviors) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI task fields");
     }
     for (uint32_t index = 0; index < task->behavior_count; index++) {
-        yyjson_mut_val* behavior = serializeBehavior(doc, &task->behaviors_ptr[index]);
-        if (!yyjson_mut_arr_append(behaviors, behavior)) {
+        if (!yyjson_mut_arr_add_uint(doc, behaviors, task->behavior_id_list[index])) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI task fields");
         }
     }
     return object;
 }
 
-/** @brief 人物 AI 事实归属 human.data；此分片仅保存人物 ID 及其任务和行为。 */
+/** @brief 人物 AI 事实归属 human.data；此分片仅保存人物 ID 及其任务。 */
 static yyjson_mut_val* serializeAI(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
     if (human_data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human AI task count exceeds capacity: human_id=%u count=%u", human_data->human_id,
@@ -122,7 +88,7 @@ static yyjson_mut_val* serializeAI(yyjson_mut_doc* doc, const DominoHumanData* h
 }
 
 /**
- * @brief 任务清单已由 human.data 恢复，此处只导入任务实体；已导入的行为块归 store。
+ * @brief 任务清单已由 human.data 恢复，此处只导入任务实体及其行为 ID 序列。
  * 当前格式存档保证任务身份、归属与引用正确；本次资源失败直接终止，不回滚已导入内容。
  */
 static void loadOneAI(yyjson_val* object) {
@@ -149,14 +115,6 @@ static void loadOneAI(yyjson_val* object) {
     yyjson_arr_foreach(tasks, task_index, task_count, task_object) {
         DominoTask task = {0};
         deserializeTask(task_object, &task);
-        task.behaviors_ptr = calloc(task.behavior_count, sizeof(*task.behaviors_ptr));
-        if (!task.behaviors_ptr) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human AI behaviors: task_id=%u count=%u", task.task_id, task.behavior_count);
-        }
-        yyjson_val* behaviors = yyjson_obj_get(task_object, "behaviors");
-        for (uint32_t index = 0; index < task.behavior_count; index++) {
-            deserializeBehavior(yyjson_arr_get(behaviors, index), &task.behaviors_ptr[index]);
-        }
         DOMINO_CODE result = dominoHumanStoreImportTask(&task);
         if (result != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(result, "Cannot import human AI task: task_id=%u", task.task_id);

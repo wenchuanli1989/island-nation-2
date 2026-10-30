@@ -24,7 +24,7 @@ static HumanPlanner g_planner;
 
 void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr) {
     if (message_ptr && (message_ptr->type == DOMINO_THREAD_MESSAGE_AI_REQUEST || message_ptr->type == DOMINO_THREAD_MESSAGE_AI_RESULT)) {
-        free(message_ptr->payload.plan.task.behaviors_ptr);
+        free(message_ptr->payload.plan.draft.behaviors_ptr);
         *message_ptr = (DominoThreadMessage){0};
     }
 }
@@ -34,7 +34,7 @@ static void buildPlan(DominoHumanPlanEnvelope* envelope_ptr) {
     const DominoHumanPlanRequest* request_ptr = &envelope_ptr->request;
     envelope_ptr->status = DOMINO_HUMAN_PLAN_NO_PLAN;
     const DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY, request_ptr->energy,
-                                                            request_ptr->now_ms, &envelope_ptr->task);
+                                                            request_ptr->now_ms, &envelope_ptr->draft);
     if (code == ERR_OUT_OF_RANGE) {
         // 快照已验证；剩余可表示时长不足属于本次计划无法成立，不代表当前时钟失效。
         envelope_ptr->reason = DOMINO_HUMAN_PLAN_REASON_TIME_RANGE;

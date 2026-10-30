@@ -46,7 +46,7 @@ void dominoHumanPlannerStop(void);
  */
 void dominoHumanPlannerDestroy(void);
 
-/** @brief 释放 AI 内嵌草案中尚未转移的行为块并清空消息；空指针或非 AI 消息不操作。 */
+/** @brief 释放 AI 内嵌草案行为块并清空消息；store 按值提交后仍须调用，空指针或非 AI 消息不操作。 */
 void dominoHumanPlannerReleaseMessage(DominoThreadMessage* message_ptr);
 
 #endif

@@ -30,7 +30,8 @@ typedef uint32_t domino_runtime_ms_t;
 typedef uint32_t domino_human_id_t;
 typedef uint32_t domino_asset_id_t;  // ID可回绕
 typedef uint32_t domino_org_id_t;
-typedef uint32_t domino_task_id_t;  // ID可回绕
+typedef uint32_t domino_task_id_t;      // ID可回绕
+typedef uint32_t domino_behavior_id_t;  // ID可回绕
 
 typedef uint32_t domino_island_id_t;
 typedef uint32_t domino_city_id_t;

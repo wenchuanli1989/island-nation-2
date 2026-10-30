@@ -1,5 +1,5 @@
 {
-  "version": 21,
+  "version": 22,
   "integrity_verify": false,
   "info": {
     "account_id": "sandbox-account"
@@ -12,6 +12,7 @@
     "global_increment_id": {
       "human": 2,
       "task": 0,
+      "behavior": 0,
       "org": 0,
       "country": 0,
       "city": 0,
@@ -51,6 +52,10 @@
       "size": 0
     },
     "human": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "human_behavior": {
       "crc32c": 0,
       "size": 0
     },

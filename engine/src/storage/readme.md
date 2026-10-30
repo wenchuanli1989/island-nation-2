@@ -30,7 +30,8 @@
 | `serde_registry.c` / `serde_registry.h` | 注册可分片实体类型，并用宏生成统一 save/load 循环。 |
 | `serde_host.c` | `regions.json`、`movable_object`、`island`。 |
 | `serde_human.c` | `human` 与 `DominoHumanData`。 |
-| `serde_human_ai.c` | 按人物归组的嵌套任务／行为记录；人物日程与需求状态由 `serde_human.c` 保存。 |
+| `serde_human_ai.c` | 按人物归组的任务记录及行为 ID 序列；人物日程与需求状态由 `serde_human.c` 保存。 |
+| `serde_human_behavior.c` | 独立保存全局行为数组及其行为 ID、状态、时间和进度。 |
 | `serde_social.c` | `org`、`building`、`city`、`country` 与各自 data，以及 `asset`。 |
 | `serde_nav.c` | `fork_road`、`road`、`road_line` 的权威实体数据；不保存运行期索引与导航缓存。 |
 
@@ -70,7 +71,7 @@ storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺
 9. 所有实体主表和 ID map 加载完成后，统一调用不可失败的 `bind_references_fn` 绑定指针并重置不持久化的运行字段。加载不另行扫描跨模块引用关系。
 
 实体分片的数量与 ID 唯一性由可信存档契约保证；宏生成的 load 函数保留数组分配大小、哈希容量和实际插入失败检查。
-加载致命失败时立即终止，不撤销已导入的实体、字符串、任务、容器长度或 ID 映射，也不释放当前解析文档和临时行为块。完整加载成功或确认没有存档的新世界启动，才释放本轮临时文档与摘要索引。
+加载致命失败时立即终止，不撤销已导入的实体、字符串、任务、容器长度或 ID 映射，也不释放当前解析文档。完整加载成功或确认没有存档的新世界启动，才释放本轮临时文档与摘要索引。
 
 ## 事务崩溃恢复
 
@@ -106,6 +107,7 @@ storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺
 ├── country.meta.json
 ├── fork_road.meta.json
 ├── human.meta.json
+├── human_behavior.meta.json
 ├── human_ai.meta.json
 ├── island.meta.json
 ├── movable_object.meta.json
@@ -119,6 +121,7 @@ storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺
 ├── country_0.json
 ├── fork_road_0.json
 ├── human_0.json
+├── human_behavior_0.json
 ├── human_ai_0.json
 ├── island_0.json
 ├── movable_object_0.json
@@ -152,6 +155,7 @@ root
     ├── country
     ├── fork_road
     ├── human
+    ├── human_behavior
     ├── human_ai
     ├── island
     ├── movable_object
@@ -160,7 +164,7 @@ root
     └── road_line
 ```
 
-`runtime_data.game_date_time_ns` 保存 time 模块的累计未冻结现实纳秒基准，以 `uint64_t` 纳秒保留精度，未应用游戏日历倍率。它不是业务毫秒字段；业务时刻和时长固定为 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，由 `dominoTimeGetRuntimeMs(&now_ms)` 校验范围后输出，超出范围报错。加载新会话不清零累计基准，纳秒存储位宽不能作为扩宽业务毫秒的依据。`global_increment_id` 当前保存：`human`、`task`、`org`、`country`、`city`、`island`、`building`、`fork_road`、`road_line`、`asset`、`movable_object`、`name`、`description`。`task` 对应 `DominoGlobalIncrementID.task_increment_id`，沿用其他实体计数器的原子读写方式保存和恢复，表示 32 位下一候选任务 ID。0 是合法初值或回绕值，取号会跳过 0，并由任务池单写线程跳过现有 ID map 中仍占用的任务 ID；该值不要求大于已有任务 ID，任务提交失败留下的 ID 空洞不回退。加载直接恢复 `task`，不按任务最大 ID 改写计数器；导航的 fork road 与 road line 游标也使用完整 meta 中的值，不重新扫描最大 ID 修复。
+`runtime_data.game_date_time_ns` 保存 time 模块的累计未冻结现实纳秒基准，以 `uint64_t` 纳秒保留精度，未应用游戏日历倍率。它不是业务毫秒字段；业务时刻和时长固定为 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，由 `dominoTimeGetRuntimeMs(&now_ms)` 校验范围后输出，超出范围报错。加载新会话不清零累计基准，纳秒存储位宽不能作为扩宽业务毫秒的依据。`global_increment_id` 当前保存：`human`、`task`、`behavior`、`org`、`country`、`city`、`island`、`building`、`fork_road`、`road_line`、`asset`、`movable_object`、`name`、`description`。`task/behavior` 分别对应 `DominoGlobalIncrementID.task_increment_id/behavior_increment_id`，按原子读写方式保存和恢复，表示各自 32 位下一候选 ID。0 是合法初值或回绕值，取号会跳过 0，并由 store 单写线程跳过各自 ID map 中仍占用的 ID；计数器不要求大于已有 ID，提交失败留下的候选 ID 空洞不回退。加载直接恢复 `task/behavior`，不按最大 ID 改写计数器；导航的 fork road 与 road line 游标也使用完整 meta 中的值，不重新扫描最大 ID 修复。
 
 `sub_module.{type}` 结构：
 
@@ -264,7 +268,7 @@ root
 注册表顺序固定为：
 
 ```text
-regions -> asset -> building -> city -> country -> fork_road -> human -> human_ai -> island -> movable_object -> org -> road -> road_line
+regions -> asset -> building -> city -> country -> fork_road -> human -> human_behavior -> human_ai -> island -> movable_object -> org -> road -> road_line
 ```
 
 分片大小：
@@ -272,7 +276,8 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 | 类型 | 每片上限 |
 |------|----------|
 | `human`、`org`、`building`、`city`、`country` | `DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA`，8000 |
-| `human_ai` | `DOMINO_STORAGE_SHARD_HUMAN_AI`，128；每条记录内嵌本人物的任务与行为 |
+| `human_behavior` | `DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA`，100000；全局行为数组独立分片 |
+| `human_ai` | `DOMINO_STORAGE_SHARD_HUMAN_AI`，128；每条记录内嵌本人物的任务及行为 ID 序列 |
 | `asset`、`fork_road`、`road`、`road_line`、`island`、`movable_object` | `DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA`，100000 |
 
 `STORAGE_DEFINE_SHARDED_SIMPLE` 生成无嵌套 data 的实体保存/加载函数。加载入口只校验数组分配大小和哈希容量上限，实体与 ID map 在实际插入时按需分配，失败直接打印到 stderr 并 exit；不为后续步骤预留容量。`STORAGE_DEFINE_SHARDED_WITH_DATA` 的 data push 与 data id map 维护由对应 `deserializeX()` 完成，并在该模块全部分片加载后按可信的 data_id 绑定指针，避免加载中扩容使地址失效。human 使用专用保存／加载函数维护必需的同序 data 与共用人物 ID map，不套用可选 data 的宏。
@@ -324,12 +329,12 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 
 `serde_human_ai.c`：
 
-- 每个人物恰有一条 `{human_id, tasks}` 记录，人物任务嵌套在 `tasks` 数组中，每个任务再嵌套自己的行为块；`tasks` 按 `data.task_id_list` 的有效前缀顺序保存；加载按 ID 导入可信任务，不重新排序或补齐人物任务清单，也不分配人物去重位图。本模块按 128 人分片，不重复保存人物需求或随机状态。
-- 任务与行为保存状态、计划／实际时间、有效进度和行为游标。行为的执行进度字段直接属于 `DominoBehavior`，类型、状态、计划／实际时间、有效时长和启动标志均直接保存为行为 JSON 对象的字段。任务为扁平记录，不支持任务暂停／恢复及父子层级，不保存父子引用、停止交接意图或取消范围。任务另保存 `channel_index`（0 为主通道，1、2 为同级次通道），三者均允许任意已定义任务类型，不通过类型推断所属通道。所有业务时间均为 32 位累计未冻结现实毫秒；0 和 `UINT32_MAX` 都是合法数值，由状态和显式标志区分是否启动或结束。
-- `DominoTask` 直接保存 `behaviors_ptr` 和 `execution_version`，serde 逐字段写入任务事实，并将指针指向的行为内容写入嵌套数组，不写裸指针或执行版本。加载重新分配连续行为块，填入任务的 `behaviors_ptr` 后交给 `dominoHumanStoreImportTask()`；导入依赖调用方保证任务池已初始化、任务身份正确、独占行为块有效且 ID 唯一，只检查池容量与实际资源操作。成功后由任务池拥有该独占块；导入返回容量错误或资源操作失败时，serde 直接打印到 stderr 后 exit。运行期提交层先校验草案语义和人物归属，再由 `dominoHumanStoreAddValidatedTask()` 复用已取得的人物 data，检查容量、版本上限、ID 分配和入池资源错误。每次导入将该任务的 `uint64_t execution_version` 初始化为 1，新建任务同样从 1 开始，随后重置人物运行态不修改任务版本。后续由执行线程在检查 `UINT64_MAX` 后直接递增本任务版本，达到上限则返回 `ERR_OUT_OF_RANGE` 且版本不变；不同任务无需保持版本不同，也不增加全局版本计数器。执行器在消费异步结果时重新核对请求身份、版本和当前资格。
-- 加载完成后只绑定人物/位置指针并重置人物调度字段，不再调用全世界语义审计。人物/data 同序身份、索引、绑定指针、位置引用以及人物异常状态、任务与行为语义、唯一归属、活动槽、行为游标和持久时间关系由可信加载及运行时输入、状态变更边界保证。Human 与 HumanAI 直接按当前记录写出分片，不另设保存前数据审计；数量窄化和固定数组容量仍在写出使用边界检查。
-- JSON 字段类型、窄化范围与关系完整性不在读取时复查；行为数、人物任务数组长度、任务池容量、聚合分配大小和行为块分配结果仍检查。行为保留实际开始／结束时刻、结算检查点、有效进度与启动标志，目标建筑、等待检查时刻和一次性效果提交标志均不进入当前行为记录。未启动或未结束状态下不生效的时间字段按原值保留；有效进度与关键引用的约束由可信加载及运行时输入、状态变更边界保证。
-- 已定义的任务／行为类型统一保存和加载，任务可包含多个行为，公共状态、时间和游标关系由可信加载及运行时输入、状态变更边界保证。行为不再保存 `parameters` 对象或独立的 `target_active_ms` 字段；睡眠目标有效时长直接由行为的 `planned_end_ms - planned_begin_ms` 推导，执行期间保持该区间长度不变，加载后按保存的区间与 `active_elapsed_ms` 继续执行。当前执行器只执行独立单行为核心睡眠，无需建筑或地点许可；退出时停止全部业务线程后统一结算正常人物，异常人物不再推进需求或任务。加载后正常人物直接续跑并重建计时唤醒，异常人物保持原业务事实。游戏全局冻结／解冻和正常任务的存档续跑不属于任务暂停／恢复能力。通用任务执行与其他地点服务资格仍待扩充。
+- 每个人物恰有一条 `{human_id, tasks}` 记录，人物任务嵌套在 `tasks` 数组中，每个任务保存自己的 `behavior_id_list` 和 `current_behavior_id`，行为实体由独立 `human_behavior` 分片保存；`tasks` 按 `data.task_id_list` 的有效前缀顺序保存；加载按 ID 导入可信任务，不重新排序或补齐人物任务清单，也不分配人物去重位图。本模块按 128 人分片，不重复保存人物需求或随机状态。
+- 任务与行为保存状态、计划／实际时间和有效进度，任务用当前行为 ID 表示进度位置。行为的执行进度字段直接属于 `DominoBehavior`，类型、状态、计划／实际时间、有效时长和启动标志均直接保存为行为 JSON 对象的字段。任务为扁平记录，不支持任务暂停／恢复及父子层级，不保存父子引用、停止交接意图或取消范围。任务另保存 `channel_index`（0 为主通道，1、2 为同级次通道），三者均允许任意已定义任务类型，不通过类型推断所属通道。所有业务时间均为 32 位累计未冻结现实毫秒；0 和 `UINT32_MAX` 都是合法数值，由状态和显式标志区分是否启动或结束。
+- `DominoTask` 直接保存行为 ID 数组、当前行为 ID 和 `execution_version`，serde 写入任务事实与行为 ID，不写执行版本。`serde_human_behavior.c` 按全局数组顺序单独保存行为实体，加载通过 `dominoHumanStoreImportBehavior()` 建立行为池和 ID map，任务通过 `dominoHumanStoreImportTask()` 独立导入。导入依赖调用方保证存储已初始化、实体身份及引用正确且 ID 唯一，只检查池容量与实际资源操作；容量错误或资源操作失败直接打印到 stderr 后 exit。运行期提交层先校验草案语义和人物归属，再由 `dominoHumanStoreAddValidatedTask()` 检查容量、版本上限、任务／行为 ID 分配及入池资源错误，并将草案行为按值复制进全局池；草案块仍由调用方或消息释放。新建和加载导入均将任务的 `uint64_t execution_version` 初始化为 1，随后重置人物运行态不修改任务版本。执行线程在检查 `UINT64_MAX` 后直接递增本任务版本，达到上限则返回 `ERR_OUT_OF_RANGE` 且版本不变；不同任务无需保持版本不同，也不增加全局版本计数器。执行器在消费异步结果时重新核对请求身份、版本和当前资格。
+- 加载完成后只绑定人物/位置指针并重置人物调度字段，不再调用全世界语义审计。人物/data 同序身份、索引、绑定指针、位置引用以及人物异常状态、任务与行为语义、唯一归属、活动槽、当前行为 ID 和持久时间关系由可信加载及运行时输入、状态变更边界保证。Human、HumanAI 与 HumanBehavior 直接按当前记录写出分片，不另设保存前数据审计；数量窄化和固定数组容量仍在写出使用边界检查。
+- JSON 字段类型、窄化范围与关系完整性不在读取时复查；行为数、人物任务数组长度、任务／行为池容量、聚合分配大小和实际分配结果仍检查。行为保留实际开始／结束时刻、结算检查点、有效进度与启动标志，目标建筑、等待检查时刻和一次性效果提交标志均不进入当前行为记录。未启动或未结束状态下不生效的时间字段按原值保留；有效进度与关键引用的约束由可信加载及运行时输入、状态变更边界保证。
+- 已定义的任务／行为类型统一保存和加载，任务可包含多个行为，公共状态、时间和当前行为引用由可信加载及运行时输入、状态变更边界保证。行为不再保存 `parameters` 对象或独立的 `target_active_ms` 字段；睡眠目标有效时长直接由行为的 `planned_end_ms - planned_begin_ms` 推导，执行期间保持该区间长度不变，加载后按保存的区间与 `active_elapsed_ms` 继续执行。当前执行器只执行独立单行为核心睡眠，无需建筑或地点许可；退出时停止全部业务线程后统一结算正常人物，异常人物不再推进需求或任务。加载后正常人物直接续跑并重建计时唤醒，异常人物保持原业务事实。游戏全局冻结／解冻和正常任务的存档续跑不属于任务暂停／恢复能力。通用任务执行与其他地点服务资格仍待扩充。
 
 `serde_social.c`：
 
@@ -360,4 +365,4 @@ regions -> asset -> building -> city -> country -> fork_road -> human -> human_a
 - `metaLoad()` 严格要求当前版本格式；本项目不承担历史存档迁移。
 - 当前格式每个注册项都有模块 meta；加载不提供缺失模块兼容路径，只有整个根 `meta.json` 不存在时才按新世界启动。
 - 名称与描述按字符串重新分配 ID，不保证跨 save/load 后数值 ID 稳定。
-- 存档版本由 `DOMINO_STORAGE_SAVE_VERSION` 控制，当前为 `21`：行为移除当前未使用的 `target_building_id`、`wait_until_ms` 和 `effect_committed_flag`，其余字段保持原语义；行为进度字段直接保存在行为对象中，睡眠目标时长由计划区间推导，行为移除 `parameters` 及其中的 `target_active_ms`；人物 `status` 明确定义正常与异常，任务失败或取消后的异常状态持久保存。任务／行为状态删除挂起／暂停值，任务移除 `parent_task_id`、`active_child_task_id`、`pending_child_task_id`、`cancel_target_task_id`、`pending_stop_reason` 和 `cancel_scope`；任务没有 `result` 字段，由 `status` 表达当前状态及结束结果。地域统一保存九项 `uint32_t` 数量字段（包含 `movable_object_count` 和 `fork_road_count`）。人物及其必需的 data 统一使用 `human_id`，六项需求采用 0～100 整数分，人物 data 用 `task_id_list` 保存持有任务的提交顺序，数组长度恢复 `task_count`，并保存活动槽、日程版本及需求事实；`human_ai` 依人物 ID 数组顺序保存归组的任务／行为。根 meta 的 `global_increment_id.task` 继续保存全局原子计数器的下一候选 ID。开发样例同步版本 21，不提供旧布局迁移或双版本加载。格式变化必须同步提升版本。
+- 存档版本由 `DOMINO_STORAGE_SAVE_VERSION` 控制，当前为 `22`：任务保存 `behavior_id_list` 和 `current_behavior_id`，行为以非零 `behavior_id` 标识，独立 `human_behavior` 分片按全局行为数组顺序保存。`human_ai` 仍依人物任务 ID 数组顺序保存归组任务；根 meta 的 `global_increment_id.task/behavior` 保存各自下一候选 ID。任务执行版本不持久化，导入时置 1。任务／行为继续保存各自状态、计划／实际时间和进度，睡眠目标时长由计划区间推导；人物及其 data、地域数量等其余字段保持现有语义。开发样例同步版本 22，不提供旧布局迁移或双版本加载。格式变化必须同步提升版本。

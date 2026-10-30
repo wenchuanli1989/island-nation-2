@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "domino_shared_behavior.h"
 #include "domino_shared_host.h"
+#include "domino_shared_human_task.h"
 
 /**
  * @file domino_shared_human.h

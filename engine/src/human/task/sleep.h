@@ -1,9 +1,9 @@
 #ifndef DOMINO_ENGINE_HUMAN_TASK_SLEEP_H
 #define DOMINO_ENGINE_HUMAN_TASK_SLEEP_H
 
-#include "domino_shared_behavior.h"
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
+#include "draft.h"
 
 /** @file sleep.h
  * @brief 单个核心睡眠行为的同步内核；复用现有任务、行为和人物需求，不读取时钟或登记计时器。
@@ -24,11 +24,11 @@
  * @param draft_out_ptr 成功时写入无 ID 的 PLANNED 草案；调用方不得以仍持有行为块的草案作为输出。
  * @return CODE_OK 成功；空输出返回 ERR_NULL_POINTER；非法 ID/通道返回 ERR_INVALID_PARAM；精力值或到期时刻越界返回
  * ERR_OUT_OF_RANGE；未达到睡眠触发条件返回 ERR_GAME_STATE_INVALID；分配失败直接打印致命错误并终止进程。
- * @note 成功后调用方独占行为块，须提交转移或释放；失败保持输出不变。
+ * @note 成功后调用方独占草案行为块，store 提交只复制内容，提交后仍须释放；失败保持输出不变。
  * 本函数仅校验值输入，不证明人物或通道目前仍有效。
  */
 DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, uint8_t energy, domino_runtime_ms_t snapshot_ms,
-                                           DominoTask* draft_out_ptr);
+                                           DominoTaskDraft* draft_out_ptr);
 
 /** @brief 精力不高于触发阈值时提交 PLANNED 睡眠任务，不立即启动或修改需求。
  * @param human_ptr 调用方已取得且 data 已绑定的正常人物。
@@ -39,7 +39,7 @@ DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, uint8_t c
  * ERR_GAME_STATE_INVALID；已有未终结睡眠返回 ERR_ALREADY_EXISTS；任务容量耗尽返回
  * ERR_CAPACITY_EXCEEDED；记录损坏或时间范围错误直接传播；分配失败直接打印致命错误并终止进程。
  * @note 要求三个活动槽均为空，且本人没有未终结的睡眠任务；不自动回收终态任务。
- * 行为块仅在 store 接收成功后转移所有权；失败不修改人物、需求或任务清单。
+ * store 按值复制草案行为，临时行为块由本接口释放；失败不修改人物、需求或任务清单。
  */
 DOMINO_CODE dominoHumanSubmitSleepTask(DominoHuman* human_ptr, uint8_t channel_index, domino_runtime_ms_t now_ms, domino_task_id_t* task_id_out_ptr);
 

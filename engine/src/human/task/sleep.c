@@ -25,19 +25,26 @@ static uint8_t predictEnergy(const DominoHumanData* data_ptr, domino_runtime_ms_
 }
 
 /** @brief 调用方取得有效 store 记录；仅检查本批支持的单行为睡眠形态，不重复扫描任务状态机。 */
-static DOMINO_CODE validateSleepTask(const DominoTask* task_ptr) {
+static DOMINO_CODE validateSleepTask(const DominoTask* task_ptr, DominoBehavior** behavior_out_ptr) {
     if (!task_ptr) {
         return ERR_NULL_POINTER;
     }
-    if (task_ptr->type != DOMINO_TASK_TYPE_SLEEP || task_ptr->behavior_count != 1U || task_ptr->behaviors_ptr[0].type != DOMINO_BEHAVIOR_TYPE_SLEEP) {
+    if (task_ptr->type != DOMINO_TASK_TYPE_SLEEP || task_ptr->behavior_count != 1U) {
         return ERR_GAME_STATE_INVALID;
     }
+    const domino_behavior_id_t behavior_id =
+        task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED ? task_ptr->behavior_id_list[0] : task_ptr->current_behavior_id;
+    DominoBehavior* behavior_ptr = dominoGetBehaviorByID(behavior_id);
+    if (behavior_ptr->type != DOMINO_BEHAVIOR_TYPE_SLEEP) {
+        return ERR_GAME_STATE_INVALID;
+    }
+    *behavior_out_ptr = behavior_ptr;
     return CODE_OK;
 }
 
 /** @brief 值输入和绝对到期时刻已通过预检；分配独占行为块并构造有效 PLANNED 草案。 */
 static void buildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, domino_runtime_ms_t target_active_ms,
-                                domino_runtime_ms_t snapshot_ms, DominoTask* draft_out_ptr) {
+                                domino_runtime_ms_t snapshot_ms, DominoTaskDraft* draft_out_ptr) {
     DominoBehavior* behavior_ptr = calloc(1U, sizeof(*behavior_ptr));
     if (!behavior_ptr) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Sleep behavior allocation failed: human=%u bytes=%zu", human_id, sizeof(*behavior_ptr));
@@ -48,21 +55,24 @@ static void buildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_inde
         .type = DOMINO_BEHAVIOR_TYPE_SLEEP,
         .status = DOMINO_BEHAVIOR_STATUS_PENDING,
     };
-    *draft_out_ptr = (DominoTask){
+    *draft_out_ptr = (DominoTaskDraft){
         .behaviors_ptr = behavior_ptr,
-        .owner_human_id = human_id,
-        .planned_begin_ms = snapshot_ms,
-        .planned_end_ms = snapshot_ms + target_active_ms,
-        .type = DOMINO_TASK_TYPE_SLEEP,
-        .channel_index = channel_index,
-        .behavior_count = 1U,
-        .status = DOMINO_TASK_STATUS_PLANNED,
-        .priority_class = DOMINO_TASK_PRIORITY_FREE,
+        .task =
+            {
+                .owner_human_id = human_id,
+                .planned_begin_ms = snapshot_ms,
+                .planned_end_ms = snapshot_ms + target_active_ms,
+                .type = DOMINO_TASK_TYPE_SLEEP,
+                .channel_index = channel_index,
+                .behavior_count = 1U,
+                .status = DOMINO_TASK_STATUS_PLANNED,
+                .priority_class = DOMINO_TASK_PRIORITY_FREE,
+            },
     };
 }
 
 DOMINO_CODE dominoHumanBuildSleepTaskDraft(domino_human_id_t human_id, uint8_t channel_index, uint8_t energy, domino_runtime_ms_t snapshot_ms,
-                                           DominoTask* draft_out_ptr) {
+                                           DominoTaskDraft* draft_out_ptr) {
     if (!draft_out_ptr) {
         return ERR_NULL_POINTER;
     }
@@ -128,12 +138,10 @@ DOMINO_CODE dominoHumanSubmitSleepTask(DominoHuman* human_ptr, uint8_t channel_i
     if (code != CODE_OK) {
         return code;
     }
-    DominoTask draft = {0};
+    DominoTaskDraft draft;
     buildSleepTaskDraft(data_ptr->human_id, channel_index, target_active_ms, now_ms, &draft);
-    code = dominoHumanStoreAddValidatedTask(&draft, data_ptr, task_id_out_ptr);
-    if (code != CODE_OK) {
-        free(draft.behaviors_ptr);
-    }
+    code = dominoHumanStoreAddValidatedTask(&draft.task, draft.behaviors_ptr, data_ptr, task_id_out_ptr);
+    free(draft.behaviors_ptr);
     return code;
 }
 
@@ -145,11 +153,11 @@ DOMINO_CODE dominoHumanStartSleepTask(DominoTask* task_ptr, DominoHuman* human_p
         return ERR_GAME_STATE_INVALID;
     }
     DominoHumanData* data_ptr = human_ptr->data;
-    DOMINO_CODE code = validateSleepTask(task_ptr);
+    DominoBehavior* behavior_ptr;
+    DOMINO_CODE code = validateSleepTask(task_ptr, &behavior_ptr);
     if (code != CODE_OK) {
         return code;
     }
-    DominoBehavior* behavior_ptr = &task_ptr->behaviors_ptr[0];
     if (now_ms < task_ptr->planned_begin_ms || now_ms < behavior_ptr->planned_begin_ms) {
         return ERR_GAME_STATE_INVALID;
     }
@@ -208,11 +216,11 @@ DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHuman* human
         return ERR_GAME_STATE_INVALID;
     }
     DominoHumanData* data_ptr = human_ptr->data;
-    DOMINO_CODE code = validateSleepTask(task_ptr);
+    DominoBehavior* behavior_ptr;
+    DOMINO_CODE code = validateSleepTask(task_ptr, &behavior_ptr);
     if (code != CODE_OK) {
         return code;
     }
-    DominoBehavior* behavior_ptr = &task_ptr->behaviors_ptr[0];
     if (task_ptr->status >= DOMINO_TASK_STATUS_SUCCEEDED) {
         if (now_ms < task_ptr->ended_at_ms) {
             return ERR_INVALID_PARAM;
@@ -252,7 +260,7 @@ DOMINO_CODE dominoHumanAdvanceSleepTask(DominoTask* task_ptr, DominoHuman* human
     dominoHumanApplySleep(data_ptr, behavior_ptr, now_ms);
     if (completing_flag) {
         task_ptr->status = DOMINO_TASK_STATUS_SUCCEEDED;
-        task_ptr->current_behavior_index = task_ptr->behavior_count;
+        task_ptr->current_behavior_id = 0U;
         task_ptr->ended_at_ms = now_ms;
         task_ptr->execution_version++;
         data_ptr->active_task_id_list[task_ptr->channel_index] = 0U;

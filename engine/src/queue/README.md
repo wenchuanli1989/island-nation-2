@@ -38,9 +38,9 @@ if (code != CODE_OK) {
 
 接收者 Consume 得到完整消息，按 `type` 读取对应联合体成员；类型和载荷的对应关系由生产入口保证。
 GAME_TIMER 和 COMMAND 没有独占的动态载荷，处理或丢弃后无需释放。game_timer 的队列指针是借用引用，业务方负责保持队列有效。
-AI 的 envelope 同样内嵌，但 DRAFT 的行为数组仍为另行分配的独占块；按值复制不会递归复制该数组。
+AI 的 envelope 同样内嵌，其中 `DominoTaskDraft` 的行为数组为另行分配的独占块；按值复制不会递归复制该数组。
 入队成功才移交行为块所有权，发送者之后不得读取、修改、释放或再次发送该行为指针；入队失败仍归发送者。
-接收者处理或丢弃 AI 消息后调用 `dominoHumanPlannerReleaseMessage()`，释放未被任务系统接管的行为块并清空消息。
+接收者处理或丢弃 AI 消息后调用 `dominoHumanPlannerReleaseMessage()`，释放草案行为块并清空消息。任务系统提交时按值复制行为进全局池，提交成功后仍由消息清理释放原草案块。
 不能把栈地址或可扩容数组内部地址作为载荷中的借用指针交给异步消费者。
 
 执行器收件队列可依次出现 `AI_RESULT → GAME_TIMER → COMMAND`；规划器当前只接收由 Submit 构造的 AI_REQUEST。
@@ -107,11 +107,11 @@ Snapshot/Wait/WakeAll 使用队列内部锁，正常完成时先释放锁再返�
 
 `BeginFlush` 只设置状态并通知，不消费消息、释放载荷或等待线程退出。模块负责决定剩余消息是处理还是丢弃，出队消息内部另行拥有的资源仍须按所有权释放；内嵌值本身无需释放。
 
-使用 `Snapshot → 检查模块状态 → Wait` 的引擎业务线程采用 `引擎进入 STOPPING → WakeAll → join`，统一通过 `dominoEngineIsStopping()` 检查退出。Wait 被唤醒后返回循环入口观察退出；队列保持正常状态，允许其他线程的最后批次继续投递。待相关投递者和消费者全部结束后，清理线程再调用 `BeginFlush`，逐条取出剩余消息并释放尚未转移的 AI 行为块，最后 Destroy。
+使用 `Snapshot → 检查模块状态 → Wait` 的引擎业务线程采用 `引擎进入 STOPPING → WakeAll → join`，统一通过 `dominoEngineIsStopping()` 检查退出。Wait 被唤醒后返回循环入口观察退出；队列保持正常状态，允许其他线程的最后批次继续投递。待相关投递者和消费者全部结束后，清理线程再调用 `BeginFlush`，逐条取出剩余消息并释放留队 AI 草案的行为块，最后 Destroy。
 
 使用阻塞 `Consume`／`ConsumeBatch` 的线程不能仅靠模块标志和 `WakeAll` 退出：正常状态下队列仍为空时，它会继续等待。此类线程退出前，先停止并等待全部生产者，再调用 `BeginFlush`；消费者处理完剩余消息，收到 `ERR_QUEUE_FLUSHING` 后退出，调用方 join 后再 Destroy。日志 Stop 使用此流程并刷新输出，日志 Destroy 只关闭文件和释放队列，由所属生命周期入口管理先后顺序。
 
-引擎先进入 `STOPPING`，再通过 `WakeAll` 唤醒 Executor 和 Planner；两个模块不维护本地退出标志。`dominoHumanModuleStop()` 先 join Executor，确保最后一批规划请求已提交，再 join Planner；随后引擎调用 `dominoGameTimerModuleStop()` join game_timer。全局退出后 Planner 的提交入口保持可用，直到执行线程结束；Executor inbox 继续接收 Planner 和 game_timer 的最后投递，game_timer 目标队列须保持允许生产直到 game_timer Stop 返回。所有队列和残留消息保留到引擎 Destroy，再由 human 的 PlannerDestroy／ExecutionDestroy 调用 `BeginFlush`、排空并释放尚未转移的 AI 行为块，最后销毁队列。
+引擎先进入 `STOPPING`，再通过 `WakeAll` 唤醒 Executor 和 Planner；两个模块不维护本地退出标志。`dominoHumanModuleStop()` 先 join Executor，确保最后一批规划请求已提交，再 join Planner；随后引擎调用 `dominoGameTimerModuleStop()` join game_timer。全局退出后 Planner 的提交入口保持可用，直到执行线程结束；Executor inbox 继续接收 Planner 和 game_timer 的最后投递，game_timer 目标队列须保持允许生产直到 game_timer Stop 返回。所有队列和残留消息保留到引擎 Destroy，再由 human 的 PlannerDestroy／ExecutionDestroy 调用 `BeginFlush`、排空并释放留队 AI 草案的行为块，最后销毁队列。
 
 队列为空只表示元素已取出，消费者可能仍在处理载荷。销毁前必须确保全部使用者已结束访问，并成功 join 负责消费或等待的工作线程。未启用线程的队列由调用方清理载荷后可直接销毁。
 

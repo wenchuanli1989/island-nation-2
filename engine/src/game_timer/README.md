@@ -92,7 +92,7 @@ if (code == CODE_OK) {
             // 用 data_id 定位对象，再核对 game_timer_id、event_type 及当前业务状态。
         }
     } else {
-        // 按 type 分派 AI 结果、请求或其他命令；AI 消息还须释放未接管的行为块。
+        // 按 type 分派 AI 结果、请求或其他命令；AI 消息还须释放其草案行为块。
     }
 }
 ```

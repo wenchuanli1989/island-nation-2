@@ -1,13 +1,13 @@
-#ifndef DOMINO_SHARED_BEHAVIOR_H
-#define DOMINO_SHARED_BEHAVIOR_H
+#ifndef DOMINO_SHARED_HUMAN_TASK_H
+#define DOMINO_SHARED_HUMAN_TASK_H
 
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "domino_shared_types.h"
 
-/** @file domino_shared_behavior.h
- * @brief 任务与行为模型；任务直接持有行为块和执行版本，持久化时只写业务事实与行为内容。
+/** @file domino_shared_human_task.h
+ * @brief 任务与行为模型；任务按 ID 引用全局行为数组，执行版本仅保留在运行态。
  */
 
 enum {
@@ -91,12 +91,13 @@ typedef enum {
 } DOMINO_TASK_PRIORITY;
 
 /** @brief 任务中的一个具体步骤，包含行为类型、计划区间和实际执行进度。
- * @note 行为身份由所属任务 ID 与行为数组下标确定，不另建全局行为索引。
+ * @note 行为使用独立非零 ID，由全局行为数组及 ID 索引保存；任务仅保存有序行为 ID。
  * @note 计划时间使用累计未冻结的现实毫秒，区间为 [planned_begin_ms, planned_end_ms)，与实际进度分开记录。
  * @note 当前睡眠的目标有效时长由 planned_end_ms - planned_begin_ms 推导；首次启动时修订区间，执行期间保持区间长度不变。
  * @note 实际时刻同样使用累计未冻结的现实毫秒；0 是合法时刻，字段是否有效由状态和标志决定。
  */
 typedef struct DominoBehavior {
+    domino_behavior_id_t behavior_id;       ///< 全局行为编号；新建草案填 0，正式提交时获得非零 ID。
     domino_runtime_ms_t planned_begin_ms;   ///< 预计开始这一步的时刻，不代表已经实际开始。
     domino_runtime_ms_t planned_end_ms;     ///< 预计结束这一步的时刻；与计划开始之差是预计耗时，不是已完成时长。
     domino_runtime_ms_t started_at_ms;      ///< 第一次真正开始的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
@@ -108,27 +109,27 @@ typedef struct DominoBehavior {
     bool started_flag;                      ///< 是否曾真正启动；未开始就跳过或取消时为 false，不能靠开始时刻是否为 0 判断。
 } DominoBehavior;
 
-/** @brief 任务独占连续行为块，拥有独立游标；0 是合法时刻，启动与终结由标志及状态判断。
- * @note 结构体复制只复制行为指针，不复制行为内容；跨线程快照须另存行为副本，不能共享任务池中的行为块。
+/** @brief 任务保存有序行为 ID 和当前行为 ID；0 是合法时刻，启动与终结由标志及状态判断。
+ * @note 任务结构体按值复制行为 ID，不借用全局数组地址；跨线程草案须另存自有行为副本。
  * @note 计划与实际时刻均为累计未冻结的现实毫秒；计划区间为 [planned_begin_ms, planned_end_ms)，不等于实际执行区间。
  * @note 步骤切换和任务终结须先检查版本上限，再递增 execution_version，使本任务的旧异步结果失效。
  */
 typedef struct DominoTask {
-    DominoBehavior* behaviors_ptr;         ///< 本任务独占的行为数组，共 behavior_count 项；store 接管后负责释放，存档保存内容而非地址。
-    uint64_t execution_version;            ///< 本任务的执行版本，用于识别过期结果；新建或加载时置 1，不写入存档。
-    domino_task_id_t task_id;              ///< 用来查找本任务的编号；新建草案填 0，提交后获得非零 ID。
-    domino_human_id_t owner_human_id;      ///< 这项任务属于哪个人物，也就是由谁执行。
-    domino_runtime_ms_t planned_begin_ms;  ///< 整项任务预计开始的时刻，不代表已经实际启动。
-    domino_runtime_ms_t planned_end_ms;    ///< 整项任务预计结束的时刻；调整安排后可能重新估算。
-    domino_runtime_ms_t started_at_ms;     ///< 第一次真正启动的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
-    domino_runtime_ms_t ended_at_ms;       ///< 成功、失败或取消的时刻；仅在任务终态有效。
-    DOMINO_TASK_TYPE type;                 ///< 整件事的目标类别，取 DOMINO_TASK_TYPE，例如上班、就医或睡眠。
-    uint8_t channel_index;                 ///< 规划选定的通道下标：0 为主通道，1、2 为次通道；随存档保存。
-    uint8_t behavior_count;                ///< 行为数组的有效项数，范围为 1～DOMINO_TASK_BEHAVIOR_COUNT_MAX。
-    uint8_t current_behavior_index;        ///< 当前处理步骤的数组下标，从 0 开始；成功结束时等于 behavior_count，此值不能用于数组取值。
-    domino_status_t status;                ///< 整项任务的当前状态及结束结果，取 DOMINO_TASK_STATUS。
-    uint8_t priority_class;                ///< 任务有多重要，取 DOMINO_TASK_PRIORITY，区分自由活动、固定承诺和紧急事务。
-    bool started_flag;                     ///< 是否曾真正启动；未开始就取消时为 false，开始时刻为 0 也可以是已启动。
+    uint64_t execution_version;                                             ///< 本任务的执行版本，用于识别过期结果；新建或加载时置 1，不写入存档。
+    domino_behavior_id_t behavior_id_list[DOMINO_TASK_BEHAVIOR_COUNT_MAX];  ///< 有序行为 ID，仅前 behavior_count 项有效；行为由全局池保存。
+    domino_behavior_id_t current_behavior_id;                               ///< 当前处理步骤的非零行为 ID；成功结束后置 0，不再表示数组下标。
+    domino_task_id_t task_id;                                               ///< 用来查找本任务的编号；新建草案填 0，提交后获得非零 ID。
+    domino_human_id_t owner_human_id;                                       ///< 这项任务属于哪个人物，也就是由谁执行。
+    domino_runtime_ms_t planned_begin_ms;                                   ///< 整项任务预计开始的时刻，不代表已经实际启动。
+    domino_runtime_ms_t planned_end_ms;                                     ///< 整项任务预计结束的时刻；调整安排后可能重新估算。
+    domino_runtime_ms_t started_at_ms;  ///< 第一次真正启动的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
+    domino_runtime_ms_t ended_at_ms;    ///< 成功、失败或取消的时刻；仅在任务终态有效。
+    DOMINO_TASK_TYPE type;              ///< 整件事的目标类别，取 DOMINO_TASK_TYPE，例如上班、就医或睡眠。
+    uint8_t channel_index;              ///< 规划选定的通道下标：0 为主通道，1、2 为次通道；随存档保存。
+    uint8_t behavior_count;             ///< 行为数组的有效项数，范围为 1～DOMINO_TASK_BEHAVIOR_COUNT_MAX。
+    domino_status_t status;             ///< 整项任务的当前状态及结束结果，取 DOMINO_TASK_STATUS。
+    uint8_t priority_class;             ///< 任务有多重要，取 DOMINO_TASK_PRIORITY，区分自由活动、固定承诺和紧急事务。
+    bool started_flag;                  ///< 是否曾真正启动；未开始就取消时为 false，开始时刻为 0 也可以是已启动。
 } DominoTask;
 
 #endif

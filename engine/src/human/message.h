@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "domino_shared_behavior.h"
+#include "task/draft.h"
 
 /** @brief 执行线程结算后复制的必要值；不含人物、任务池、建筑或行为的借用指针。 */
 typedef struct DominoHumanPlanRequest {
@@ -27,11 +27,12 @@ typedef enum DominoHumanPlanReason {
 } DominoHumanPlanReason;
 
 /** @brief AI_REQUEST 与 AI_RESULT 共用的内嵌载荷；请求和结果均随消息按值复制。
- * @note request 始终保留原快照。DRAFT 的 task 独占另行分配的行为块，提交成功后由执行线程清空 task.behaviors_ptr。
- * 入队成功转移行为块所有权；收件方及正常销毁清理使用 dominoHumanPlannerReleaseMessage() 释放未接管的行为块。
+ * @note request 始终保留原快照。DRAFT 的 draft 独占另行分配的行为块，不引用全局行为池。
+ * 入队成功转移草案行为块所有权；store 提交按值复制，收件方及正常销毁清理统一通过
+ * dominoHumanPlannerReleaseMessage() 释放草案行为块。
  */
 typedef struct DominoHumanPlanEnvelope {
-    DominoTask task;
+    DominoTaskDraft draft;
     DominoHumanPlanRequest request;
     DominoHumanPlanStatus status;
     DominoHumanPlanReason reason;
