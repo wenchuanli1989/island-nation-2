@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
-# 远程开发环境：sudo bash setup-dev.sh；Codex Cloud：bash setup-dev.sh --cloud
+# Ubuntu 26.04 远程开发环境：sudo bash setup-dev.sh
 set -euo pipefail
 
-[[ $# -eq 0 || ( $# -eq 1 && "${1:-}" == --cloud ) ]] || { echo "用法: bash $0 [--cloud]（LLVM_VERSION 默认 22）" >&2; exit 1; }
-CLOUD_MODE=false
-[[ "${1:-}" != --cloud ]] || CLOUD_MODE=true
+[[ $# -eq 0 ]] || { echo "用法: sudo bash $0（LLVM_VERSION 默认 22）" >&2; exit 1; }
 
 # shellcheck source=/dev/null
 source /etc/os-release
-case "${ID:-}:${VERSION_ID:-}:$CLOUD_MODE" in
-    ubuntu:26.04:*|ubuntu:22.04:true|ubuntu:24.04:true) ;;
-    *) echo "错误: 默认模式仅支持 Ubuntu 26.04；--cloud 支持 Ubuntu 22.04/24.04/26.04" >&2; exit 1 ;;
-esac
-if [[ "$CLOUD_MODE" == true && $EUID -ne 0 ]]; then
-    exec sudo -nE bash "$0" "$@"
-fi
+[[ "${ID:-}:${VERSION_ID:-}" == ubuntu:26.04 ]] || { echo "错误: 仅支持 Ubuntu 26.04" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "请使用 sudo bash $0 运行" >&2; exit 1; }
 LLVM_VERSION="${LLVM_VERSION:-22}"
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C
@@ -35,10 +27,8 @@ echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.l
 chmod 644 /usr/share/keyrings/{kitware,llvm}-archive-keyring.gpg
 
 apt-get update
-DEV_PACKAGES=(vim openssh-server sudo pahole)
-[[ "$CLOUD_MODE" == false ]] || DEV_PACKAGES=()
 apt-get install -y \
-    build-essential cmake git curl "${DEV_PACKAGES[@]}" \
+    build-essential cmake git curl vim openssh-server sudo pahole \
     "clang-${LLVM_VERSION}" "clang-tools-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
     "clang-format-${LLVM_VERSION}" "clang-tidy-${LLVM_VERSION}" "lldb-${LLVM_VERSION}" \
     "libclang-rt-${LLVM_VERSION}-dev" "llvm-${LLVM_VERSION}-linker-tools"
@@ -48,14 +38,6 @@ for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build; do
     update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-${LLVM_VERSION}" "$LLVM_VERSION"
     update-alternatives --set "$tool" "/usr/bin/${tool}-${LLVM_VERSION}"
 done
-
-if [[ "$CLOUD_MODE" == true ]]; then
-    if [[ -n "${DOMINO_GLIBC_ROOT:-}" ]]; then
-        bash "$(dirname "${BASH_SOURCE[0]}")/scripts/setup-glibc.sh"
-    fi
-    echo "Cloud 开发环境安装完成（LLVM ${LLVM_VERSION}，CMake >= 4.2.1）。"
-    exit 0
-fi
 
 # 沿用原 Dockerfile 的开发用 Git 和 SSH 配置。
 git config --global user.name domino

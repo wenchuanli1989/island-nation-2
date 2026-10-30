@@ -45,8 +45,8 @@ Domino 是一个基于 C23 编写的开放世界游戏内核，支持单机离�
 
 ### Codex Cloud
 
-安装入口为 `bash setup-dev.sh --cloud`，环境变量设置 `DOMINO_GLIBC_ROOT=/opt/domino/glibc-2.43`。
-安装复用现有 APT 流程，独立 glibc 由 `scripts/setup-glibc.sh` 准备；构建继续使用 `scripts/build.sh` 和现有 glibc 工具链，配置与运行命令见 README 的 Codex Cloud 小节。
+Debian 13（trixie）x86_64 的独立安装入口为 `bash setup-codex-cloud.sh`，环境变量设置 `DOMINO_GLIBC_ROOT=/opt/domino/glibc-2.43`。
+安装使用 Debian backports 的 CMake，启用 LLVM 官方 trixie 源并安装 Clang 22；独立 glibc 由 `scripts/setup-glibc.sh` 准备。构建继续使用 `scripts/build.sh` 和现有 glibc 工具链，配置与运行命令见 README 的 Codex Cloud 小节。
 
 ## 架构
 

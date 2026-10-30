@@ -11,7 +11,7 @@ PACKAGE_CHECKSUMS="$SCRIPT_DIR/glibc-2.43-amd64.sha256"
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/domino-glibc.XXXXXX")"
 trap 'rm -rf -- "$DOWNLOAD_DIR"' EXIT
 
-while read -r checksum package_file; do
+while read -r _checksum package_file; do
     curl -fsSL "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/$package_file" -o "$DOWNLOAD_DIR/$package_file"
 done < "$PACKAGE_CHECKSUMS"
 (
@@ -20,13 +20,15 @@ done < "$PACKAGE_CHECKSUMS"
 )
 
 mkdir -p "$GLIBC_ROOT"
-while read -r checksum package_file; do
+while read -r _checksum package_file; do
     dpkg-deb --extract "$DOWNLOAD_DIR/$package_file" "$GLIBC_ROOT"
 done < "$PACKAGE_CHECKSUMS"
 
 # 复用宿主开发工具链的 Linux ABI 头文件和 GCC 运行库。
-cp -a /usr/include/linux /usr/include/asm-generic "$GLIBC_ROOT/usr/include/"
-cp -a /usr/include/x86_64-linux-gnu/asm "$GLIBC_ROOT/usr/include/x86_64-linux-gnu/"
+# Debian 的部分 ABI 头文件链接到 /usr/lib/linux/uapi；复制实际内容，避免 sysroot 内悬空链接。
+# 同时替换上次安装保留的链接，让重复安装也能修复旧目录。
+cp -aL --remove-destination /usr/include/linux /usr/include/asm-generic "$GLIBC_ROOT/usr/include/"
+cp -aL --remove-destination /usr/include/x86_64-linux-gnu/asm "$GLIBC_ROOT/usr/include/x86_64-linux-gnu/"
 cp -L "$(gcc -print-file-name=libgcc_s.so.1)" "$GLIBC_ROOT/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"
 ln -sfn usr/lib "$GLIBC_ROOT/lib"
 ln -sfn usr/lib64 "$GLIBC_ROOT/lib64"
