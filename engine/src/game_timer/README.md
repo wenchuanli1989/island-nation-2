@@ -137,7 +137,7 @@ ScheduleAt 和 Cancel 在冻结期间仍允许提交及标记请求，引擎发�
 3. 客户端确认业务线程全部结束后，统一将人物结算到固定时刻，再调用 logger Stop 排空日志、join writer 并刷新输出，进入 `STOPPED` 并返回。所有模块的队列、留队消息、业务运行态和同步对象均保留，尚未保存。
 4. 客户端随后显式调用 `dominoEngineDestroy()`，进入 `DESTROYING`，先调用 game_timer Destroy 并释放主循环队列，准备导航并保存世界，再调用 human Destroy 和其余世界模块的 Destroy，最后关闭日志文件并释放日志队列。仅 Init、未 Start 的实例同样由外部先 Stop 再 Destroy；此时所有线程尚未创建，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，Destroy 不停止任何线程。human Destroy 对收件队列调用 `dominoThreadQueueBeginFlush()`，取出剩余消息并释放尚未转移的 AI 行为块，再销毁队列和同步对象，并复位人物唤醒字段。内嵌的 game_timer 和命令载荷无需释放；队列 Destroy 不会释放 AI 行为指针指向的块。各模块 Destroy 不调用 Stop；计时线程和业务消费者全部 join 后，才可销毁业务队列，下一次 game_timer Init 前须排空旧事件。主循环不负责退出停钟或协调收尾；普通暂停不负责全员结算或提供可保存快照。
 
-game_timer 堆由 `dominoGameTimerHeapDestroy()` 释放事件数组并恢复为空堆，由 `dominoGameTimerModuleDestroy()` 统一调用。Destroy 丢弃尚未投递的命令和堆项，销毁同步对象后立即清空整个 game_timer 模块，不保留旧线程句柄存储；业务队列的 BeginFlush、载荷清理和销毁由所属模块负责。引擎在保存和世界资源清理完成后单独重置 time 内存快照，已保存的累计时间不受影响。引擎公共生命周期调用错误，以及 game_timer 资源操作和计时线程同步原语失效，均直接打印到 `stderr` 并 `exit`，业务时钟、入堆或投递的致命错误采用同一出口。该出口不依赖异步日志队列；`exit` 允许标准流清理及已注册的退出处理，退出处理必须避免等待当前故障线程或重入故障资源。
+game_timer 堆由 `dominoGameTimerHeapDestroy()` 释放事件数组并恢复为空堆，由 `dominoGameTimerModuleDestroy()` 统一调用。Destroy 丢弃尚未投递的命令和堆项，销毁同步对象后立即清空整个 game_timer 模块，不保留旧线程句柄存储；业务队列的 BeginFlush、载荷清理和销毁由所属模块负责。引擎在保存和世界资源清理完成后释放 time 的冻结等待同步资源并重置内存快照、冻结代次和等待计数，已保存的累计时间不受影响。GameTimer 仍使用自身的请求锁和条件变量，不计入 time 的冻结等待人数。引擎公共生命周期调用错误，以及 game_timer 资源操作和计时线程同步原语失效，均直接打印到 `stderr` 并 `exit`，业务时钟、入堆或投递的致命错误采用同一出口。该出口不依赖异步日志队列；`exit` 允许标准流清理及已注册的退出处理，退出处理必须避免等待当前故障线程或重入故障资源。
 
 ## 验证范围
 

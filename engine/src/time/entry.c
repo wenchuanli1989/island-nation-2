@@ -2,13 +2,17 @@
 
 #include <inttypes.h>
 #include <stdatomic.h>
+#include <string.h>
+#include <threads.h>
 
+#include "../entry.h"
 #include "domino_shared_common.h"
 
 /** @brief 底层以 64 位纳秒保留采样精度；业务时刻和时长始终使用 domino_runtime_ms_t。 */
 typedef struct DominoTimeSnapshot {
     uint64_t session_start_monotonic_ns;
     uint64_t runtime_datetime_base_ns;
+    uint64_t freeze_epoch;
     bool frozen;
 } DominoTimeSnapshot;
 
@@ -17,16 +21,27 @@ typedef struct DominoTimeCache {
     _Atomic uint64_t sequence;
     _Atomic uint64_t session_start_monotonic_ns;
     _Atomic uint64_t runtime_datetime_base_ns;
+    _Atomic uint64_t freeze_epoch;
     _Atomic bool frozen;
 } DominoTimeCache;
 
 /** @brief 首次使用及 Destroy 后均为空的冻结快照；加载仅恢复累计基准，解冻时才建立单调起点。 */
-static DominoTimeCache g_domino_time_cache = {.frozen = true};
+static DominoTimeCache g_domino_time_cache = {.freeze_epoch = 1U, .frozen = true};
+
+/** @brief 冻结状态切换、等待登记和通知共用 mutex；计数仅用于观察本轮冻结等待。 */
+typedef struct DominoTimeWait {
+    cnd_t condition;
+    mtx_t mutex;
+    uint32_t waiter_count;
+} DominoTimeWait;
+
+static DominoTimeWait g_domino_time_wait;
 
 /** @brief 发布快照并关闭写入窗口；调用方已将 sequence 置为奇数，且持有唯一写入权。 */
 static void publishTimeCache(const DominoTimeSnapshot* next_ptr) {
     atomic_store(&g_domino_time_cache.session_start_monotonic_ns, next_ptr->session_start_monotonic_ns);
     atomic_store(&g_domino_time_cache.runtime_datetime_base_ns, next_ptr->runtime_datetime_base_ns);
+    atomic_store(&g_domino_time_cache.freeze_epoch, next_ptr->freeze_epoch);
     atomic_store(&g_domino_time_cache.frozen, next_ptr->frozen);
     atomic_fetch_add(&g_domino_time_cache.sequence, 1);
 }
@@ -41,6 +56,7 @@ static inline DominoTimeSnapshot loadTimeCacheFields(void) {
     return (DominoTimeSnapshot){
         .session_start_monotonic_ns = atomic_load(&g_domino_time_cache.session_start_monotonic_ns),
         .runtime_datetime_base_ns = atomic_load(&g_domino_time_cache.runtime_datetime_base_ns),
+        .freeze_epoch = atomic_load(&g_domino_time_cache.freeze_epoch),
         .frozen = atomic_load(&g_domino_time_cache.frozen),
     };
 }
@@ -71,9 +87,18 @@ void dominoSetRuntimeDateTimeBase(uint64_t base_ns) {
     writeTimeCache(&snapshot);
 }
 
+void dominoTimeModuleInit(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_init(&g_domino_time_wait.mutex, mtx_plain), ERR_MUTEX_INIT, "time:mtx_init");
+    DOMINO_REQUIRE_THREAD_SUCCESS(cnd_init(&g_domino_time_wait.condition), ERR_CONDITION_INIT, "time:cnd_init");
+}
+
 void dominoTimeModuleDestroy(void) {
+    cnd_destroy(&g_domino_time_wait.condition);
+    mtx_destroy(&g_domino_time_wait.mutex);
+    memset(&g_domino_time_wait, 0, sizeof(g_domino_time_wait));
     atomic_store_explicit(&g_domino_time_cache.session_start_monotonic_ns, 0U, memory_order_relaxed);
     atomic_store_explicit(&g_domino_time_cache.runtime_datetime_base_ns, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_time_cache.freeze_epoch, 1U, memory_order_relaxed);
     atomic_store_explicit(&g_domino_time_cache.frozen, true, memory_order_relaxed);
     atomic_store_explicit(&g_domino_time_cache.sequence, 0U, memory_order_relaxed);
 }
@@ -93,21 +118,28 @@ static uint64_t calculateRuntimeNs(const DominoTimeSnapshot* snapshot_ptr, uint6
 }
 
 void dominoTimeModuleFreeze(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_time_wait.mutex), ERR_MUTEX_LOCK, "time freeze:mtx_lock");
     DominoTimeSnapshot snapshot = readTimeCache();
-    if (snapshot.frozen) {
-        return;
+    if (!snapshot.frozen) {
+        if (snapshot.freeze_epoch == UINT64_MAX) {
+            DOMINO_EXIT_WITH_ERROR(ERR_ID_EXHAUSTED, "冻结轮次耗尽");
+        }
+        /* 先关闭读窗口再采样，避免读者接受比冻结基准更晚的业务时刻。
+         * 致命错误直接 exit；退出回调不得重入引擎 API。 */
+        atomic_fetch_or(&g_domino_time_cache.sequence, 1);
+        uint64_t now_monotonic_ns = dominoMonotonicTimeNs();
+        snapshot.runtime_datetime_base_ns = calculateRuntimeNs(&snapshot, now_monotonic_ns);
+        snapshot.session_start_monotonic_ns = now_monotonic_ns;
+        snapshot.freeze_epoch++;
+        snapshot.frozen = true;
+        g_domino_time_wait.waiter_count = 0U;
+        publishTimeCache(&snapshot);
     }
-    /* 先关闭读窗口再采样，避免读者接受比冻结基准更晚的业务时刻。
-     * 致命错误直接 exit；退出回调不得重入引擎 API。 */
-    atomic_fetch_or(&g_domino_time_cache.sequence, 1);
-    uint64_t now_monotonic_ns = dominoMonotonicTimeNs();
-    snapshot.runtime_datetime_base_ns = calculateRuntimeNs(&snapshot, now_monotonic_ns);
-    snapshot.session_start_monotonic_ns = now_monotonic_ns;
-    snapshot.frozen = true;
-    publishTimeCache(&snapshot);
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_time_wait.mutex), ERR_MUTEX_UNLOCK, "time freeze:mtx_unlock");
 }
 
 void dominoTimeModuleThaw(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_time_wait.mutex), ERR_MUTEX_LOCK, "time thaw:mtx_lock");
     DominoTimeSnapshot snapshot = readTimeCache();
     if (!snapshot.frozen) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "解冻时间失败: 时钟未冻结");
@@ -116,10 +148,48 @@ void dominoTimeModuleThaw(void) {
     snapshot.session_start_monotonic_ns = dominoMonotonicTimeNs();
     snapshot.frozen = false;
     writeTimeCache(&snapshot);
+    DOMINO_REQUIRE_THREAD_SUCCESS(cnd_broadcast(&g_domino_time_wait.condition), ERR_CONDITION_BROADCAST, "time thaw:cnd_broadcast");
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_time_wait.mutex), ERR_MUTEX_UNLOCK, "time thaw:mtx_unlock");
 }
 
 __attribute__((hot)) bool dominoTimeModuleIsFrozen(void) {
     return readTimeCache().frozen;
+}
+
+__attribute__((hot)) uint64_t dominoTimeModuleGetFreezeEpoch(void) {
+    const DominoTimeSnapshot snapshot = readTimeCache();
+    return snapshot.frozen ? snapshot.freeze_epoch : 0U;
+}
+
+void dominoTimeModuleWait(uint64_t observed_epoch) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_time_wait.mutex), ERR_MUTEX_LOCK, "time wait:mtx_lock");
+    for (;;) {
+        const DominoTimeSnapshot snapshot = readTimeCache();
+        if (dominoEngineIsStopping() || !snapshot.frozen || snapshot.freeze_epoch != observed_epoch) {
+            break;
+        }
+        g_domino_time_wait.waiter_count++;
+        const int result_code = cnd_wait(&g_domino_time_wait.condition, &g_domino_time_wait.mutex);
+        /* 解冻后可能在本线程重新持锁前又冻结；旧轮返回不能扣减新轮显示计数。 */
+        if (atomic_load(&g_domino_time_cache.freeze_epoch) == observed_epoch) {
+            g_domino_time_wait.waiter_count--;
+        }
+        DOMINO_REQUIRE_THREAD_SUCCESS(result_code, ERR_CONDITION_WAIT, "time wait:cnd_wait");
+    }
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_time_wait.mutex), ERR_MUTEX_UNLOCK, "time wait:mtx_unlock");
+}
+
+void dominoTimeModuleWakeAll(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_time_wait.mutex), ERR_MUTEX_LOCK, "time wake:mtx_lock");
+    DOMINO_REQUIRE_THREAD_SUCCESS(cnd_broadcast(&g_domino_time_wait.condition), ERR_CONDITION_BROADCAST, "time wake:cnd_broadcast");
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_time_wait.mutex), ERR_MUTEX_UNLOCK, "time wake:mtx_unlock");
+}
+
+uint32_t dominoTimeModuleGetFreezeWaiterCount(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_time_wait.mutex), ERR_MUTEX_LOCK, "time count:mtx_lock");
+    const uint32_t waiter_count = g_domino_time_wait.waiter_count;
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_time_wait.mutex), ERR_MUTEX_UNLOCK, "time count:mtx_unlock");
+    return waiter_count;
 }
 
 __attribute__((hot)) void dominoTimeModuleGetDateTimeNow(uint64_t* runtime_ns_ptr) {

@@ -38,7 +38,7 @@
 | `engine/src/entry.c`、`engine/include/domino_engine.h` | Init 准备基础资源、加载世界并保持冻结，不创建线程；Start 由客户端依次启动 logger、human、game_timer 和主循环，成功后直接解冻并通知；客户端 Freeze 直接冻结时钟且不通知，Thaw 直接解冻并通知主循环和业务线程；业务线程在批次边界暂停；Stop 由客户端进入停止状态、固定时钟并唤醒，等主循环和业务线程结束后统一结算；外部随后调用 Destroy 保存并释放世界；致命错误直接打印 stderr 并 exit | 随新增写入者扩展退出顺序和保存结算；在线保存及会话到限退出仍待实现 |
 | `engine/src/dispatch/entry.c` | 仅处理 `DOMINO_ENGINE_MSG_NONE` | 路由人物命令、计划结果所需的外部事件和导航修改命令 |
 | `shared/src/queue.c`、`shared/include/domino_shared_queue.h` | 带锁、可扩容 FIFO，单条／批量消费均已存在；首 8 字节由队列写入消息 ID；`BeginFlush` 禁止生产并允许排空 | 复用值复制、批量消费和条件变量，以 `BeginFlush` 排空退出，以 `WakeAll` 通知控制状态 |
-| `engine/src/time/entry.c`、`entry.h` | 纳秒采样及 sequence 一致快照；毫秒入口校验 32 位范围；InitAfter 保持冻结，内部 Freeze 固定累计时钟，普通冻结由客户端直接执行且不通知，解冻也由客户端直接执行并通知主循环和业务线程；退出停钟同样由客户端直接执行 | 继续使用累计未冻结现实毫秒；显示倍率不参与业务计时 |
+| `engine/src/time/entry.c`、`entry.h` | 纳秒采样及 sequence 一致快照；毫秒入口校验 32 位范围；Init 只准备冻结等待同步资源并保持冻结，内部 Freeze 固定累计时钟，普通冻结由客户端直接执行且不通知，解冻也由客户端直接执行并通知主循环和业务线程；退出停钟同样由客户端直接执行 | 继续使用累计未冻结现实毫秒；显示倍率不参与业务计时 |
 | `engine/src/game_timer/` | 已接入引擎启停和 human；保留 32 字节记录、共享堆及精确 `ScheduleAt`，批次入口检查停止和冻结；后台致命失败直接打印 stderr 并 exit | 复用通用计时与取消合同；业务身份、进度和恢复归 human |
 | `engine/src/nav/graph.c`、`path.c`、`floyd.c`、`state.c` | graph 维护直接有向邻接；path 按需构建 Floyd 缓存；当前工作区已对齐准备缓存槽及无失败提交接口；`remaining_distance` 仍写入路径权重 | 明确运行期串行所有权，补充真实首末接驳、在途位置、距离数据和出行时间 |
 | `engine/src/social/entry.c`、`shared/include/domino_shared_social.h` | 已有组织、建筑、资产等容器和字段；尚无本方案的合同、地点服务、交易及共享活动闭环 | 随首个实际消费者增加最小领域记录与操作；明确余额、所有权、容量及数量单位 |
@@ -182,7 +182,7 @@ flowchart LR
 
 通用消息的首字段 `id` 由收件队列生成，`type` 标识载荷类别，`payload` 联合体按值内嵌 game_timer、AI envelope 或命令。game_timer 目标队列以 `sizeof(DominoThreadMessage)` 初始化；到期时发送 `DOMINO_THREAD_MESSAGE_GAME_TIMER`，载荷为 `payload.game_timer` 中的 `DominoGameTimer` 值副本。当前 `AI_RESULT` 已与命令和 game_timer 共用 executor inbox，`AI_REQUEST` 进入 planner 的固定容量入口。消费方按类型访问对应联合体成员；内嵌值无需释放，AI 草案另行拥有的行为块仍须在处理或丢弃后按所有权释放。收件队列自身提供唤醒版本和等待版本变化的接口；成功入队在队列锁内推进版本并通知，模块先同步发布控制状态再调用 `dominoThreadQueueWakeAll()`，不占用消息槽位。`dominoThreadQueueBeginFlush()` 在队列锁内设置 `flushing_flag` 并唤醒等待者，进入后拒绝生产、允许消费剩余消息，不提供恢复。最小睡眠规划载荷、请求终结与独立控制通知已接入；完整多候选、紧急替换及领域事件协议仍是后续目标。
 
-执行器每轮先用 `dominoThreadQueueSnapshot()` 采样通知版本，在批次入口先检查退出、再检查时钟冻结；运行时按有限批次消费统一收件队列并按消息类型分派，再处理首次启动扫描和待投人物。一旦进入批次，人物推进、game_timer 登记及规划请求提交完整执行，中途不因冻结丢弃消息或提前返回。暂停时保留队列内容；恢复继续已有调度和尚未完成的首次扫描，不重新全员扫描。没有可处理工作或当前被冻结时，将本轮采样的版本值传给 `dominoThreadQueueWait()`，由它在队列锁内复查版本后等待。Wait 不因已有消息而立即返回，进入排空状态则返回 `ERR_QUEUE_FLUSHING`，剩余消息仍由 Consume 取出。恢复和退出状态先发布再通知，检查期间收到通知会使版本失配或唤醒等待，醒后重新检查退出与冻结，避免漏掉恢复或退出通知；普通冻结不通知。本批窗口满的规划意图等待完成结果释放容量；这属于在途数量限制，不是向满队列阻塞提交。Wait 只接收队列和通知版本；业务到期由 game_timer 投递消息触发唤醒，并用累计未冻结现实毫秒判定。这些队列接口返回时已经释放队列锁；不得持队列锁调用 game_timer API 或执行业务，等待前须释放通知方需要取得的业务锁，避免与 game_timer 的请求锁、队列锁形成反向依赖。
+执行器每轮先用 `dominoThreadQueueSnapshot()` 采样通知版本，在批次入口先检查退出、再检查时钟冻结；运行时按有限批次消费统一收件队列并按消息类型分派，再处理首次启动扫描和待投人物。一旦进入批次，人物推进、game_timer 登记及规划请求提交完整执行，中途不因冻结丢弃消息或提前返回。暂停时保留队列内容；恢复继续已有调度和尚未完成的首次扫描，不重新全员扫描。正常运行且没有可处理工作时，将本轮采样的队列版本值传给 `dominoThreadQueueWait()`，由它在队列锁内复查版本后等待。冻结时通过 `dominoTimeModuleGetFreezeEpoch()` 取得非零代次，调用 `dominoTimeModuleWait(freeze_epoch)`；它在 time 等待锁内复查冻结状态、代次与引擎退出状态，返回后重新进入循环检查。Wait 不因已有消息而立即返回，进入排空状态则返回 `ERR_QUEUE_FLUSHING`，剩余消息仍由 Consume 取出。恢复由 time 先恢复时钟并广播冻结等待者；退出保持时钟冻结，通过 `dominoTimeModuleWakeAll()` 通知 time 等待者。原有队列及 GameTimer 通知保留，检查期间收到通知会使对应版本失配或唤醒等待，醒后重新检查退出与冻结；普通冻结不通知。本批窗口满的规划意图等待完成结果释放容量；这属于在途数量限制，不是向满队列阻塞提交。Wait 只接收队列和通知版本；业务到期由 game_timer 投递消息触发唤醒，并用累计未冻结现实毫秒判定。这些队列接口返回时已经释放队列锁；不得持队列锁调用 game_timer API 或执行业务，等待前须释放通知方需要取得的业务锁，避免与 game_timer 的请求锁、队列锁形成反向依赖。
 
 计时器使用最小堆，不使用 FIFO 保存未来时间。不得把整个未来日程的任务持续投进执行事件队列检查。
 
@@ -797,9 +797,9 @@ delta_ms = now_ms - accounted_at_ms  // 先确认 now_ms >= accounted_at_ms
 
 游戏日历采用以下产品规则：1 个现实分钟对应 1 个游戏小时，1 个游戏日包含 24 个游戏小时，1 个游戏年包含 12 个游戏日。因此，1 个游戏日对应 24 个现实分钟，1 个游戏年对应 288 个现实分钟，即 4.8 个现实小时。这些换算用于日历呈现和评估时间范围，底层计时仍累计未冻结的现实毫秒。
 
-time 首次由静态初值、后续由 Destroy 建立空的冻结快照；Init 不重复重置或提前采样，storage 只恢复累计基准，Start 解冻时才建立单调起点；Init 到 Start 之间不累计业务时间。保存及世界资源清理完成后，`dominoTimeModuleDestroy()` 将内存中的累计基准、单调起点和 `sequence` 复位为 0，`frozen` 设为 true；不修改已经保存的累计时间，下次 Init 仍按存档继续。Init 已准备主循环队列、human／game_timer 及 logger 的基础资源；Start 由客户端在冻结时钟下依次启动 logger、human、game_timer 和主循环线程，成功后直接解冻并通知主循环和业务线程。
+time 首次由静态初值、后续由 Destroy 建立空的冻结快照；Init 只初始化冻结等待的互斥锁和条件变量，不重复重置时钟或提前采样，storage 只恢复累计基准，Start 解冻时才建立单调起点；Init 到 Start 之间不累计业务时间。保存及世界资源清理完成后，`dominoTimeModuleDestroy()` 释放等待同步资源，将内存中的累计基准、单调起点、`sequence` 和等待计数复位为 0，冻结代次恢复为 1，`frozen` 设为 true；不修改已经保存的累计时间，下次 Init 仍按存档继续。Init 已准备主循环队列、human／game_timer 及 logger 的基础资源；Start 由客户端在冻结时钟下依次启动 logger、human、game_timer 和主循环线程，成功后直接解冻并通知主循环和业务线程。
 
-冻结先将已运行的现实时间累计进基准，解冻只重建单调起点；time 使用原子字段和 sequence 校验一致快照，冻结采样也纳入该协议，避免并发读出超过固定 T 的旧状态时间。内部 time 入口不自行协调线程；`dominoEngineFreezeTime()` 由客户端直接冻结时钟，不发控制请求或业务线程通知；`dominoEngineThawTime()` 由客户端直接解冻并通知主循环和业务线程，均不等待业务线程回执或人物结算。业务线程在批次入口检查冻结，已经开始的有限批次继续完整执行。
+冻结先将已运行的现实时间累计进基准，解冻只重建单调起点；time 使用原子字段和 sequence 校验一致快照，冻结采样也纳入该协议，避免并发读出超过固定 T 的旧状态时间。time 自行管理主循环及 human 的冻结等待和解冻广播，线程启动、退出发布及 join 仍由引擎协调；`dominoEngineFreezeTime()` 由客户端直接冻结时钟，不发控制请求或业务线程通知；`dominoEngineThawTime()` 由客户端直接解冻并通知主循环和业务线程，均不等待业务线程回执或人物结算。业务线程在批次入口检查冻结，已经开始的有限批次继续完整执行。
 
 存档目前通过 `runtime_data.game_date_time_ns` 保存现实纳秒基准，不能按字段中的 `game` 字样解释成倍率时间。
 
@@ -914,13 +914,13 @@ ScheduleAt 对空队列、空 ID 输出和不匹配的队列元素大小保留�
 
 1. 客户端在 `dominoEngineFreezeTime()` 内直接调用 `dominoTimeModuleFreeze()` 固定累计业务时刻 T，并校验业务时刻范围；校验失败直接打印 stderr 并 exit，不伪造合法 T。
 2. 普通冻结不向主循环发控制请求，不通知业务线程，也不等待 executor、planner 或 game_timer 的暂停回执。原本等待消息或计时的线程保持等待，无须先叫醒才能暂停。
-3. 主循环及各业务线程在每轮有限批次入口先检查退出、再检查冻结；冻结时等待恢复、退出或其他工作通知，醒来重新检查状态。已开始的批次继续完成状态更新、规划请求／结果投递和 game_timer 登记，不因中途冻结提前返回。
+3. 主循环及各业务线程在每轮有限批次入口先检查退出、再检查冻结；主循环、executor 和 planner 冻结时进入 time 的代次等待，GameTimer 保持自己的请求锁条件等待；醒来重新检查状态。已开始的批次继续完成状态更新、规划请求／结果投递和 game_timer 登记，不因中途冻结提前返回。
 4. 未取请求、已回传结果、已有 game_timer 及人物在途身份和计数原样保留；不排空队列、不将暂停转换为 `CANCELLED`，也不要求在途计数归零。必要消息队列满和回传失败直接打印 stderr 并 exit。
 5. 日志和消息队列收发不受冻结影响，`dominoEnginePushMsg()`／`dominoEnginePopMsg()` 也不因冻结拒绝操作；业务消费者在批次边界暂停，阻塞 Pop 可能继续等待至恢复。同步睡眠提交仍拒绝运行后的暂停状态，避免等待已经暂停的消费者。
 
 Freeze 成功只保证业务时钟固定，当前批次仍可能写入世界，不能直接作为可保存快照。普通 Freeze 不全员结算，Thaw 不全员校验或扫描：客户端直接调用 `dominoTimeModuleThaw()` 重建单调起点，再通知主循环和业务线程，线程继续已有消息、提醒、规划和首次启动扫描的剩余部分。human Start 只创建线程并等待就绪；实际推进复用已建立的持久事实，执行器支持范围及新时间运算在实际边界检查；留队规划结果消费时仍校验请求身份、日程版本和当前资格。冻结不改变业务状态，正常人物的未完成睡眠保持 `RUNNING/ACTIVE`，冻结时间不计收益，绝对截止点不顺延。
 
-冻结只发布时钟状态，无须通知；解冻和退出先发布对应状态，再通过通知版本复查解除等待，不能只以 `while (frozen)` 等待而忽略停止。未来接入 nav 修改、交易及共享活动时，仍须为退出保存明确各领域的停止顺序、统一结算及已提交事实处理；普通冻结不承担这些保存职责。公交不要求业务时间继续前进才能冻结，正常人物的业务位置和进度保存后在下一会话继续；异常人物保持异常且不推进。
+冻结只发布时钟状态及新冻结代次，无须通知；解冻和退出先发布对应状态，再通知 time、队列及 GameTimer 的等待者。time Wait 在同一等待锁内检查冻结、代次和既有引擎停止状态，不能只以 `while (frozen)` 等待而忽略停止。未来接入 nav 修改、交易及共享活动时，仍须为退出保存明确各领域的停止顺序、统一结算及已提交事实处理；普通冻结不承担这些保存职责。公交不要求业务时间继续前进才能冻结，正常人物的业务位置和进度保存后在下一会话继续；异常人物保持异常且不推进。
 
 ### 13.5 已实现：正常退出保存与生命周期错误；待实施：在线保存和到限退出
 
@@ -936,7 +936,7 @@ Init／Start／Stop／Destroy、Freeze／Thaw 返回 `void`；各阶段的状态
 
 任务存储由 `dominoHumanStoreInit()`／`dominoHumanStoreDestroy()` 按 Init → Destroy 管理，不创建线程，内部不另设生命周期状态或重复校验顺序。人物唤醒由执行器直接维护，加载后复位 `wakeup_game_timer_id` 和 `wakeup_due_ms`，ExecutionDestroy 清理消息后再次复位，不再有独立唤醒模块或生命周期入口。
 
-Destroy 在释放时立即复位模块状态，不依赖下次 Init 覆盖：common、host、social 的容器和 ID map 归空，host 固定世界状态清空；human 清理消息及草案行为块、任务／行为池、销毁运行资源后清空执行器和规划器状态；game_timer 在释放命令队列、堆及同步对象后整体清零。保存及世界资源清理完成后，再调用 `dominoTimeModuleDestroy()`；引擎保证在客户端线程的 `DESTROYING` 路径中调用，time 不再复检生命周期，将 `session_start_monotonic_ns`、`runtime_datetime_base_ns`、`sequence` 设为 0，并保持 `frozen = true`。这只复位当前内存实例，存档中的累计未冻结时间仍然保留，下次 Init 重新加载该基准。
+Destroy 在释放时立即复位模块状态，不依赖下次 Init 覆盖：common、host、social 的容器和 ID map 归空，host 固定世界状态清空；human 清理消息及草案行为块、任务／行为池、销毁运行资源后清空执行器和规划器状态；game_timer 在释放命令队列、堆及同步对象后整体清零。保存及世界资源清理完成后，再调用 `dominoTimeModuleDestroy()`；引擎保证在客户端线程的 `DESTROYING` 路径中调用，time 不再复检生命周期，释放 time 等待同步资源，将 `session_start_monotonic_ns`、`runtime_datetime_base_ns`、`sequence` 及等待计数设为 0，冻结代次恢复为 1，并保持 `frozen = true`。这只复位当前内存实例，存档中的累计未冻结时间仍然保留，下次 Init 重新加载该基准。
 
 保存及释放全部成功时 Destroy 正常返回并回到未初始化状态，可在同一进程重新 Init 新世界；此前发生执行、规划或其他终止故障的实例不能走这条正常退出路径。仅 Init、未 Start 的世界也必须由外部先 Stop 再 Destroy：Stop 由引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，再进入引擎 `STOPPED`；Destroy 保存已加载及配置的事实。game_timer 和规划请求不入存档，下次加载后从可信检查点直接续跑并重建唤醒。
 

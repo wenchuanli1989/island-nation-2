@@ -544,11 +544,9 @@ static int humanExecutionThread(void* arg_ptr) {
         if (dominoEngineIsStopping()) {
             return completeExecutionThread();
         }
-        if (dominoTimeModuleIsFrozen()) {
-            code = dominoThreadQueueWait(&g_execution.inbox, epoch);
-            if (code != CODE_OK) {
-                DOMINO_EXIT_WITH_ERROR(code, "cannot wait on frozen human executor inbox");
-            }
+        const uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
+        if (freeze_epoch != 0U) {
+            dominoTimeModuleWait(freeze_epoch);
             continue;
         }
         /* 一轮最多处理三组各 64 项；进入后完整执行，普通冻结和退出只在下一轮观察。 */

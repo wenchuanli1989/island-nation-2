@@ -77,22 +77,25 @@ static int humanPlannerThread(void* arg_ptr) {
         if (dominoEngineIsStopping()) {
             return CODE_OK;
         }
-        if (!dominoTimeModuleIsFrozen()) {
-            uint32_t consumed_count = 0U;
-            for (; consumed_count < DOMINO_HUMAN_PLAN_INFLIGHT_MAX; consumed_count++) {
-                DominoThreadMessage message;
-                code = dominoThreadQueueConsume(&g_planner.inbox, &message, false);
-                if (code == ERR_QUEUE_EMPTY) {
-                    break;
-                }
-                if (code != CODE_OK) {
-                    DOMINO_EXIT_WITH_ERROR(code, "cannot consume human planner request");
-                }
-                processRequest(&message);
+        const uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
+        if (freeze_epoch != 0U) {
+            dominoTimeModuleWait(freeze_epoch);
+            continue;
+        }
+        uint32_t consumed_count = 0U;
+        for (; consumed_count < DOMINO_HUMAN_PLAN_INFLIGHT_MAX; consumed_count++) {
+            DominoThreadMessage message;
+            code = dominoThreadQueueConsume(&g_planner.inbox, &message, false);
+            if (code == ERR_QUEUE_EMPTY) {
+                break;
             }
-            if (consumed_count == DOMINO_HUMAN_PLAN_INFLIGHT_MAX) {
-                continue;
+            if (code != CODE_OK) {
+                DOMINO_EXIT_WITH_ERROR(code, "cannot consume human planner request");
             }
+            processRequest(&message);
+        }
+        if (consumed_count == DOMINO_HUMAN_PLAN_INFLIGHT_MAX) {
+            continue;
         }
         code = dominoThreadQueueWait(&g_planner.inbox, epoch);
         if (code != CODE_OK) {

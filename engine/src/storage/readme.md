@@ -37,9 +37,9 @@
 
 ## 保存流程
 
-普通 Freeze 由客户端直接固定业务时钟，不通知业务线程；线程在下一批入口自行检查冻结，当前有限业务批次仍可写入，不能直接作为保存屏障。正常退出由客户端先调用 `dominoEngineStop()` 进入 `STOPPING`，冻结并校验业务时刻 T，再唤醒主循环和全部业务线程；依次 join 主循环、human 执行／规划线程和 game_timer 后，统一将人物结算到 T，再排空日志、join writer 并刷新输出，保留队列和同步对象并进入 `STOPPED`。Stop 不保存世界；外部随后调用 `dominoEngineDestroy()` 进入 `DESTROYING`，释放 game_timer 和主循环队列，准备导航并执行存档，再释放 human 运行资源和世界模块。Destroy 只接受 `STOPPED`，不调用任何 Stop，未先 Stop 直接调用会报错退出。主循环只结束当前批次并退出，不承担退出停钟、结算或保存。日志线程已停止，日志文件和队列保留到保存完成后才释放；保存及销毁阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不调用日志记录接口。投递者结束前其目标队列保持有效。仅 Init、未 Start 的世界也由外部先 Stop 再 Destroy：此时尚无工作线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出；Destroy 保存已加载及配置的事实；本次校验精简不改变存档版本或 JSON 字段。
+普通 Freeze 由客户端直接固定业务时钟，不通知业务线程；线程在下一批入口自行检查冻结，当前有限业务批次仍可写入，不能直接作为保存屏障。正常退出由客户端先调用 `dominoEngineStop()` 进入 `STOPPING`，冻结并校验业务时刻 T，再分别通知 time、业务队列和 game_timer 中的等待者，保持时钟冻结；依次 join 主循环、human 执行／规划线程和 game_timer 后，统一将人物结算到 T，再排空日志、join writer 并刷新输出，保留队列和同步对象并进入 `STOPPED`。Stop 不保存世界；外部随后调用 `dominoEngineDestroy()` 进入 `DESTROYING`，释放 game_timer 和主循环队列，准备导航并执行存档，再释放 human 运行资源和世界模块。Destroy 只接受 `STOPPED`，不调用任何 Stop，未先 Stop 直接调用会报错退出。主循环只结束当前批次并退出，不承担退出停钟、结算或保存。日志线程已停止，日志文件和队列保留到保存完成后才释放；保存及销毁阶段的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接写 stdout，不调用日志记录接口。投递者结束前其目标队列保持有效。仅 Init、未 Start 的世界也由外部先 Stop 再 Destroy：此时尚无工作线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出；Destroy 保存已加载及配置的事实；本次校验精简不改变存档版本或 JSON 字段。
 
-世界保存与资源清理完成后，引擎才调用 `dominoTimeModuleDestroy()` 将内存时钟恢复为空的冻结快照。存档中的累计纳秒基准保持退出时刻，下一次 Init 仍按文件恢复；common、host、social 等世界容器及索引在各自 Destroy 返回前立即清空，不依赖下次加载覆盖。
+世界保存与资源清理完成后，引擎才调用 `dominoTimeModuleDestroy()` 释放 time 等待同步资源，将内存时钟恢复为空的冻结快照，冻结代次复位为 1、等待计数归零。存档中的累计纳秒基准保持退出时刻，下一次 Init 仍按文件恢复；common、host、social 等世界容器及索引在各自 Destroy 返回前立即清空，不依赖下次加载覆盖。
 
 storage 是引擎内部的 Init → Destroy 两阶段模块，加载与保存顺序由引擎对外生命周期入口保证，不额外维护初始化状态或重复校验。加载／保存各自的临时索引仍由调用方按 Init → Destroy 成对管理，完成后清空资源，供下一轮使用。加载入口依赖引擎已创建 ID map 和空目标容器，固定注册表保证每轮只加载一次，不在逐类加载中重复检查这两项前置条件；加载复用可信存档已经保证的字段、数量、唯一性与引用关系，继续检查 IO、容量和真实资源失败。
 

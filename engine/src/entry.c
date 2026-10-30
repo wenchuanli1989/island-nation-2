@@ -211,6 +211,7 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
     dominoThreadQueueInit(&g_domino_from_main_loop_queue, sizeof(DominoEngineMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
                           DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     dominoCommonModuleInit();
+    dominoTimeModuleInit();
     dominoHostModuleInit();
     dominoNavModuleInit();
     dominoSocialModuleInit();
@@ -233,11 +234,9 @@ static int dominoMainLoopThread(void* arg_ptr) {
         if (dominoEngineIsStopping()) {
             return 0;
         }
-        if (dominoTimeModuleIsFrozen()) {
-            code = dominoThreadQueueWait(&g_domino_to_main_loop_queue, epoch);
-            if (code != CODE_OK) {
-                DOMINO_EXIT_WITH_ERROR(code, "failed to wait for the frozen main loop");
-            }
+        const uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
+        if (freeze_epoch != 0U) {
+            dominoTimeModuleWait(freeze_epoch);
             continue;
         }
         uint32_t consumed_count = 0U;
@@ -295,6 +294,7 @@ void dominoEngineStop(void) {
         dominoTimeModuleFreeze();
         domino_runtime_ms_t now_ms;
         dominoTimeGetRuntimeMs(&now_ms);
+        dominoTimeModuleWakeAll();
         dominoThreadQueueWakeAll(&g_domino_to_main_loop_queue);
         notifyBusinessThreads();
         DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_domino_main_loop_thread, nullptr), ERR_THREAD_JOIN, "failed to join the main loop thread");

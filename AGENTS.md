@@ -80,7 +80,7 @@ shared（静态库）
 - shared logger／queue 保留独立公共契约；首次对象须使用静态初值、`={0}` 或 `calloc`，销毁复位后可直接再次初始化。
 - 启动线程顺序：logger → human 执行器 → planner → game_timer → 主循环；全部创建完成后进入 RUNNING，再解冻并唤醒业务线程。
 - 停止时依次 join 主循环、human 执行器、planner、game_timer，统一结算后排空并 join logger。仅 Init 的实例由引擎跳过 human／game_timer Stop 和全部 join，仍调用 logger Stop 关闭入队并刷新。两条路径均保留实例资源供 Destroy 使用。
-- time 加载只恢复累计基准，不另设 Init 重置或提前采样；Start 解冻时建立单调起点，Destroy 在保存后清零内存基准、采样起点和快照版本并保持冻结。
+- time 的接入位置：引擎在 storage 加载前调用 `dominoTimeModuleInit()`，在保存与世界资源清理完成后调用 `dominoTimeModuleDestroy()`。
 - Destroy 不调用 Stop 或 join；复位范围包括容器指针／数量／容量、索引、模块状态、线程句柄存储、引擎配置和路径。
 
 ### 模拟流水线设计目标
@@ -102,11 +102,11 @@ shared（静态库）
 
 ### 时间语义
 
-- 业务时间已确定使用 **32 位累计未冻结现实毫秒**：统一类型为 `domino_runtime_ms_t`（`uint32_t`），覆盖当前时刻、game_timer 的延迟与到期时间、任务／行为时长、NPC AI 处理节奏及收益结算。`dominoTimeGetRuntimeMs(&now_ms)` 返回 `void`，正常完成时输出已校验范围的 32 位毫秒；空指针、采样失败、时钟倒退或当前时刻越界直接打印 stderr 并 exit。换算只将现实纳秒除以 1000000，不应用游戏日历倍率。
-- `0` 与 `UINT32_MAX` 均是合法业务毫秒值；累计范围约 49.71 个未冻结现实日，按当前日历规则约合 248.55 个游戏年，这是已接受的产品范围。加法前检查 `delta_ms <= UINT32_MAX - base_ms`，减法前检查先后关系，越界报错，不回绕、截断、饱和或归零。未经明确变更需求，不得把累计未冻结现实毫秒改成或建议改成 64 位，也不得把跨存档累计或这一范围当成必须扩宽的缺陷。
-- time 内部单调采样和存档基准保留 `uint64_t` **纳秒**以保留精度；UTC 墙上时间戳与消息／计时器 ID 也可为 64 位。它们不是 64 位业务毫秒接口，不改变上述 32 位约定；业务代码不得用底层纳秒入口或 UTC 时间绕过毫秒范围检查。
-- 游戏日期和日内时分的倍率仅用于显示层换算，不改变 time 的累计基准或业务计时。时间变量、参数和字段须带 `_ns`、`_ms`、`_s` 等单位后缀，禁止把显示用的游戏时间当作业务时长。
-- 产品要求单次游戏会话最多持续 2 个游戏年对应的现实时间，即 24 分钟 × 12 × 2 = 576 个现实分钟（9.6 小时），届时保存并退出，再次加载存档继续；这不是当前已经实现的自动退出能力。单次会话时长包含玩家冻结期间，须独立于存档中的累计计时基准统计，加载存档继续累计未冻结现实时间，不因开始新会话将累计时钟归零。
+计时口径、数值范围、日历显示、冻结／解冻、等待计数及会话限制统一遵循[项目宪法第七章：游戏时间原则](doc/项目宪法.md#七游戏时间原则)。本节只补充实现约定：
+
+- **业务入口：** `domino_runtime_ms_t` 定义于 `shared/include/domino_shared_types.h`；业务通过 `engine/src/time/entry.h` 的 `dominoTimeGetRuntimeMs(&now_ms)` 读取时间，接口返回 `void`。
+- **业务算术：** 加法前检查 `delta_ms <= UINT32_MAX - base_ms`，减法 `now_ms - base_ms` 前确认 `now_ms >= base_ms`，失败按宪法的错误规则处理。
+- **冻结接口：** `dominoTimeModuleGetFreezeEpoch()` 返回 `uint64_t`，观察值原样传给 `dominoTimeModuleWait()`；显示计数通过 `dominoTimeModuleGetFreezeWaiterCount()` 读取，退出时通过 `dominoTimeModuleWakeAll()` 通知 time 等待者。
 
 ### Playground
 
