@@ -176,22 +176,29 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 
 ### Codex Cloud
 
-独立脚本 `setup-codex-cloud.sh` 面向 **Debian 13（trixie）Linux x86_64**，需要联网及 root 或免密 sudo。在
+独立脚本 `setup-codex-cloud.sh` 面向 **Debian 13（trixie）Linux x86_64**，普通用户即可执行，需要联网。在
 [Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
 
 | 配置 | 内容 |
 | --- | --- |
 | Install script（旧版界面为 Setup script） | `bash setup-codex-cloud.sh` |
-| Environment variables | `DOMINO_GLIBC_ROOT=/opt/domino/glibc-2.43` |
-| Public internet access | 启用 Package managers；确保允许 `deb.debian.org`、`security.debian.org`（若基础镜像使用）、`apt.llvm.org`、`archive.ubuntu.com` |
+| Start instructions | 每个新 shell 先 `source /workspace/.local/domino/env.sh` |
+| Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可指定其他可写绝对路径，不含空白、双引号或反斜杠） |
+| Public internet access | 启用 Package managers；确保允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
 
-脚本独立于 Ubuntu 远程开发安装入口 `setup-dev.sh`，通过 Debian `trixie-backports` 安装满足项目要求的 CMake（>= 4.2.1），启用 LLVM 官方 trixie 源并安装 Clang 22、格式化／分析／调试工具、ThinLTO 链接插件及 Sanitizer 运行库；APT 按可用版本选择 Debian 或 LLVM 源的软件包。
-Debian 13 系统 glibc 不提供当前源码所需的 `TIME_MONOTONIC`。脚本调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至指定目录，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`；不添加 Ubuntu APT 源，不替换系统 glibc。
-`DOMINO_GLIBC_ROOT` 必须配置在 Cloud 环境设置中，供安装和后续任务共同使用；仅在安装脚本中 `export` 不足以配置后续任务。脚本从仓库读取 glibc 辅助脚本和校验清单，须连同仓库使用。
+脚本独立于 Ubuntu 远程开发安装入口 `setup-dev.sh`，默认将工具链和 glibc 安装到 `/workspace/.local/domino`，不调用 `sudo`、不修改系统软件源、密钥、alternatives 或 dpkg 数据库。基础镜像须已提供 APT、Debian 签名密钥、curl、GnuPG、dpkg-deb、GCC/G++、Make、Git、Perl 和系统 Python 3.13；缺少时脚本会明确报错。
+
+脚本将 APT 配置、索引、缓存和日志隔离到安装目录，仅读取系统 dpkg 状态解析缺失依赖。校验 LLVM 官方密钥指纹和软件源签名后，下载并解包 Debian `trixie-backports` 的 CMake（>= 4.2.1）、Clang 22、格式化／分析／调试工具、ThinLTO 插件及 Sanitizer 运行库，不执行软件包维护脚本。安装根目录的 `packages.versions` 和 `packages.sha256` 记录本次工具软件包版本与摘要。
+
+Debian 13 系统 glibc 不提供当前源码所需的 `TIME_MONOTONIC`。脚本调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至安装根目录的 `glibc-2.43/`，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`；不添加 Ubuntu APT 源，不替换系统 glibc。
+
+安装生成 `env.sh`，每个新 shell 都须先 source 它，以启用工具 PATH 并设置 `DOMINO_GLIBC_ROOT`；自定义安装目录时同步调整 source 路径。该文件会覆盖旧 Cloud 配置中的 `/opt/domino/glibc-2.43`，无需继续配置旧变量。工具包装器只为工具进程及其子进程设置依赖库路径，独立 glibc 不加入全局 `LD_LIBRARY_PATH`。脚本从仓库读取 glibc 辅助脚本和校验清单，须连同仓库使用，可重复执行以刷新安装。
 
 在仓库根目录使用现有命令构建、运行：
 
 ```bash
+bash setup-codex-cloud.sh
+source /workspace/.local/domino/env.sh
 ./scripts/build.sh debug
 (cd build-debug && ./bin/domino-playground)
 ./scripts/build.sh release
@@ -200,14 +207,20 @@ Debian 13 系统 glibc 不提供当前源码所需的 `TIME_MONOTONIC`。脚本�
 
 默认 Playground 完成一次引擎生命周期后退出，存档位于 `build-debug/runtime/sandbox/`；再次运行会加载该存档。
 
-**Debian 13 验证记录（2026-10-30）**：使用官方 Debian 13.7 amd64 rootfs、PRoot 5.5、Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。
+**用户目录安装验证（2026-10-30）**：在实际 Codex Cloud Debian 13.6 环境中，以 `agent`（UID 1000、无 sudo）完成首次安装和重复安装，使用 Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。
+
+- `debug`、`release`（含 ThinLTO）、`sanitize` 全量构建通过；Debug／Release 默认 Playground 的启动、保存和重载通过，ELF 加载器和 RUNPATH 指向用户目录下的 glibc。
+- ASan／UBSan／LeakSanitizer 的默认 Playground 及重载检查通过。当前默认执行沙箱会触发 LeakSanitizer 的 ptrace 限制，需要放宽执行沙箱后以同一普通用户运行；不需要 root，也未关闭泄漏检测。
+- 工具版本检查、LLDB Python 模块加载、重复 source 激活以及已读取的系统 APT 配置、签名密钥和 dpkg 状态摘要检查通过；系统 glibc 保持 2.41。未复测其他构建预设、完整静态分析、调试器附加或新环境恢复。
+
+**原系统级脚本的 Debian 13 验证记录（2026-10-30）**：使用官方 Debian 13.7 amd64 rootfs、PRoot 5.5、Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。以下为改为用户目录安装前的历史记录，不代表当前脚本的验证结果。
 
 - 全新安装、重复安装、修复旧 sysroot 的 ABI 头文件断链均通过，系统 glibc 保持 2.41。
 - `debug`、`release`、`release-native`、`sanitize`、`tsan`、`profile` 六种配置全量构建通过，零警告、零错误；ELF 加载器和 RUNPATH 均指向独立 glibc。
 - Debug／Release／Release-native／Profile 的服务端、默认 Playground 及存档重载通过；`human_task_store` 回归通过。
 - LeakSanitizer 不能在 PRoot 的 ptrace 环境中运行；复制 Sanitizer 可执行文件，仅调整副本的加载器和 RUNPATH 到宿主可访问路径后，服务端及 Playground 的 ASan／UBSan／LeakSanitizer 检查通过。TSan 编译通过，但运行时内部崩溃；同一工具链的独立 `thrd_create`／`thrd_join` 最小程序也能复现，尚不能完成 TSan 运行检查。
 
-以上验证覆盖 Debian 13 用户态安装、编译和上述运行路径；本次未接入真实 Codex Cloud 托管实例，其平台网络、权限和内核行为尚未完成端到端验证。
+以上历史验证覆盖 Debian 13 用户态安装、编译和上述运行路径；当时未接入真实 Codex Cloud 托管实例，其平台网络、权限和内核行为未完成端到端验证。
 
 ### 开发环境安装（Ubuntu 26.04 服务器）
 
