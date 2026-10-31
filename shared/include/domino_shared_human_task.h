@@ -11,7 +11,7 @@
  */
 
 enum {
-    DOMINO_HUMAN_TASK_CHANNEL_PRIMARY = 0,  ///< 主通道优先处理；三个通道均不限制任务类型。
+    DOMINO_HUMAN_TASK_CHANNEL_PRIMARY = 0,  ///< 主通道优先处理；各通道可承载任意类型，同一人物的同类型任务不能同时占槽。
     DOMINO_HUMAN_TASK_CHANNEL_SECONDARY_1 = 1,
     DOMINO_HUMAN_TASK_CHANNEL_SECONDARY_2 = 2,
     DOMINO_HUMAN_TASK_CHANNEL_COUNT = 3,
@@ -125,7 +125,7 @@ typedef struct DominoTask {
     domino_runtime_ms_t started_at_ms;  ///< 第一次真正启动的时刻；started_flag 为 true 时有效，加载后继续执行不重置。
     domino_runtime_ms_t ended_at_ms;    ///< 成功、失败或取消的时刻；仅在任务终态有效。
     DOMINO_TASK_TYPE type;              ///< 整件事的目标类别，取 DOMINO_TASK_TYPE，例如上班、就医或睡眠。
-    uint8_t channel_index;              ///< 规划选定的通道下标：0 为主通道，1、2 为次通道；随存档保存。
+    uint8_t channel_index;              ///< 本任务唯一所属通道：0 为主通道，1、2 为次通道；随存档保存，运行期间不跨槽。
     uint8_t behavior_count;             ///< 行为数组的有效项数，范围为 1～DOMINO_TASK_BEHAVIOR_COUNT_MAX。
     domino_status_t status;             ///< 整项任务的当前状态及结束结果，取 DOMINO_TASK_STATUS。
     uint8_t priority_class;             ///< 任务有多重要，取 DOMINO_TASK_PRIORITY，区分自由活动、固定承诺和紧急事务。

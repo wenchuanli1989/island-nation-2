@@ -49,7 +49,7 @@ typedef struct DominoHumanData {
     /* 活动任务、决策、需求与生命状态；以下字段共占前 40 字节。 */
     uint64_t random_state;                                                  ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
     domino_human_id_t human_id;                                             ///< 与配对 DominoHuman.human_id 相同，必须非零。
-    domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];  ///< 主通道与两个通用次通道的活动任务 ID，0 表示空槽。
+    domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];  ///< 每槽最多一个活动任务，0 表示空槽；三个槽的任务类型须互异。
     uint32_t schedule_revision;                                             ///< 日程结构版本，结构或安排改变时递增，禁止回绕。
     domino_runtime_ms_t needs_updated_at_ms;  ///< 自然需求已结算到的累计未冻结现实毫秒；按完整分钟推进，未满分钟保留，0 合法。
     uint8_t energy;                           ///< 精力，0..100 整数分，自然变化按现实分钟结算。
@@ -69,7 +69,6 @@ typedef struct DominoHumanData {
     domino_fork_road_id_t current_address;  // 当前最近的地点，寻路系统使用
     domino_fork_road_id_t sleep_address;    // 休息地址，可以是家庭地址，旅馆酒店地址，公司地址
     domino_wealth_value_t wealth;
-    uint32_t pending_plan_reasons;  ///< 运行态：合并的待规划原因位集合，不持久化。
 
     /* 本人持有的全部任务；按提交顺序追加，删除时前移，状态和计划时间变化不重排。 */
     domino_task_id_t task_id_list[DOMINO_HUMAN_TASK_COUNT_MAX];  ///< 前 task_count 项有效，包含活动、待执行及尚未回收的终态任务。
@@ -182,7 +181,7 @@ typedef struct DominoHumanData {
     uint8_t recent_visited_address_list_count;
     uint8_t recent_visited_address_id_list_head_index;
 
-    uint8_t other_info[2529];  ///< 预留补齐 4096 字节，不持久化。
+    uint8_t other_info[2533];  ///< 预留补齐 4096 字节，不持久化。
 } DominoHumanData;
 
 static_assert(sizeof(DominoHumanData) == 4096, "DominoHumanData must be exactly 4096 bytes");
@@ -210,9 +209,7 @@ typedef struct DominoHuman {
     uint8_t region_index;
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;
-    bool plan_submit_pending_flag;  ///< 运行态：有规划请求等待提交，可与有效请求并存，不持久化。
-    bool execution_queued_flag;     ///< 运行态：已进入执行器就绪集合，用于防止重复入队，不表示正在执行，不持久化。
-    uint8_t other_info[6];          ///< 补齐 64 字节，不持久化。
+    uint8_t other_info[8];  ///< 补齐 64 字节，不持久化。
 } DominoHuman;
 
 static_assert(sizeof(DominoHuman) == 64, "DominoHuman must be exactly 64 bytes");

@@ -55,38 +55,16 @@ bool dominoEngineIsStopping(void) {
     return atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_STOPPING;
 }
 
-bool dominoEngineIsRunning(void) {
-    return atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING;
-}
-
 /** @brief 只校验访问资格；请求边界负责记录一次拒绝结果。 */
 static DOMINO_CODE checkClientWorldAccess(void) {
     const DominoEngineLifecycleState state = atomic_load(&g_domino_engine_lifecycle_state);
     if (state == DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED) {
         return ERR_NOT_INITIALIZED;
     }
-    if ((state != DOMINO_ENGINE_LIFECYCLE_INITIALIZED && state != DOMINO_ENGINE_LIFECYCLE_RUNNING) || !dominoEngineIsClientThread()) {
+    if (state != DOMINO_ENGINE_LIFECYCLE_RUNNING || !dominoEngineIsClientThread()) {
         return ERR_GAME_STATE_INVALID;
     }
     return CODE_OK;
-}
-
-DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr) {
-    DOMINO_CODE code = checkClientWorldAccess();
-    if (code == CODE_OK) {
-        code = dominoHumanExecutionSubmitSleep(human_id, channel_index, task_id_out_ptr);
-    }
-    if (code != CODE_OK) {
-        if (atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                              "sleep submission rejected human=%" PRIu32 " channel=%u (%s, code=%d)", human_id, (unsigned)channel_index,
-                              dominoErrorCodeToString(code), (int)code);
-        } else {
-            DOMINO_PRINT_MESSAGE("sleep submission rejected human=%" PRIu32 " channel=%u (%s, code=%d)", human_id, (unsigned)channel_index,
-                                 dominoErrorCodeToString(code), (int)code);
-        }
-    }
-    return code;
 }
 
 void dominoEngineFreezeTime(void) {
@@ -118,9 +96,6 @@ void dominoEngineThawTime(void) {
 
 DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
     DOMINO_CODE code = checkClientWorldAccess();
-    if (code == CODE_OK && atomic_load(&g_domino_engine_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING) {
-        code = ERR_GAME_STATE_INVALID;
-    }
     if (code == CODE_OK && message_ptr == nullptr) {
         code = ERR_NULL_POINTER;
     }
@@ -142,9 +117,6 @@ DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
 
 DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocking) {
     DOMINO_CODE code = checkClientWorldAccess();
-    if (code == CODE_OK && atomic_load(&g_domino_engine_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING) {
-        code = ERR_GAME_STATE_INVALID;
-    }
     if (code == CODE_OK && message_out_ptr == nullptr) {
         code = ERR_NULL_POINTER;
     }

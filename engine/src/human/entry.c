@@ -46,7 +46,7 @@ void dominoHumanModuleInit(void) {
 }
 
 void dominoHumanModuleStart(void) {
-    /* time 仍冻结；执行器就绪后再启动规划线程，全部就绪后由引擎解冻。 */
+    /* time 仍冻结；执行器就绪后再创建规划线程，引擎在全部线程创建后解冻。 */
     dominoHumanExecutionStart();
     dominoHumanPlannerStart();
 }

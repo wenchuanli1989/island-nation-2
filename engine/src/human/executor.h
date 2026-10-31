@@ -1,15 +1,14 @@
 #ifndef DOMINO_ENGINE_HUMAN_EXECUTOR_H
 #define DOMINO_ENGINE_HUMAN_EXECUTOR_H
 
-#include "domino_shared_error_codes.h"
-#include "domino_shared_human.h"
+#include "domino_shared_types.h"
 
 /** @brief 初始化执行控制、执行收件箱与规划入口；不创建线程，致命错误直接终止。
  * @pre 引擎和 human 模块串行管理调用顺序；首次使用静态空状态，再次使用前须完成 Destroy。
  */
 extern void dominoHumanExecutionInit(void);
 
-/** @brief 释放留队消息、收件队列与同步对象，复位人物唤醒字段，不停止或 join 线程。
+/** @brief 释放留队消息、收件队列与启动同步对象，不停止或 join 线程。
  * @pre 资源已 Init；执行、规划与 game_timer 线程均未启动或已 join，保存已完成；人物容器随后由 human 模块释放。
  */
 extern void dominoHumanExecutionDestroy(void);
@@ -30,16 +29,9 @@ extern void dominoHumanExecutionNotifyTimeChanged(void);
  */
 extern void dominoHumanExecutionStop(void);
 
-/** @brief 所有业务线程退出后统一结算正常人物到冻结时刻；异常人物直接跳过，不释放资源。
+/** @brief 所有业务线程退出后，将正常人物三个通道共同结算到冻结时刻；不回收终态或启动后续任务，异常人物跳过。
  * @pre human 和 game_timer Stop 已完成；世界仍存活，调用方独占人物写入权。
  */
 extern void dominoHumanExecutionSettle(domino_runtime_ms_t now_ms);
-
-/** @brief 提交无需建筑或地点许可的单行为睡眠；运行中完成当次人物推进后才返回成功。
- * @pre 引擎公开入口已确认处于 INITIALIZED 或 RUNNING，且调用方为登记的客户端线程；与生命周期操作串行。
- * @note 尚未 Start 时只提交 PLANNED；异常人物或运行实例冻结期间拒绝提交。普通业务拒绝只返回结果，由引擎公开入口记录；
- * 已提交任务的业务失败终结为 FAILED 并使人物进入异常；分配、投递或唤醒登记等致命错误直接终止。
- */
-extern DOMINO_CODE dominoHumanExecutionSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr);
 
 #endif

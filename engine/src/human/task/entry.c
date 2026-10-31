@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#include "sleep.h"
+
 static const DominoTaskTypeInfo g_task_type_info[DOMINO_TASK_TYPE_COUNT] = {
     [DOMINO_TASK_TYPE_WORK] = {.name_str = "work"},
     [DOMINO_TASK_TYPE_SCHOOL] = {.name_str = "school"},
@@ -12,7 +14,7 @@ static const DominoTaskTypeInfo g_task_type_info[DOMINO_TASK_TYPE_COUNT] = {
     [DOMINO_TASK_TYPE_VISIT] = {.name_str = "visit"},
     [DOMINO_TASK_TYPE_TRAVEL] = {.name_str = "travel"},
     [DOMINO_TASK_TYPE_PARADE] = {.name_str = "parade"},
-    [DOMINO_TASK_TYPE_SLEEP] = {.name_str = "sleep"},
+    [DOMINO_TASK_TYPE_SLEEP] = {.name_str = "sleep", .ops = &domino_sleep_task_ops},
     [DOMINO_TASK_TYPE_PHONE_CALL] = {.name_str = "phone_call"},
     [DOMINO_TASK_TYPE_MESSAGE] = {.name_str = "message"},
 };

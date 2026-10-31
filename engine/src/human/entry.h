@@ -11,7 +11,7 @@
  */
 extern void dominoHumanModuleInit(void);
 
-/** @brief 在冻结世界下依次启动执行和规划线程并等待就绪，不重新分配基础资源。
+/** @brief 在冻结世界下先等待执行线程就绪，再创建已备好资源的规划线程，不重新分配基础资源。
  * @pre 引擎已完成 Init，处于 STARTING；本次实例尚未启动。
  */
 extern void dominoHumanModuleStart(void);

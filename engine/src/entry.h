@@ -27,9 +27,6 @@ extern bool dominoEngineIsClientThread(void);
  */
 extern bool dominoEngineIsStopping(void);
 
-/** @brief 查询是否处于 RUNNING，供已通过引擎访问检查的业务入口选择同步处理或线程投递。 */
-extern bool dominoEngineIsRunning(void);
-
 /**
  * @brief 引擎工作线程向客户端发送消息。
  * @pre 引擎已准备客户端收件队列，并在全部投递线程 join 前保持队列有效；本接口不重复校验生命周期。

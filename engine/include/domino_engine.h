@@ -6,7 +6,6 @@
 #include <stdint.h>
 
 #include "domino_shared_error_codes.h"
-#include "domino_shared_types.h"
 
 typedef enum DominoEngineMsgType {
     DOMINO_ENGINE_MSG_NONE = 0,
@@ -69,8 +68,8 @@ extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 /**
  * @brief 客户端进入 STOPPING，停止已启动的线程并排空日志，保留资源供 Destroy 保存和释放。
  * @pre 引擎处于 INITIALIZED 或 RUNNING，且由 Init 登记的客户端线程串行调用；已冻结的运行实例同样可以停止。
- * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 game_timer，统一结算正常人物，异常人物直接跳过，再排空日志并 join writer。
- * 仅 Init、未 Start 时各模块跳过线程 join，logger 关闭入队并刷新输出；保持已加载及配置的事实，不结算人物。
+ * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 game_timer，统一结算正常人物，异常人物直接跳过，再排空日志并 join
+ * writer。 仅 Init、未 Start 时各模块跳过线程 join，logger 关闭入队并刷新输出；保持已加载及配置的事实，不结算人物。
  * 停止或结算失败直接终止进程，不保存。
  * 成功后进入 STOPPED，世界、队列、同步对象和日志文件均保留，全部线程已退出，尚未保存；随后显式调用 Destroy，不支持直接 Start 或 Thaw。
  */
@@ -91,7 +90,7 @@ extern void dominoEngineDestroy(void);
 /**
  * @brief 客户端冻结业务时钟，不通知或等待业务线程；重复冻结保持原时刻。
  * @note 已开始的有限批次完整执行，业务线程在下一批次入口观察冻结；消息和在途规划留队，恢复后继续消费。
- * 返回不表示世界已停止写入或可立即保存。冻结期间拒绝同步睡眠业务提交；消息队列仍可收发，日志线程继续写出。
+ * 返回不表示世界已停止写入或可立即保存。冻结期间拒绝新的睡眠请求；消息队列仍可收发，日志线程继续写出。
  * 只允许客户端在 RUNNING 调用；非法调用或时钟故障直接打印致命错误并退出进程。
  */
 extern void dominoEngineFreezeTime(void);
@@ -101,16 +100,6 @@ extern void dominoEngineFreezeTime(void);
  * @note 只允许客户端在 RUNNING 且时钟冻结时调用；非法调用、时钟或通知故障直接打印致命错误并退出进程。
  */
 extern void dominoEngineThawTime(void);
-
-/**
- * @brief 客户端提交无需建筑或地点许可的单行为睡眠，成功时输出任务 ID 并安排执行；失败保持输出不变。
- * @note Init 后尚未 Start 时仅提交 PLANNED，运行中由执行线程校验、提交并随后启动；暂停期间拒绝提交。
- * 无需显式提交即可自主睡眠：正常、完全空闲、无非终态任务且有容量的人物按精力阈值选择主通道，不寻找地点或重排日程。
- * 已加载的活动睡眠从保存进度继续执行，无需重新授权。
- * 异常人物拒绝提交。已提交任务启动或推进业务失败时终结为 FAILED，人物进入异常且执行器跳过。
- * 只支持同步睡眠内核的单活动形态，三个通道仍可任选。调用须与其他客户端生命周期和任务 API 串行。
- */
-extern DOMINO_CODE dominoEngineSubmitSleep(domino_human_id_t human_id, uint8_t channel_index, domino_task_id_t* task_id_out_ptr);
 
 /**
  * @brief 客户端向引擎主循环发送消息。
