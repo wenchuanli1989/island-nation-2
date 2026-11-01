@@ -46,11 +46,10 @@ enum {
 
 /** @brief 4096 字节人物数据；与核心共享 human_id 和数组索引，前部集中日程、需求与当前位置。 */
 typedef struct DominoHumanData {
-    /* 活动任务、决策、需求与生命状态；以下字段共占前 40 字节。 */
+    /* 活动任务、决策、需求与生命状态；以下字段共占前 36 字节。 */
     uint64_t random_state;                                                  ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
     domino_human_id_t human_id;                                             ///< 与配对 DominoHuman.human_id 相同，必须非零。
     domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];  ///< 每槽最多一个活动任务，0 表示空槽；三个槽的任务类型须互异。
-    uint32_t schedule_revision;                                             ///< 日程结构版本，结构或安排改变时递增，禁止回绕。
     domino_runtime_ms_t needs_updated_at_ms;  ///< 自然需求已结算到的累计未冻结现实毫秒；按完整分钟推进，未满分钟保留，0 合法。
     uint8_t energy;                           ///< 精力，0..100 整数分，自然变化按现实分钟结算。
     uint8_t food;                             ///< 饱食度，0..100 整数分，自然变化按现实分钟结算。
@@ -157,14 +156,12 @@ typedef struct DominoHumanData {
 
     /* 历史位置与最近访问记录。 */
     uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
-    uint32_t last_active_time;       ///< 最后活跃时刻，单位为累积模拟秒。
     domino_country_id_t last_active_country_id;
     domino_city_id_t last_active_city_id;
     domino_building_id_t last_active_building_id;
     domino_country_id_t birth_country_id;
     domino_city_id_t birth_city_id;
     domino_building_id_t birth_building_id;
-    uint32_t death_time;  ///< 死亡时刻，单位为累积模拟秒。
     domino_country_id_t death_country_id;
     domino_city_id_t death_city_id;
     domino_building_id_t death_building_id;
@@ -181,7 +178,7 @@ typedef struct DominoHumanData {
     uint8_t recent_visited_address_list_count;
     uint8_t recent_visited_address_id_list_head_index;
 
-    uint8_t other_info[2533];  ///< 预留补齐 4096 字节，不持久化。
+    uint8_t other_info[2545];  ///< 预留补齐 4096 字节，不持久化。
 } DominoHumanData;
 
 static_assert(sizeof(DominoHumanData) == 4096, "DominoHumanData must be exactly 4096 bytes");

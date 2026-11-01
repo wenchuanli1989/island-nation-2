@@ -7,6 +7,11 @@
 
 #include "domino_shared_error_codes.h"
 
+/** @file domino_engine.h
+ * @brief 引擎对外接口；客户端不得直接提交任务请求、规划请求或规划结果。
+ * @note 任务由引擎内部自主决策和规划，不为测试增加对外任务提交接口。
+ */
+
 typedef enum DominoEngineMsgType {
     DOMINO_ENGINE_MSG_NONE = 0,
 } DominoEngineMsgType;
@@ -89,8 +94,9 @@ extern void dominoEngineDestroy(void);
 
 /**
  * @brief 客户端冻结业务时钟，不通知或等待业务线程；重复冻结保持原时刻。
- * @note 已开始的有限批次完整执行，业务线程在下一批次入口观察冻结；消息和在途规划留队，恢复后继续消费。
- * 返回不表示世界已停止写入或可立即保存。冻结期间拒绝新的睡眠请求；消息队列仍可收发，日志线程继续写出。
+ * @note 业务线程在批次入口观察冻结后不开始新批次，消息及规划结果留队，解冻后继续消费。
+ * 若冻结发生在批次检查之后，该批仍可继续出队、处理和入队；返回不表示世界已停止写入或可立即保存。
+ * 队列自身不检查冻结，引擎内部当前批次的规划请求及结果仍可入队，日志线程继续写出。
  * 只允许客户端在 RUNNING 调用；非法调用或时钟故障直接打印致命错误并退出进程。
  */
 extern void dominoEngineFreezeTime(void);
@@ -103,8 +109,10 @@ extern void dominoEngineThawTime(void);
 
 /**
  * @brief 客户端向引擎主循环发送消息。
+ * @note 不提供客户端任务请求、规划请求或规划结果消息，不能通过本入口提交这些内容。
  * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
- * @note 只允许登记的客户端线程在 RUNNING 期间发送，冻结不影响入队；业务消费者在解冻后继续处理。
+ * @note 只允许登记的客户端线程在 RUNNING 期间发送，冻结不影响入队；主循环观察冻结后保留消息，解冻后继续处理。
+ * 若冻结发生在主循环的批次检查之后，该批仍可继续出队和处理。
  * @return CODE_OK 成功；空指针返回 ERR_NULL_POINTER；满载、扩容失败、ID 耗尽等传输故障打印致命错误并退出进程，不等待空位。
  *         请求状态或线程不合法时记录非致命错误并返回；入队仍需获取队列 mutex。
  */
@@ -112,11 +120,12 @@ extern DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr);
 
 /**
  * @brief 客户端接收引擎消息。
+ * @pre 只允许登记的客户端线程在 RUNNING 期间接收。
  * @param blocking 正常状态下无消息时，true 等待消息，false 返回 `ERR_QUEUE_EMPTY`；两种模式均需获取队列 mutex。
  * @note 冻结不影响取出已有消息；暂停时空队列的阻塞调用仍等待生产者，需继续控制游戏时使用非阻塞模式。
  *       系统或同步故障直接打印致命错误并退出进程。
- * @return `CODE_OK` 成功；空指针返回 `ERR_NULL_POINTER`；引擎队列未初始化返回 `ERR_NOT_INITIALIZED`；
- *         队列已进入排空状态且为空时返回 `ERR_QUEUE_FLUSHING`，不再等待消息。
+ * @return `CODE_OK` 成功；访问资格合法时空指针返回 `ERR_NULL_POINTER`；引擎未初始化返回 `ERR_NOT_INITIALIZED`；
+ *         其他生命周期或线程不合法时返回 `ERR_GAME_STATE_INVALID`，以上拒绝均记录一次非致命诊断。
  */
 extern DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocking);
 

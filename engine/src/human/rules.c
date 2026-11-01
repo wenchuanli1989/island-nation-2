@@ -18,8 +18,16 @@ enum {
 static_assert((DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY - 1U) / SLEEP_ENERGY_NET_PER_MINUTE + 1U <= UINT32_MAX / DOMINO_HUMAN_NEED_MINUTE_MS,
               "Maximum sleep duration must fit runtime milliseconds");
 
-domino_runtime_ms_t dominoHumanEstimateSleepMs(uint8_t energy) {
+DOMINO_CODE dominoHumanPrepareSleep(uint8_t energy, domino_runtime_ms_t now_ms, domino_runtime_ms_t* end_ms_out_ptr) {
+    if (energy >= DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY) {
+        return ERR_GAME_STATE_INVALID;
+    }
     const uint32_t missing_energy = DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY - energy;
     const uint32_t minute_count = (missing_energy - 1U) / SLEEP_ENERGY_NET_PER_MINUTE + 1U;
-    return minute_count * DOMINO_HUMAN_NEED_MINUTE_MS;
+    const domino_runtime_ms_t duration_ms = minute_count * DOMINO_HUMAN_NEED_MINUTE_MS;
+    if (duration_ms > UINT32_MAX - now_ms) {
+        return ERR_OUT_OF_RANGE;
+    }
+    *end_ms_out_ptr = now_ms + duration_ms;
+    return CODE_OK;
 }

@@ -16,7 +16,7 @@ void dominoGameTimerHeapDestroy(DominoGameTimerHeap* heap_ptr);
 void dominoGameTimerHeapPush(DominoGameTimerHeap* heap_ptr, const DominoGameTimer* game_timer_ptr);
 /** @brief 返回最早到期事件，空堆返回 nullptr；返回指针仅在下次堆操作前有效。 */
 const DominoGameTimer* dominoGameTimerHeapPeek(const DominoGameTimerHeap* heap_ptr);
-/** @brief 移除非空堆的最早到期事件，用于取消项回收或投递完成后的移除。 */
+/** @brief 移除非空堆的最早到期事件，用于取消项回收或到期请求转移。 */
 void dominoGameTimerHeapPop(DominoGameTimerHeap* heap_ptr);
 
 #endif

@@ -3,15 +3,13 @@
 
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
-#include "klib/khashl.h"
-#include "klib/kvec.h"
 
 /** @brief 初始化人物容器、任务存储、执行／规划队列及控制资源，不创建线程。
  * @pre 引擎串行管理调用顺序；首次使用静态空状态，再次使用前须完成 Destroy。
  */
 extern void dominoHumanModuleInit(void);
 
-/** @brief 在冻结世界下先等待执行线程就绪，再创建已备好资源的规划线程，不重新分配基础资源。
+/** @brief 在业务时钟冻结时依次创建执行和规划线程，不重新分配基础资源。
  * @pre 引擎已完成 Init，处于 STARTING；本次实例尚未启动。
  */
 extern void dominoHumanModuleStart(void);
@@ -28,19 +26,24 @@ extern void dominoHumanModuleStop(void);
  */
 extern void dominoHumanModuleDestroy(void);
 
-extern DominoHuman* dominoGetHumanByID(domino_human_id_t human_id);
+/** @brief 运行期读取 human 世界前取得共享锁；不能递归、升级为写锁或跨等待保留。
+ * @pre human 已 Init；调用者在引擎 Stop 前结束全部访问，内部业务线程可完成 STOPPING 末批读取。
+ * @note Freeze 不替代读锁。加载、保存和线程全部结束后的结算使用 state.h 串行直访，无需此接口。
+ */
+void dominoHumanReadLock(void);
+/** @brief 结束本次读范围；不得继续使用借用的 Human、Data、Task、Behavior 指针。 */
+void dominoHumanReadUnlock(void);
 
-/** @brief Human 与 Data 共用 human_id 索引；加载期间可在 data 指针绑定前查询。 */
-extern DominoHumanData* dominoGetHumanDataByID(domino_human_id_t human_id);
-
-KHASHL_MAP_INIT(KH_LOCAL, DominoHumanIDMap, dominoHumanIdMap, domino_human_id_t, uint32_t, kh_hash_uint32, kh_eq_generic)
-
-typedef kvec_t(DominoHuman) DominoHumanVec;
-typedef kvec_t(DominoHumanData) DominoHumanDataVec;
-
-/** @brief 两个数组按相同索引一一配对，由 human_id 共用同一张 ID 映射。 */
-extern DominoHumanVec domino_all_human_list;
-extern DominoHumanDataVec domino_all_human_data_list;
-extern DominoHumanIDMap* dominoHumanIdMap;
+/** @brief 按 ID 查询原始人物；不存在返回空指针，不复制数据。
+ * @pre 运行期读者须先取得 human 读锁，只读取人物及关联 Data、Task、Behavior，不通过指针修改。
+ * 执行器在写锁内修改；加载、线程结束后的结算、保存和销毁串行直访。
+ * @note 查询复用调用方已建立的访问范围，不再次加锁。借用指针不能跨解锁或容器扩容、删除、重排保留。
+ * human 读锁不覆盖关联 host 对象；访问 movable_object 指向的数据仍遵守 host 的访问契约。
+ */
+DominoHuman* dominoGetHumanByID(domino_human_id_t human_id);
+/** @brief 按 ID 查询原始任务；不存在返回空指针，访问范围与人物查询相同。 */
+DominoTask* dominoGetTaskByID(domino_task_id_t task_id);
+/** @brief 按 ID 查询原始行为；不存在返回空指针，访问范围与人物查询相同。 */
+DominoBehavior* dominoGetBehaviorByID(domino_behavior_id_t behavior_id);
 
 #endif

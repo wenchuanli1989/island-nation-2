@@ -1,5 +1,5 @@
 {
-  "version": 22,
+  "version": 25,
   "integrity_verify": false,
   "info": {
     "account_id": "sandbox-account"
@@ -59,7 +59,7 @@
       "crc32c": 0,
       "size": 0
     },
-    "human_ai": {
+    "human_task": {
       "crc32c": 0,
       "size": 0
     },

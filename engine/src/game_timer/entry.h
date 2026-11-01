@@ -61,7 +61,7 @@ void dominoGameTimerNotifyTimeChanged(void);
  *       消费方检查类型后读取 payload.game_timer 并跳过取消项；消息 id 与 game_timer_id 独立。
  * @note 事件队列可混合 game_timer、AI、命令等类型；计时线程停止及业务消费结束前不得销毁、搬移或重建。
  * @note 入队成功后取得 request_mutex 发出唤醒信号，可能等待命令批次、堆操作或取消扫描；无需等待入堆即可按 ID 取消。
- * @note 命令提交、后台入堆或到期事件投递失败均打印到 stderr 并 exit；队列满、停止、内存不足及 ID 耗尽不重试。
+ * @note 命令提交、后台入堆或到期事件投递失败均打印到 stderr 并 exit；队列满、内存不足及 ID 耗尽不重试。
  *       参数错误由调用边界按语义决定是否记录，game_timer 内不重复打印。
  * @note time 冻结或引擎退出请求发布后，正在结束的业务批次仍允许登记和取消；生命周期控制方须保持 game_timer 资源有效。
  *       计时线程只在批次边界检查退出和冻结；一批含最多 64 个堆项及 64 条命令，普通冻结或退出不打断已开始的批次。

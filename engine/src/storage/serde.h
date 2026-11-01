@@ -226,9 +226,8 @@ void serdeSaveHuman(const char* save_path);
 void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_count);
 void serdeBindHumanReferences(void);
 
-void serdeSaveHumanAI(const char* save_path);
-void serdeLoadHumanAI(const char* save_path, uint32_t total_count, uint32_t shard_count);
-void serdeBindHumanAIReferences(void);
+void serdeSaveHumanTask(const char* save_path);
+void serdeLoadHumanTask(const char* save_path, uint32_t total_count, uint32_t shard_count);
 
 void serdeSaveHumanBehavior(const char* save_path);
 void serdeLoadHumanBehavior(const char* save_path, uint32_t total_count, uint32_t shard_count);

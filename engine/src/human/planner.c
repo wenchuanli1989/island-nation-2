@@ -1,5 +1,6 @@
 #include "planner.h"
 
+#include <assert.h>
 #include <inttypes.h>
 #include <string.h>
 #include <threads.h>
@@ -9,19 +10,14 @@
 #include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "domino_shared_human.h"
+#include "entry.h"
 #include "task/sleep.h"
 
 /** @file planner.c
- * @brief 按 FIFO 批量读取执行器的值快照，生成睡眠草案或 NO_PLAN，并回传执行器。
+ * @brief 按 FIFO 批量接收规划身份，丢弃已失效请求，持读锁查询人物数据并回传睡眠规划结果。
  * @note 请求不拥有动态资源；只有结果可以持有草案行为块，成功投递后由执行器释放。
- * Init 已准备全部资源，规划线程只在批次边界检查退出和冻结，不读取或修改世界。
+ * Init 已准备全部资源，规划线程只在批次边界检查退出和冻结；只读共享世界，草案由执行器提交。
  */
-
-/** @brief 私有请求队列只传值快照；首字段由队列回写，与业务 request_id 分开。 */
-typedef struct PlanRequestMessage {
-    uint64_t id;
-    DominoHumanPlanRequest request;
-} PlanRequestMessage;
 
 typedef struct HumanPlanner {
     DominoThreadQueue inbox;
@@ -34,23 +30,38 @@ enum {
     HUMAN_PLANNER_BATCH_COUNT = 64U,  ///< 每批处理后检查冻结和退出，不限制排队请求总数。
 };
 
-/** @brief 为一份快照生成结果并非阻塞回传；冻结或停止不打断已开始的批次。
- * @pre 执行器已确认人物身份、低精力和规划资格；快照只含值，排队期间保持不变。
+/** @brief 持读锁取得本次需要的最新值，解锁后构造草案并非阻塞回传；冻结或停止不打断已开始的批次。
+ * @note 请求排队后世界可能变化，读取时复核身份；不存在或已替换的请求解锁后直接丢弃。
+ * 身份匹配时仍回传草案或无草案原因，不结算世界，不跨读锁范围保留借用指针。
+ * 结果消费时执行器仍须重新验证当前日程和业务条件，读锁不使草案永久有效。
  */
 static void planAndSendResult(const DominoHumanPlanRequest* request_ptr) {
+    dominoHumanReadLock();
+    const DominoHuman* human_ptr = dominoGetHumanByID(request_ptr->human_id);
+    if (!human_ptr || human_ptr->active_plan_request_id != request_ptr->request_id) {
+        dominoHumanReadUnlock();
+        return;
+    }
+    // 运行期执行器在同一写锁内将人物置异常并清除请求身份，匹配的请求只属于正常人物。
+    assert(human_ptr->status == DOMINO_HUMAN_STATUS_NORMAL);
+    const uint8_t energy = human_ptr->data->energy;
+    domino_runtime_ms_t now_ms;
+    dominoTimeGetRuntimeMs(&now_ms);
+    dominoHumanReadUnlock();
+
     DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_AI_RESULT, .payload.plan = {.request = *request_ptr}};
     DominoHumanPlanResult* result_ptr = &message.payload.plan;
-    DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, DOMINO_HUMAN_TASK_CHANNEL_PRIMARY, request_ptr->energy,
-                                                      request_ptr->now_ms, &result_ptr->draft);
+    DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, energy, now_ms, &result_ptr->draft);
     switch (code) {
         case CODE_OK:
-            result_ptr->status = DOMINO_HUMAN_PLAN_DRAFT;
-            result_ptr->reason = DOMINO_HUMAN_PLAN_REASON_LOW_ENERGY;
+            result_ptr->outcome = DOMINO_HUMAN_PLAN_DRAFT;
             break;
         case ERR_OUT_OF_RANGE:
-            // 精力已由执行器确认；剩余业务时间不足是本次无可行计划，行为块保持为空。
-            result_ptr->status = DOMINO_HUMAN_PLAN_NO_PLAN;
-            result_ptr->reason = DOMINO_HUMAN_PLAN_REASON_TIME_RANGE;
+            // 已提交人物数据保证精力范围；剩余业务时间不足时不生成行为块。
+            result_ptr->outcome = DOMINO_HUMAN_PLAN_TIME_RANGE;
+            break;
+        case ERR_GAME_STATE_INVALID:
+            result_ptr->outcome = DOMINO_HUMAN_PLAN_STATE_CHANGED;
             break;
         default:
             DOMINO_EXIT_WITH_ERROR(code, "cannot build sleep plan human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id,
@@ -65,7 +76,7 @@ static void planAndSendResult(const DominoHumanPlanRequest* request_ptr) {
 
 static int humanPlannerThread(void* arg_ptr) {
     (void)arg_ptr;
-    PlanRequestMessage requests[HUMAN_PLANNER_BATCH_COUNT];
+    DominoHumanPlanRequest requests[HUMAN_PLANNER_BATCH_COUNT];
     for (;;) {
         uint64_t epoch;
         DOMINO_CODE code = dominoThreadQueueSnapshot(&g_planner.inbox, &epoch);
@@ -86,7 +97,7 @@ static int humanPlannerThread(void* arg_ptr) {
             DOMINO_EXIT_WITH_ERROR(code, "cannot consume human planner requests");
         }
         for (uint32_t index = 0U; index < consumed_count; index++) {
-            planAndSendResult(&requests[index].request);
+            planAndSendResult(&requests[index]);
         }
         if (consumed_count == HUMAN_PLANNER_BATCH_COUNT) {
             continue;
@@ -99,7 +110,7 @@ static int humanPlannerThread(void* arg_ptr) {
 }
 
 void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
-    dominoThreadQueueInit(&g_planner.inbox, sizeof(PlanRequestMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+    dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoHumanPlanRequest), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     g_planner.result_queue_ptr = result_queue_ptr;
 }
 
@@ -112,12 +123,13 @@ void dominoHumanPlannerNotifyTimeChanged(void) {
     dominoThreadQueueWakeAll(&g_planner.inbox);
 }
 
-void dominoHumanPlannerSubmit(const DominoHumanPlanRequest* request_ptr) {
-    PlanRequestMessage message = {.request = *request_ptr};
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &message, false);
+uint64_t dominoHumanPlannerSubmit(domino_human_id_t human_id) {
+    DominoHumanPlanRequest request = {.human_id = human_id};
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &request, false);
     if (code != CODE_OK) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id, request_ptr->request_id);
+        DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32, human_id);
     }
+    return request.request_id;
 }
 
 void dominoHumanPlannerStop(void) {
@@ -125,7 +137,7 @@ void dominoHumanPlannerStop(void) {
 }
 
 void dominoHumanPlannerDestroy(void) {
-    // 生产者和规划线程均已结束；留队请求只有值快照，可直接随队列释放。
+    // 生产者和规划线程均已结束；留队请求只有身份值，可直接随队列释放。
     dominoThreadQueueDestroy(&g_planner.inbox);
     memset(&g_planner, 0, sizeof(g_planner));
 }

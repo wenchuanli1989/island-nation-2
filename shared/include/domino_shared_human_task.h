@@ -7,11 +7,11 @@
 #include "domino_shared_types.h"
 
 /** @file domino_shared_human_task.h
- * @brief 任务与行为模型；任务按 ID 引用全局行为数组，执行版本仅保留在运行态。
+ * @brief 任务与行为模型；任务按 ID 引用全局行为数组。
  */
 
 enum {
-    DOMINO_HUMAN_TASK_CHANNEL_PRIMARY = 0,  ///< 主通道优先处理；各通道可承载任意类型，同一人物的同类型任务不能同时占槽。
+    DOMINO_HUMAN_TASK_CHANNEL_PRIMARY = 0,  ///< 主通道优先处理；睡眠固定使用主通道，同一人物的同类型任务不能同时占槽。
     DOMINO_HUMAN_TASK_CHANNEL_SECONDARY_1 = 1,
     DOMINO_HUMAN_TASK_CHANNEL_SECONDARY_2 = 2,
     DOMINO_HUMAN_TASK_CHANNEL_COUNT = 3,
@@ -112,13 +112,11 @@ typedef struct DominoBehavior {
 /** @brief 任务保存有序行为 ID 和当前行为 ID；0 是合法时刻，启动与终结由标志及状态判断。
  * @note 任务结构体按值复制行为 ID，不借用全局数组地址；跨线程草案须另存自有行为副本。
  * @note 计划与实际时刻均为累计未冻结的现实毫秒；计划区间为 [planned_begin_ms, planned_end_ms)，不等于实际执行区间。
- * @note 步骤切换和任务终结须先检查版本上限，再递增 execution_version，使本任务的旧异步结果失效。
  */
 typedef struct DominoTask {
-    uint64_t execution_version;                                             ///< 本任务的执行版本，用于识别过期结果；新建或加载时置 1，不写入存档。
     domino_behavior_id_t behavior_id_list[DOMINO_TASK_BEHAVIOR_COUNT_MAX];  ///< 有序行为 ID，仅前 behavior_count 项有效；行为由全局池保存。
     domino_behavior_id_t current_behavior_id;                               ///< 当前处理步骤的非零行为 ID；成功结束后置 0，不再表示数组下标。
-    domino_task_id_t task_id;                                               ///< 用来查找本任务的编号；新建草案填 0，提交后获得非零 ID。
+    domino_task_id_t task_id;                                               ///< 用来查找本任务的非零编号；正式提交时分配。
     domino_human_id_t owner_human_id;                                       ///< 这项任务属于哪个人物，也就是由谁执行。
     domino_runtime_ms_t planned_begin_ms;                                   ///< 整项任务预计开始的时刻，不代表已经实际启动。
     domino_runtime_ms_t planned_end_ms;                                     ///< 整项任务预计结束的时刻；调整安排后可能重新估算。

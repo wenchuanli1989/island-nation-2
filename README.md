@@ -53,7 +53,13 @@ logger -> main queues -> common -> time -> host -> nav(before) -> social -> huma
 - 每次 `dominoEngineInit()` 使用静态初值或上一轮 Destroy 已恢复的空世界基线，再从当前 `storage_path` 加载；上一轮成功 Destroy 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
-`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 完成启动校验并建立执行／规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。就绪不表示全部人物已经登记 game_timer、完成规划或启动任务。普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结，已经开始的有限批次完整执行。主循环、human 执行器和规划器观察到冻结后按冻结代次进入 time 等待；正常无工作时仍使用队列版本等待。time Thaw 广播冻结等待者；Stop 保持时钟冻结并单独通知 time，原有队列及 GameTimer 通知保留。原本等待消息或计时的线程在普通冻结时保持等待。恢复直接续接留队消息和已有调度，不再全员扫描。日志与消息队列收发不受冻结影响，冻结成功本身不保证世界已经停止写入或可立即保存。time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
+客户端不得直接提交任务请求、规划请求或规划结果，也不通过客户端消息转发这些内容。任务由引擎内部自主决策、规划并提交；测试通过模块内部夹具、存档场景或自主调度验证，不为测试增加引擎对外任务提交接口。
+
+`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 创建执行／规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。Start 返回不表示全部人物已经登记 game_timer、完成规划或启动任务。
+
+普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结；观察到冻结后不开始新批次，未取出的消息留队。已通过入口检查的有限批次即使随后发生冻结，仍可完整出队、处理及投递消息。主循环、human 执行器和规划器按观察到的冻结代次进入 time 等待；正常无工作时仍使用队列版本等待。time Thaw 广播冻结等待者；Stop 保持时钟冻结并单独通知 time，原有队列及 GameTimer 通知保留。原本等待消息或计时的线程在普通冻结时保持等待。恢复直接续接留队消息和已有调度，不再全员扫描。队列自身不检查冻结，引擎内部当前批次的规划请求及结果仍可入队，消费线程观察到冻结后留待恢复处理；日志继续输出。冻结成功本身不保证世界已经停止写入或可立即保存。
+
+time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
 所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行／规划线程和 game_timer，再将正常人物结算到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 game_timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 game_timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
 
@@ -68,14 +74,14 @@ Destroy 返回前，common、host、social 等模块的容器指针、数量、�
 ### 数据与存档
 
 - 全局实体以 `kvec` 扁平数组保存，`khashl` 维护 `id -> array index` 映射。ID 的 `0` 值保留为无效值，全局自增计数器随存档持久化。
-- `DominoHuman` 固定为 64 字节，保存唯一 `human_id`、必需的 data 指针、状态、位置或运动对象引用、地域／空间，以及规划请求、计时登记和就绪去重等调度标识。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组同序，共用人物 ID 索引；需求、日程、随机状态及调度补充字段集中在 data 前部，身高体重、情绪、财富、组织关系、建筑与地址等相关属性分组保存。其他核心实体多为 128 字节。结构按自然对齐紧凑排列，`other_info` 补齐预留空间；这一布局尚无缓存性能实测结果。
+- `DominoHuman` 固定为 64 字节，保存唯一 `human_id`、必需的 data 指针、状态、位置或运动对象引用、地域／空间，以及当前规划请求 ID、唤醒计时器 ID 和唤醒截止点。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组同序，共用人物 ID 索引；需求、日程、随机状态及调度补充字段集中在 data 前部，身高体重、情绪、财富、组织关系、建筑与地址等相关属性分组保存。其他核心实体多为 128 字节。结构按自然对齐紧凑排列，`other_info` 补齐预留空间；这一布局尚无缓存性能实测结果。
 - storage 先把完整存档写入同父目录 staging 并刷盘，再按 `active -> .prev`、`staging -> active` 的顺序 rename；每次关键目录项变更后都会刷父目录，避免半成品覆盖正式存档。实体按注册表顺序写入 `regions.json` 或 `{type}_{shard_id}.json`，再写 `{type}.meta.json` 和根 `meta.json`。
 - 加载 `meta.json` 前会自动恢复未完成的存档事务：只有 `.prev` 时恢复旧存档，active 与 `.prev` 同时存在时保留已提交的 active 并清理旧备份。active、staging 或 `.prev` 为 symlink/普通文件时会拒绝加载或提交，递归清理也只删除 symlink 本身，不进入链接目标。
-- 存档事务按单写者设计，同一个 `storage_path` 不允许多个 Domino 进程并发加载或保存。详细状态转换见 [`engine/src/storage/readme.md`](engine/src/storage/readme.md#事务崩溃恢复)。
+- 存档事务按单写者设计，同一个 `storage_path` 不允许多个 Domino 进程并发加载或保存。事务提交与恢复实现见 [`engine/src/storage/transaction.c`](engine/src/storage/transaction.c)。
 - `nav` 运行期长期维护 canonical 基础段与追加式增量尾，增删不会触发全量排序；保存前才把逻辑删除的数据排到末尾，并按 `(region_index, road_network_type)` 压实 data segment。路径矩阵和 fork road 指针缓存只存在内存中，不参与序列化。
-- 人物日程与需求直接属于 `DominoHumanData`，没有独立 AI 状态／运行态数组或 ID 索引。`task_id_list[32]` 与 `uint8_t task_count` 保存全部持有任务，配合固定三个活动槽位（主通道、次通道 1、次通道 2）；三个通道都接受任意已定义任务类型，每个任务通过持久字段 `channel_index` 选择通道，后续规划与执行按主通道优先、两个次通道同级处理。全局任务池和行为池分别保存 `DominoTask` 与 `DominoBehavior`，各由 ID map 定位。任务用 `behavior_id_list` 保存步骤顺序，以 `current_behavior_id` 定位当前步骤，成功结束后置 0，另保存运行期 `execution_version`。保存时分别写任务事实和全局行为数组，加载时重建两个池的索引，并将每个任务自身的 64 位执行版本初始化为 1；新建任务同样从 1 开始，由执行线程在检查上限后直接递增本任务版本，不要求跨任务唯一。任务与行为 ID 分别由 `DominoGlobalIncrementID.task_increment_id/behavior_increment_id` 原子分配，保持 32 位，回绕时跳过 0 和各自池中仍占用的 ID。规划草案使用独立行为块，store 按值复制后仍由消息或调用方释放草案。人物任务数组按提交顺序追加，删除后稳定前移，计划时间或状态改变不重排；选择任务时按通道、计划时间和业务条件筛选，同时间以数组位置决定先后，不以 ID 大小排序。任务为独立的扁平记录，待启动、运行及未回收终态均保留在数组中；不支持任务暂停、恢复或父子层级。任务失败或取消立即将所属人物置为 `DOMINO_HUMAN_STATUS_EXCEPTION`，执行器跳过该人物，退出时也不再结算；正常成功不会改变人物正常状态。
-- 当前存档版本为 22，人物及嵌套 data 使用相同的非零 `human_id`。人物属性、任务 ID 数组、三个活动槽、需求结算时刻及随机状态保存在 `human.entities[].data`；六项需求 `energy/food/water/hygiene/recreation/social` 复用原字段，使用 `uint8_t` 保存 0～100 整数分；自然变化约定按完整未冻结现实分钟结算，未满分钟的时间留待下次，需求结算及单行为睡眠执行器已经接入。JSON `task_id_list` 仅保存有效前缀并保留原顺序，加载由长度恢复 `task_count`。必需的 `human_ai` 模块仅按人物保存 `{human_id, tasks}`，任务保存行为 ID 数组及当前行为 ID；独立 `human_behavior` 模块保存全局行为数组。保存任务时沿人物 ID 数组遍历，加载按 ID 导入可信任务与行为且保留人物数组原序。根 meta 的 `global_increment_id.task/behavior` 分别保存下一候选任务／行为 ID，允许为 0，不表示最后已分配 ID。所有人物调度运行态、任务执行版本、裸指针及预留字段均不写入存档，不兼容旧版本。已定义的任务／行为类型均可保存和加载；睡眠目标有效时长由行为的 `planned_end_ms - planned_begin_ms` 推导，执行期间保持计划区间长度不变，行为记录保存类型、状态、启动标志、计划／实际时间和有效进度；目标建筑、等待检查时刻及一次性效果提交标志按实际业务实现需要再增加。正常人物支持自主睡眠和加载后从保存进度继续执行，异常状态持久保存且不会自动恢复；详细实施边界见 [`human-ai.md`](human-ai.md#2-当前代码与实际改造入口)。
-- `playground/sandbox/domino` 已同步版本 22，人物及其 data 的 `human_id=1`，`data.energy=20` 表示 20 分精力，`data.wealth=100`，`task_id_list` 为空数组，三个活动槽全为 0 且任务为空。`data.current_building_id=1` 引用名称为“样例住宅”的建筑，其类型、产权及睡眠资格规则尚未定义；样例不证明该建筑已具备睡眠服务。`data.sleep_address` 保持为 0，它是导航路口 ID，不能填写建筑 ID。
+- 人物日程与需求直接属于 `DominoHumanData`，没有独立 AI 状态／运行态数组或 ID 索引。`task_id_list[32]` 与 `uint8_t task_count` 保存全部持有任务，配合固定三个活动槽位（主通道、次通道 1、次通道 2）；睡眠固定使用主通道，其他任务按业务规则选择通道，每个任务通过持久字段 `channel_index` 记录所属通道，后续规划与执行按主通道优先、两个次通道同级处理。全局任务池和行为池分别保存 `DominoTask` 与 `DominoBehavior`，各由 ID map 定位。任务用 `behavior_id_list` 保存步骤顺序，以 `current_behavior_id` 定位当前步骤，成功结束后置 0。保存时分别写任务事实和全局行为数组，加载时重建两个池的索引。任务与行为 ID 分别由 `DominoGlobalIncrementID.task_increment_id/behavior_increment_id` 原子分配，保持 32 位，回绕时跳过 0 和各自池中仍占用的 ID。规划草案只保存必要规划字段与独立行为块，不携带正式任务的 ID 数组或运行状态；store 构造正式任务并按值复制行为，草案仍由消息或调用方释放。当前不维护尚无消费者的日程版本或任务执行版本。人物任务数组按提交顺序追加，删除后稳定前移，计划时间或状态改变不重排；选择任务时按通道、计划时间和业务条件筛选，同时间以数组位置决定先后，不以 ID 大小排序。任务为独立的扁平记录，待启动、运行及未回收终态均保留在数组中；不支持任务暂停、恢复或父子层级。任务失败或取消立即将所属人物置为 `DOMINO_HUMAN_STATUS_EXCEPTION`，执行器跳过该人物，退出时也不再结算；正常成功不会改变人物正常状态。
+- 当前存档版本为 25，人物模型及存档已删除未使用的最后活跃与死亡秒时间字段，data 仍保持 4096 字节。人物及嵌套 data 使用相同的非零 `human_id`。人物属性、任务 ID 数组、三个活动槽、需求结算时刻及随机状态保存在 `human.entities[].data`；六项需求 `energy/food/water/hygiene/recreation/social` 复用原字段，使用 `uint8_t` 保存 0～100 整数分；自然变化约定按完整未冻结现实分钟结算，未满分钟的时间留待下次，需求结算及单行为睡眠执行器已经接入。JSON `task_id_list` 仅保存有效前缀并保留原顺序，加载由长度恢复 `task_count`。必需的 `human_task` 和 `human_behavior` 模块分别按 `domino_all_task_list`、`domino_all_behavior_list` 的数组顺序直接保存扁平 `entities`，每片最多 4096 个任务、100000 个行为，元数据分别统计任务数和行为数；空池仍写模块 meta，分片数为 0。任务保存 `owner_human_id`、行为 ID 数组及当前行为 ID。加载按分片和数组顺序导入可信记录并重建各自 ID 索引；人物清单保留自己的提交顺序，不从全局任务池顺序推导。根 meta 的 `global_increment_id.task/behavior` 分别保存下一候选任务／行为 ID，允许为 0，不表示最后已分配 ID。所有人物调度运行态、裸指针及预留字段均不写入存档，不兼容旧版本。已定义的任务／行为类型均可保存和加载；睡眠目标有效时长由行为的 `planned_end_ms - planned_begin_ms` 推导，执行期间保持计划区间长度不变，行为记录保存类型、状态、启动标志、计划／实际时间和有效进度；目标建筑、等待检查时刻及一次性效果提交标志按实际业务实现需要再增加。正常人物支持自主睡眠和加载后从保存进度继续执行，异常状态持久保存且不会自动恢复；详细实施边界见 [`human-ai.md`](human-ai.md#2-当前代码与实际改造入口)。
+- `playground/sandbox/domino` 已同步版本 25，人物及其 data 的 `human_id=1`，`data.energy=20` 表示 20 分精力，`data.wealth=100`，`task_id_list` 为空数组，三个活动槽全为 0 且任务为空。`data.current_building_id=1` 引用名称为“样例住宅”的建筑，其类型、产权及睡眠资格规则尚未定义；样例不证明该建筑已具备睡眠服务。`data.sleep_address` 保持为 0，它是导航路口 ID，不能填写建筑 ID。
 
 ### 第三方库维护策略
 
@@ -164,6 +170,18 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 ./scripts/build.sh playground-build playground/算法/路径规划/弗洛伊德/main.c debug
 ```
 
+**human 相关回归**：
+
+以下脚本均支持 `debug` 和 `release`，通过 `scripts/build.sh` 构建；涉及存档的测试使用独立临时目录：
+
+```bash
+bash playground/验证/人物执行器/run.sh debug
+bash playground/验证/冻结等待/run.sh debug
+bash playground/验证/读写锁/run.sh debug
+```
+
+人物执行器回归覆盖规划请求身份、三通道调度、过期结果、并发读取与自主规划、冻结后的内部结果留队、保存重载及任务／行为分片边界。详细覆盖和历史验证结果见 [`engine/validation-review.md`](engine/validation-review.md)。
+
 **其他构建模式**：
 
 ```bash
@@ -217,7 +235,7 @@ source /workspace/.local/domino/env.sh
 
 - 全新安装、重复安装、修复旧 sysroot 的 ABI 头文件断链均通过，系统 glibc 保持 2.41。
 - `debug`、`release`、`release-native`、`sanitize`、`tsan`、`profile` 六种配置全量构建通过，零警告、零错误；ELF 加载器和 RUNPATH 均指向独立 glibc。
-- Debug／Release／Release-native／Profile 的服务端、默认 Playground 及存档重载通过；`human_task_store` 回归通过。
+- Debug／Release／Release-native／Profile 的服务端、默认 Playground 及存档重载通过；当时的临时 `human_task_store` 回归通过，该入口现已移除。
 - LeakSanitizer 不能在 PRoot 的 ptrace 环境中运行；复制 Sanitizer 可执行文件，仅调整副本的加载器和 RUNPATH 到宿主可访问路径后，服务端及 Playground 的 ASan／UBSan／LeakSanitizer 检查通过。TSan 编译通过，但运行时内部崩溃；同一工具链的独立 `thrd_create`／`thrd_join` 最小程序也能复现，尚不能完成 TSan 运行检查。
 
 以上历史验证覆盖 Debian 13 用户态安装、编译和上述运行路径；当时未接入真实 Codex Cloud 托管实例，其平台网络、权限和内核行为未完成端到端验证。

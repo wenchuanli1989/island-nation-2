@@ -1,3 +1,4 @@
+#include "../human/state.h"
 #include "../human/store.h"
 #include "domino_shared_common.h"
 #include "io.h"

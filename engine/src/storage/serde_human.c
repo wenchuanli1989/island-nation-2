@@ -1,13 +1,13 @@
 #include <string.h>
 
 #include "../host/entry.h"
-#include "../human/entry.h"
+#include "../human/state.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "serde.h"
 #include "serde_registry.h"
 
-/** @brief 保存人物扩展数据与 AI 事实；任务内容由 human_ai 模块保存，调度运行字段不落盘。 */
+/** @brief 保存人物扩展数据、任务清单和活动槽；任务实体由 human_task 模块保存，调度运行字段不落盘。 */
 static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
     if (human_data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%u", human_data->human_id,
@@ -17,7 +17,6 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
 
     if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human_data->human_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "random_state", human_data->random_state) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "schedule_revision", human_data->schedule_revision) ||
         !yyjson_mut_obj_add_uint(doc, obj, "needs_updated_at_ms", human_data->needs_updated_at_ms)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
@@ -106,11 +105,6 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
-    if (!yyjson_mut_obj_add_uint(doc, obj, "death_time", human_data->death_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "last_active_time", human_data->last_active_time)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
-    }
-
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_country_id", human_data->last_active_country_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "last_active_city_id", human_data->last_active_city_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "last_active_building_id", human_data->last_active_building_id)) {
@@ -183,7 +177,6 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
 static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data) {
     out_human_data->human_id = (typeof(out_human_data->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
     out_human_data->random_state = (typeof(out_human_data->random_state))yyjson_get_uint(yyjson_obj_get(obj, "random_state"));
-    out_human_data->schedule_revision = (typeof(out_human_data->schedule_revision))yyjson_get_uint(yyjson_obj_get(obj, "schedule_revision"));
     out_human_data->needs_updated_at_ms = (typeof(out_human_data->needs_updated_at_ms))yyjson_get_uint(yyjson_obj_get(obj, "needs_updated_at_ms"));
     yyjson_val* task_ids = yyjson_obj_get(obj, "task_id_list");
     if (yyjson_arr_size(task_ids) > DOMINO_HUMAN_TASK_COUNT_MAX) {
@@ -259,9 +252,6 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     serdeReadU32Array(yyjson_obj_get(obj, "org_boss_id_list"), out_human_data->org_boss_id_list, DOMINO_MAX_ORG_BOSS_COUNT_PER_HUMAN);
     serdeReadU32Array(yyjson_obj_get(obj, "friend_id_list"), out_human_data->friend_id_list, DOMINO_MAX_FRIEND_COUNT_PER_HUMAN);
     serdeReadU32Array(yyjson_obj_get(obj, "colleague_id_list"), out_human_data->colleague_id_list, DOMINO_MAX_COLLEAGUE_COUNT_PER_HUMAN);
-
-    out_human_data->death_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "death_time"));
-    out_human_data->last_active_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_time"));
 
     out_human_data->last_active_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_country_id"));
     out_human_data->last_active_city_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_city_id"));

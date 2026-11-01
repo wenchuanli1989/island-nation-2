@@ -1,7 +1,7 @@
 #include "serde_registry.h"
 
 #include "../host/entry.h"
-#include "../human/entry.h"
+#include "../human/state.h"
 #include "../human/store.h"
 #include "../nav/storage_view.h"
 #include "../social/entry.h"
@@ -9,6 +9,10 @@
 
 static size_t countHuman(void) {
     return kv_size(domino_all_human_list);
+}
+
+static size_t countHumanTask(void) {
+    return kv_size(domino_all_task_list);
 }
 
 static size_t countHumanBehavior(void) {
@@ -130,13 +134,12 @@ const StorageModuleType g_storage_module_types[] = {
         .load_fn = serdeLoadHumanBehavior,
     },
     {
-        .type_name = "human_ai",
-        .max_per_shard = DOMINO_STORAGE_SHARD_HUMAN_AI,
-        .count_fn = countHuman,
+        .type_name = "human_task",
+        .max_per_shard = DOMINO_STORAGE_SHARD_HUMAN_TASK,
+        .count_fn = countHumanTask,
         .shard_count_fn = storageEntityShardCount,
-        .save_fn = serdeSaveHumanAI,
-        .load_fn = serdeLoadHumanAI,
-        .bind_references_fn = serdeBindHumanAIReferences,
+        .save_fn = serdeSaveHumanTask,
+        .load_fn = serdeLoadHumanTask,
     },
     {
         .type_name = "island",
