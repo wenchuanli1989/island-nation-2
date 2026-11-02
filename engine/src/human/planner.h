@@ -1,12 +1,12 @@
 #ifndef DOMINO_ENGINE_HUMAN_PLANNER_H
 #define DOMINO_ENGINE_HUMAN_PLANNER_H
 
+#include "../queue/message.h"
 #include "domino_shared_queue.h"
-#include "message.h"
 
 /** @brief 建立可扩容规划请求队列并绑定结果队列，不创建线程、不读取或修改世界。
  * @pre 引擎和 human 模块串行管理调用顺序；首次使用静态空状态，再次使用前须完成 Destroy。
- * @pre result_queue_ptr 为执行器已初始化的 DominoThreadMessage 收件队列，保持有效直到规划资源销毁。
+ * @pre result_queue_ptr 为执行器已初始化的 DominoHumanExecutionMessage 收件队列，保持有效直到规划资源销毁。
  * @note 不重复检查调用方已建立的队列和生命周期前置条件；资源初始化故障直接打印 stderr 并 exit。
  */
 void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr);

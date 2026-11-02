@@ -98,7 +98,7 @@ void serdeSaveHumanTask(const char* save_path) {
     }
 }
 
-/** @brief 按全局顺序导入可信任务并建立 ID 索引；人物任务清单由 human.data 恢复，不在此重建。 */
+/** @brief 按全局顺序直接调用 human store 导入可信任务并建立 ID 索引；人物任务清单由 human.data 恢复，不在此重建。 */
 void serdeLoadHumanTask(const char* save_path, uint32_t total_count, uint32_t shard_count) {
     storageValidateLoadCount(total_count, sizeof(DominoTask));
     for (uint32_t shard = 0U; shard < shard_count; shard++) {

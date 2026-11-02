@@ -61,13 +61,9 @@ DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoF
  */
 DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road);
 
-/** @brief 以下查找返回借用指针；缺失时返回 nullptr，数组扩容或排序后需重新按 ID 查找。
+/** @brief 按 ID 查找路线并返回借用指针；缺失时返回 nullptr，数组扩容或排序后需重新按 ID 查找。
  * @pre Nav 已初始化且无并发销毁，已登记实体 ID 不可改写；生命周期由引擎保证。
  */
-DominoForkRoad* dominoGetForkRoadByID(domino_fork_road_id_t fork_road_id);
-
-DominoRoad* dominoGetRoadByID(domino_road_id_t road_id);
-
 DominoRoadLine* dominoGetRoadLineByID(domino_road_line_id_t road_line_id);
 
 /** @brief 按地域和路网类型查找分段下标，未找到时返回 -1；调用方保证 segment_list 非空。 */

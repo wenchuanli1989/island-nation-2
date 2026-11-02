@@ -1,9 +1,9 @@
 #ifndef DOMINO_ENGINE_HUMAN_TASK_SLEEP_H
 #define DOMINO_ENGINE_HUMAN_TASK_SLEEP_H
 
+#include "../../queue/message.h"
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
-#include "draft.h"
 #include "entry.h"
 
 /** @file sleep.h

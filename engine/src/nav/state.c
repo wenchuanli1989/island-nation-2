@@ -191,16 +191,6 @@ DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road
     return CODE_OK;
 }
 
-DominoForkRoad* dominoGetForkRoadByID(domino_fork_road_id_t fork_road_id) {
-    DominoForkRoad* fork_road = nullptr;
-    return navStateFindForkRoadById(fork_road_id, &fork_road) == CODE_OK ? fork_road : nullptr;
-}
-
-DominoRoad* dominoGetRoadByID(domino_road_id_t road_id) {
-    DominoRoad* road = nullptr;
-    return navStateFindRoadById(road_id, &road) == CODE_OK ? road : nullptr;
-}
-
 DominoRoadLine* dominoGetRoadLineByID(domino_road_line_id_t road_line_id) {
     if (road_line_id == 0U) {
         return nullptr;

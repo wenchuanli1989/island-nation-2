@@ -79,9 +79,11 @@ shared（静态库）
 - 不保留旧生命周期名称或兼容别名；进程退出、业务执行和单项资源释放函数按自身语义命名。
 - shared logger／queue 保留独立公共契约；首次对象须使用静态初值、`={0}` 或 `calloc`，销毁复位后可直接再次初始化。
 - 启动线程顺序：logger → human 执行器 → planner → game_timer → 主循环；全部创建完成后进入 RUNNING，再解冻并唤醒业务线程。
-- 停止时依次 join 主循环、human 执行器、planner、game_timer，统一结算后排空并 join logger。仅 Init 的实例由引擎跳过 human／game_timer Stop 和全部 join，仍调用 logger Stop 关闭入队并刷新。两条路径均保留实例资源供 Destroy 使用。
+- 引擎 Init 在 storage 加载及引用绑定后调用 nav／human 的 InitAfter：导航恢复邻接，human 检查活动任务执行能力并重建首次唤醒，不推进业务或提交规划。Start 不再承担人物扫描和初始调度准备。
+- 停止时依次 join 主循环、human 执行器、planner、game_timer，再通过 `human/entry.h` 的 `dominoHumanModuleSettle()` 统一结算，最后排空并 join logger。结算保留在引擎 Stop 阶段，DestroyBefore／Destroy 不重复结算。仅 Init 的实例由引擎跳过 human／game_timer Stop、全部 join 和结算，仍调用 logger Stop 关闭入队并刷新。两条路径均保留实例资源供 Destroy 使用。
 - time 的接入位置：引擎在 storage 加载前调用 `dominoTimeModuleInit()`，在保存与世界资源清理完成后调用 `dominoTimeModuleDestroy()`。
 - Destroy 不调用 Stop 或 join；复位范围包括容器指针／数量／容量、索引、模块状态、线程句柄存储、引擎配置和路径。
+- Stop 结算包含异常人物遗留的活动通道及自然需求，单项失败不截断其他结算，不启动后续任务；Nav 的 DestroyBefore 只规整布局。内部计时登记和未提交规划不跨会话保存，由持久化人物／任务／行为事实恢复，验证覆盖留队及在途工作。
 
 ### 模拟流水线设计目标
 
@@ -98,9 +100,16 @@ shared（静态库）
 - 全局数据以扁平数组存储；哈希表（khashl）将实体 ID 映射到数组索引，实现 O(1) 检索
 - **客户端任务边界：** 客户端不得直接提交任务请求、规划请求或规划结果；任务决策、规划与提交由引擎内部完成。不得为了测试增加引擎对外任务提交方法或消息类型；验证使用模块内部夹具、存档场景或引擎自主调度。
 - human 运行期由执行器独占写入 Human／Data／Task／Behavior、容器及索引；引擎内部其他线程通过 `human/entry.h` 持读锁读取，修改按 ID 和值提交消息。读写锁通用实现位于 shared；加载、全部业务线程结束后的结算、保存和销毁串行直访，不加读写锁。冻结及 STOPPING 的末批仍遵守运行期访问约定。
+- 引擎入口的模块调用遵循[项目宪法第八章：模块调用规范](doc/项目宪法.md#八模块调用规范)：`engine/src/entry.c` 通过 `human/entry.h` 编排 human 的生命周期、通知和结算；模块间调用不强制经过 `entry.h`。存档层直接调用 `human/store.h` 导入任务和行为，通过 `human/state.h` 串行恢复人物容器及索引、遍历数据和绑定引用；导入仅用于可信加载，不构成客户端任务提交接口。
 - planner 可在同一次 human 读锁范围内直接查询人物及关联 Task／Behavior；规划请求队列只保存 `human_id`、`request_id` 等必要身份，不搬运人物数据。需要解锁后计算时仅复制必要局部值，不跨解锁保留借用指针；规划结果仍交执行器复核并写入。
 - 宿主世界设计为只能运行在单一物理机器上（支持离线运行）
 - 第三方库：**yyjson**（JSON 解析器，位于 `lib/yyjson/`）、**klib**（`khashl.h` 哈希表、`kvec.h` 动态数组，位于 `lib/klib/`）
+
+### 队列消息结构
+
+消息结构、命名及定义位置遵循[项目宪法第 3.6 节](doc/项目宪法.md#36-消息结构与定义位置)，队列 ID 与业务身份遵循第 3.3 节。
+
+当前计时命令队列直接使用 `DominoGameTimerRequestMessage`，规划请求队列直接使用 `DominoHumanPlanRequestMessage`，human 执行器混合收件箱使用 `DominoHumanExecutionMessage`，客户端收发队列复用 `DominoEngineMessage`。
 
 ### 时间语义
 

@@ -6,7 +6,7 @@
 #include <threads.h>
 
 #include "../entry.h"
-#include "../queue/thread_message.h"
+#include "../queue/message.h"
 #include "../time/entry.h"
 #include "domino_shared_common.h"
 #include "domino_shared_human.h"
@@ -35,7 +35,7 @@ enum {
  * 身份匹配时仍回传草案或无草案原因，不结算世界，不跨读锁范围保留借用指针。
  * 结果消费时执行器仍须重新验证当前日程和业务条件，读锁不使草案永久有效。
  */
-static void planAndSendResult(const DominoHumanPlanRequest* request_ptr) {
+static void planAndSendResult(const DominoHumanPlanRequestMessage* request_ptr) {
     dominoHumanReadLock();
     const DominoHuman* human_ptr = dominoGetHumanByID(request_ptr->human_id);
     if (!human_ptr || human_ptr->active_plan_request_id != request_ptr->request_id) {
@@ -49,7 +49,7 @@ static void planAndSendResult(const DominoHumanPlanRequest* request_ptr) {
     dominoTimeGetRuntimeMs(&now_ms);
     dominoHumanReadUnlock();
 
-    DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_AI_RESULT, .payload.plan = {.request = *request_ptr}};
+    DominoHumanExecutionMessage message = {.type = DOMINO_HUMAN_EXECUTION_MESSAGE_PLAN_RESULT, .payload.plan = {.request = *request_ptr}};
     DominoHumanPlanResult* result_ptr = &message.payload.plan;
     DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, energy, now_ms, &result_ptr->draft);
     switch (code) {
@@ -76,7 +76,7 @@ static void planAndSendResult(const DominoHumanPlanRequest* request_ptr) {
 
 static int humanPlannerThread(void* arg_ptr) {
     (void)arg_ptr;
-    DominoHumanPlanRequest requests[HUMAN_PLANNER_BATCH_COUNT];
+    DominoHumanPlanRequestMessage requests[HUMAN_PLANNER_BATCH_COUNT];
     for (;;) {
         uint64_t epoch;
         DOMINO_CODE code = dominoThreadQueueSnapshot(&g_planner.inbox, &epoch);
@@ -110,7 +110,8 @@ static int humanPlannerThread(void* arg_ptr) {
 }
 
 void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
-    dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoHumanPlanRequest), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+    dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoHumanPlanRequestMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
+                          DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     g_planner.result_queue_ptr = result_queue_ptr;
 }
 
@@ -124,7 +125,7 @@ void dominoHumanPlannerNotifyTimeChanged(void) {
 }
 
 uint64_t dominoHumanPlannerSubmit(domino_human_id_t human_id) {
-    DominoHumanPlanRequest request = {.human_id = human_id};
+    DominoHumanPlanRequestMessage request = {.human_id = human_id};
     const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &request, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32, human_id);
@@ -137,7 +138,7 @@ void dominoHumanPlannerStop(void) {
 }
 
 void dominoHumanPlannerDestroy(void) {
-    // 生产者和规划线程均已结束；留队请求只有身份值，可直接随队列释放。
+    // 线程已结束且业务事实已保存；未提交规划由下次 InitAfter 按人物需求重新触发，旧请求身份不跨会话。
     dominoThreadQueueDestroy(&g_planner.inbox);
     memset(&g_planner, 0, sizeof(g_planner));
 }

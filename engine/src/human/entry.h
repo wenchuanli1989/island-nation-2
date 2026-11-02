@@ -3,25 +3,56 @@
 
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
+#include "domino_shared_types.h"
+
+/** @file entry.h
+ * @brief human 的模块对外入口；引擎入口通过本头文件编排生命周期、通知及结算。
+ * @note 不属于客户端公开 API；模块间调用不强制经过本入口，仍须遵守所调用接口的访问契约。
+ * 存储层直接使用 store.h 导入任务与行为，通过 state.h 串行恢复人物容器、遍历数据并绑定引用。
+ */
 
 /** @brief 初始化人物容器、任务存储、执行／规划队列及控制资源，不创建线程。
  * @pre 引擎串行管理调用顺序；首次使用静态空状态，再次使用前须完成 Destroy。
  */
 extern void dominoHumanModuleInit(void);
 
+/** @brief 加载后确认活动任务执行能力，并从人物、任务及行为事实重建本会话的首次唤醒。
+ * @pre human、game_timer 已 Init，世界加载及引用绑定完成，业务时钟冻结，所有线程尚未创建。
+ * @note 串行直访，不取得读写锁；不结算、不启动任务、不提交规划、不记录业务日志。
+ * 旧队列及请求身份不恢复；正常人物按原任务截止点或当前待规划需求重新登记，异常人物不恢复运行期调度。
+ */
+extern void dominoHumanModuleInitAfter(void);
+
 /** @brief 在业务时钟冻结时依次创建执行和规划线程，不重新分配基础资源。
- * @pre 引擎已完成 Init，处于 STARTING；本次实例尚未启动。
+ * @pre 引擎已完成 Init 及 human InitAfter，处于 STARTING；本次实例尚未启动。
  */
 extern void dominoHumanModuleStart(void);
 
+/** @brief 时钟或退出状态发布后，通知 human 的执行和规划队列等待者重新检查状态。
+ * @pre human 已 Init，队列尚未 Destroy；调用方已先发布需要业务线程观察的时钟或退出状态。
+ * @note 引擎在 Start 解冻、Thaw 或 Stop 时调用，普通冻结不通知；time 的冻结等待者由 time 模块先行唤醒。
+ * 不改变时钟、不等待暂停回执、不消费消息、不关闭入队或重建调度。
+ */
+extern void dominoHumanModuleNotifyTimeChanged(void);
+
 /** @brief 依次 join 执行线程和规划线程，保留所有人物及运行资源。
  * @pre 线程已创建，引擎已进入 STOPPING 并唤醒业务线程；game_timer 和投递目标仍有效。
- * @note 仅 Init、未 Start 的实例由引擎跳过本接口；内部不重复校验生命周期。
+ * @note 本接口不结算人物；引擎结束全部业务线程后另行调用 dominoHumanModuleSettle。
+ * 仅 Init、未 Start 的实例由引擎跳过本接口；内部不重复校验生命周期。
  */
 extern void dominoHumanModuleStop(void);
 
+/** @brief 在引擎 Stop 阶段统一结算全部人物的活动任务和自然需求，包含异常人物遗留的活动通道。
+ * @param now_ms 引擎停钟时已校验的累计未冻结现实毫秒，所有人物共同结算到此时刻。
+ * @pre 引擎保证全部业务线程已结束，业务时钟保持冻结，世界资源有效且 logger 尚未 Stop。
+ * @note 引擎仅对运行过的实例调用一次；仅 Init 的实例跳过。串行直访人物数据，不再取得读写锁或重复校验生命周期。
+ * 单项任务失败仍完成其他通道及自然需求的结算，保留人物异常状态；不消费留队消息、不回收终态、不启动后续任务或登记计时器。
+ * Destroy 阶段不再结算。
+ */
+extern void dominoHumanModuleSettle(domino_runtime_ms_t now_ms);
+
 /** @brief 释放规划／执行资源、任务存储及人物容器，不停止或 join 线程。
- * @pre 引擎已完成 Stop 及保存；运行过的实例已 join 全部业务线程并在保存前完成统一结算。
+ * @pre 引擎已完成 Stop 及保存；运行过的实例已在 Stop 阶段通过 dominoHumanModuleSettle 完成统一结算。
  * @note 支持仅 Init 的资源释放；人物容器须保留到运行资源释放完成，顺序由引擎保证。
  */
 extern void dominoHumanModuleDestroy(void);

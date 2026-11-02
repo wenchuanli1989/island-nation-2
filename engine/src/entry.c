@@ -14,7 +14,6 @@
 #include "game_timer/entry.h"
 #include "host/entry.h"
 #include "human/entry.h"
-#include "human/executor.h"
 #include "logger/entry.h"
 #include "nav/entry.h"
 #include "social/entry.h"
@@ -77,9 +76,9 @@ void dominoEngineFreezeTime(void) {
     dominoTimeGetRuntimeMs(&now_ms);
 }
 
-/** @brief 恢复或退出状态先发布，再通知业务等待者；普通冻结不需要通知。 */
+/** @brief 恢复或退出状态先发布，再经模块入口通知业务等待者；普通冻结不需要通知。 */
 static void notifyBusinessThreads(void) {
-    dominoHumanExecutionNotifyTimeChanged();
+    dominoHumanModuleNotifyTimeChanged();
     dominoGameTimerNotifyTimeChanged();
 }
 
@@ -191,6 +190,7 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
     dominoGameTimerModuleInit();
     dominoStorageModuleInit();
     dominoNavModuleInitAfter();
+    dominoHumanModuleInitAfter();
     g_domino_client_thread = thrd_current();
     atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_INITIALIZED);
 }
@@ -272,7 +272,8 @@ void dominoEngineStop(void) {
         DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_domino_main_loop_thread, nullptr), ERR_THREAD_JOIN, "failed to join the main loop thread");
         dominoHumanModuleStop();
         dominoGameTimerModuleStop();
-        dominoHumanExecutionSettle(now_ms);
+        /* 全部业务线程已结束；通过 human 模块结算到停钟时刻，logger 仍可接收结算日志。 */
+        dominoHumanModuleSettle(now_ms);
     }
     /* 仅 Init 时不调用业务线程 Stop，不结算人物；logger 仍关闭入队并刷新输出。 */
     dominoLoggerModuleStop();

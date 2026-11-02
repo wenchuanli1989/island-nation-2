@@ -1,8 +1,8 @@
 #ifndef DOMINO_ENGINE_GAME_TIMER_H
 #define DOMINO_ENGINE_GAME_TIMER_H
 
+#include "../queue/message.h"
 #include "domino_shared_error_codes.h"
-#include "message.h"
 
 /**
  * @brief 初始化命令队列、空计时堆和同步资源，不创建线程；生命周期函数由所属控制线程串行调用。
@@ -12,6 +12,13 @@
  * @note 调用顺序由引擎保证，不维护模块生命周期状态；资源创建失败直接打印到 stderr 并 exit。
  */
 void dominoGameTimerModuleInit(void);
+
+/** @brief 启动前把已登记命令串行移入计时堆，不投递到期事件、不推进业务。
+ * @pre game_timer 已 Init，业务时钟冻结，线程尚未创建；调用方独占登记及准备流程。
+ * @note 加载方按有限批次登记后调用，避免未启动消费者时积满命令队列；请求仍按命令队列 → 计时堆迁移。
+ * 不维护额外生命周期状态；内存和同步失败按致命错误处理。
+ */
+void dominoGameTimerPrepareRequests(void);
 
 /**
  * @brief 使用 Init 已准备的资源创建计时线程。
@@ -48,7 +55,7 @@ void dominoGameTimerNotifyTimeChanged(void);
 /**
  * @brief 按精确的累计未冻结现实毫秒截止点异步登记；入队后通知计时线程，不等待请求处理完成。
  * @pre 引擎已准备 game_timer 和目标事件队列，并保证调用期间资源有效；不重复校验初始化状态。
- * @param event_queue_ptr 业务方拥有、已初始化且存储 DominoThreadMessage 的队列。
+ * @param event_queue_ptr 业务方拥有、已初始化且存储 DominoHumanExecutionMessage 的队列。
  * @param due_ms 32 位绝对截止点，0 与 UINT32_MAX 均合法；已到期时保留原值并尽快异步投递。
  * @param event_type 业务方定义的事件类型，game_timer 原样传递。
  * @param data_id 业务方定义的 64 位标识，game_timer 原样按值传递，不解释含义或持有业务对象。
@@ -57,7 +64,7 @@ void dominoGameTimerNotifyTimeChanged(void);
  *         队列元素大小不匹配返回 ERR_INVALID_PARAM。参数错误不提交命令、不消耗 ID，非空输出保持为 0。
  * @note 在局部构造未取消记录，命令队列生成首字段 game_timer_id 并按值复制；截止点不通过相对延迟重新计算。
  *       仍采样并校验当前业务时刻，采样失败或超出 32 位毫秒范围直接打印到 stderr 并 exit。
- * @note 到期消息 type 为 DOMINO_THREAD_MESSAGE_GAME_TIMER，payload.game_timer 按值保存 DominoGameTimer，无需分配或释放载荷。
+ * @note 到期消息 type 为 DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER，payload.game_timer 按值保存 DominoGameTimerRequestMessage，无需分配或释放载荷。
  *       消费方检查类型后读取 payload.game_timer 并跳过取消项；消息 id 与 game_timer_id 独立。
  * @note 事件队列可混合 game_timer、AI、命令等类型；计时线程停止及业务消费结束前不得销毁、搬移或重建。
  * @note 入队成功后取得 request_mutex 发出唤醒信号，可能等待命令批次、堆操作或取消扫描；无需等待入堆即可按 ID 取消。
@@ -73,7 +80,7 @@ DOMINO_CODE dominoGameTimerScheduleAt(DominoThreadQueue* event_queue_ptr, domino
 /**
  * @brief 按登记 ID 查找命令和堆项，再到指定业务队列查找到期事件并设置取消标志，不删除命令或事件。
  * @pre 引擎已准备 game_timer 和目标事件队列，并保证调用期间资源有效；不重复校验初始化状态。
- * @param event_queue_ptr 用于查找已投递事件的业务队列，应传登记请求中填写的队列，必须已初始化且存储 DominoThreadMessage。
+ * @param event_queue_ptr 用于查找已投递事件的业务队列，应传登记请求中填写的队列，必须已初始化且存储 DominoHumanExecutionMessage。
  * @note 登记 ID 在本次 Init 生命周期内唯一，命令和堆项只按 ID 匹配；传入的业务队列仅限定已投递事件的查找范围。
  * @return 找到请求并设置取消标志返回 CODE_OK，已取消但仍可找到的请求也返回 CODE_OK；
  *         ID 为 0 或队列元素大小不匹配返回 ERR_INVALID_PARAM；队列指针为空返回 ERR_NULL_POINTER；

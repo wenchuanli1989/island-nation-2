@@ -1,7 +1,8 @@
 #include <time.h>
 
-#include "../queue/thread_message.h"
+#include "../queue/message.h"
 #include "../time/entry.h"
+#include "entry.h"
 #include "internal.h"
 
 #define DOMINO_GAME_TIMER_BATCH_SIZE 64U
@@ -14,7 +15,7 @@
 static uint32_t processCommandBatchLocked(void) {
     uint32_t command_count = 0U;
     while (command_count < DOMINO_GAME_TIMER_BATCH_SIZE) {
-        DominoGameTimer game_timer;
+        DominoGameTimerRequestMessage game_timer;
         DOMINO_CODE code = dominoThreadQueueConsume(&g_domino_game_timer.command_queue, &game_timer, false);
         if (code == ERR_QUEUE_EMPTY) {
             break;
@@ -31,6 +32,13 @@ static uint32_t processCommandBatchLocked(void) {
     return command_count;
 }
 
+void dominoGameTimerPrepareRequests(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_lock(&g_domino_game_timer.request_mutex), ERR_MUTEX_LOCK, "mtx_lock");
+    while (processCommandBatchLocked() != 0U) {
+    }
+    DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&g_domino_game_timer.request_mutex), ERR_MUTEX_UNLOCK, "mtx_unlock");
+}
+
 /**
  * @brief 每批最多 64 次回收或非阻塞投递；投递失败直接报告并终止进程。
  * @return 是否耗尽本批预算，不代表确认仍有可处理的堆项。
@@ -41,7 +49,7 @@ static bool processHeapBatch(void) {
     dominoTimeGetRuntimeMs(&now_ms);
     uint32_t work_count = 0U;
     while (work_count < DOMINO_GAME_TIMER_BATCH_SIZE) {
-        const DominoGameTimer* game_timer_ptr = dominoGameTimerHeapPeek(&g_domino_game_timer.heap);
+        const DominoGameTimerRequestMessage* game_timer_ptr = dominoGameTimerHeapPeek(&g_domino_game_timer.heap);
         if (game_timer_ptr == nullptr) {
             break;
         }
@@ -56,9 +64,9 @@ static bool processHeapBatch(void) {
         }
         // 取消检查、堆顶移除和事件入队共用请求锁，Cancel 无法在迁移中插入。
         // 收件队列按值复制整条消息，计时载荷直接内嵌，不依赖堆项或当前线程的栈。
-        DominoGameTimer game_timer = *game_timer_ptr;
+        DominoGameTimerRequestMessage game_timer = *game_timer_ptr;
         dominoGameTimerHeapPop(&g_domino_game_timer.heap);
-        DominoThreadMessage message = {.type = DOMINO_THREAD_MESSAGE_GAME_TIMER, .payload.game_timer = game_timer};
+        DominoHumanExecutionMessage message = {.type = DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER, .payload.game_timer = game_timer};
         const DOMINO_CODE code = dominoThreadQueueProduce(game_timer.event_queue_ptr, &message, false);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "投递计时器到期事件失败");
@@ -95,7 +103,7 @@ static void waitForWorkLocked(void) {
     if (dominoTimeModuleIsFrozen()) {
         return;
     }
-    const DominoGameTimer* game_timer_ptr = dominoGameTimerHeapPeek(&g_domino_game_timer.heap);
+    const DominoGameTimerRequestMessage* game_timer_ptr = dominoGameTimerHeapPeek(&g_domino_game_timer.heap);
     if (game_timer_ptr != nullptr) {
         if (game_timer_ptr->cancelled_flag) {
             return;

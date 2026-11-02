@@ -76,6 +76,7 @@ void serdeSaveHumanBehavior(const char* save_path) {
     }
 }
 
+/** @brief 直接调用 human store 导入可信行为，保留全局顺序、身份和执行进度。 */
 void serdeLoadHumanBehavior(const char* save_path, uint32_t total_count, uint32_t shard_count) {
     storageValidateLoadCount(total_count, sizeof(DominoBehavior));
     for (uint32_t shard = 0U; shard < shard_count; shard++) {

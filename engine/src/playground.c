@@ -6,6 +6,8 @@
 #include "nav/state.h"
 
 int dominoEnginePlayground(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
     dominoNavModuleInit();
     dominoNavModuleInitAfter();
     DOMINO_CODE result = CODE_OK;
@@ -108,7 +110,12 @@ int dominoEnginePlayground(int argc, char* argv[]) {
         goto cleanup;
     }
     for (int i = 0; i < road_line.fork_road_count; i++) {
-        DominoForkRoad* fork_road = dominoGetForkRoadByID(road_line.fork_road_id_list[i]);
+        DominoForkRoad* fork_road;
+        result = navStateFindForkRoadById(road_line.fork_road_id_list[i], &fork_road);
+        if (result != CODE_OK) {
+            DOMINO_PRINT_MESSAGE("find navigation fork road failed: %s (code=%d)", dominoErrorCodeToString(result), (int)result);
+            goto cleanup;
+        }
         DOMINO_PRINT_MESSAGE("fork_road_num: %s", fork_road->num);
     }
 

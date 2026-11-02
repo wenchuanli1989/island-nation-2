@@ -12,6 +12,7 @@
  * get_times 分别返回下一个效果结算边界和需要通知执行器的时刻；前者必须晚于本任务已结算时刻。
  * behavior_ptr 由执行器按 current_behavior_id 查询，只在本次 get_times 调用内借用，不保存到后续推进。
  * 结算边界只用于一次处理内合并各任务的效果，不为每个边界创建计时器；0 和 UINT32_MAX 均为合法时刻。
+ * supports 和 get_times 也用于加载后的冻结准备，只读取业务事实，不推进任务或记录业务日志。
  * 回调不得重入执行器、阻塞等待或增删任务／行为池；池内记录在本次处理期间保持有效。
  */
 typedef struct DominoTaskOps {

@@ -3,9 +3,13 @@
 
 #include <stdint.h>
 
+#include "../queue/message.h"
 #include "domino_shared_error_codes.h"
 #include "domino_shared_human.h"
-#include "task/draft.h"
+
+/** @file store.h
+ * @brief human 内部任务／行为池实现；存储层可按本接口契约直接导入，复用可信加载的前置条件。
+ */
 
 /** @brief 创建任务及行为存储；生命周期顺序由 human 模块保证。
  * @pre 首次使用静态空状态，再次使用前须完成 Destroy。

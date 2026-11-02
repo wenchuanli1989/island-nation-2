@@ -2,14 +2,14 @@
 
 #include <string.h>
 
-#include "../queue/thread_message.h"
+#include "../queue/message.h"
 #include "../time/entry.h"
 #include "internal.h"
 
 DominoGameTimerModule g_domino_game_timer;
 
 void dominoGameTimerModuleInit(void) {
-    dominoThreadQueueInit(&g_domino_game_timer.command_queue, sizeof(DominoGameTimer), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
+    dominoThreadQueueInit(&g_domino_game_timer.command_queue, sizeof(DominoGameTimerRequestMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
                           DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     DOMINO_REQUIRE_THREAD_SUCCESS(mtx_init(&g_domino_game_timer.request_mutex, mtx_plain), ERR_MUTEX_INIT, "mtx_init");
     DOMINO_REQUIRE_THREAD_SUCCESS(cnd_init(&g_domino_game_timer.wake_condition), ERR_CONDITION_INIT, "cnd_init");
@@ -24,6 +24,7 @@ void dominoGameTimerModuleStop(void) {
 }
 
 void dominoGameTimerModuleDestroy(void) {
+    /* 仅丢弃运行态登记；已运行实例在 Stop 完成结算，仅 Init 的实例保留加载事实，下次 InitAfter 均据此重建截止点和投递目标。 */
     dominoThreadQueueDestroy(&g_domino_game_timer.command_queue);
     dominoGameTimerHeapDestroy(&g_domino_game_timer.heap);
     cnd_destroy(&g_domino_game_timer.wake_condition);
@@ -44,13 +45,13 @@ __attribute__((hot)) DOMINO_CODE dominoGameTimerScheduleAt(DominoThreadQueue* ev
     if (event_queue_ptr == nullptr) {
         return ERR_NULL_POINTER;
     }
-    if (event_queue_ptr->item_size != sizeof(DominoThreadMessage)) {
+    if (event_queue_ptr->item_size != sizeof(DominoHumanExecutionMessage)) {
         return ERR_INVALID_PARAM;
     }
     // 即使截止点已由业务确定，仍检查当前累计业务时间，不能在越界时继续登记。
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
-    DominoGameTimer game_timer = {
+    DominoGameTimerRequestMessage game_timer = {
         .event_queue_ptr = event_queue_ptr,
         .data_id = data_id,
         .due_ms = due_ms,

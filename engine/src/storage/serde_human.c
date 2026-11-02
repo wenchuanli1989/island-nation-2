@@ -368,20 +368,20 @@ static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHuma
     deserializeHumanData(data, out_human_data);
 }
 
-/** @brief 哈希插入成功后按需追加同索引 Human/Data；失败直接终止。 */
+/** @brief 串行追加同索引 Human/Data 并建立人物 ID 索引；加载总量已校验，全部加载后再绑定引用。 */
 static void loadOneHuman(yyjson_val* entity_value) {
     DominoHuman human = {0};
     DominoHumanData data = {0};
     deserializeHuman(entity_value, &human, &data);
-    int absent;
-    khint_t map_slot = dominoHumanIdMap_put(dominoHumanIdMap, human.human_id, &absent);
-    if (absent < 0) {
+    int absent_flag;
+    const khint_t map_index = dominoHumanIdMap_put(dominoHumanIdMap, human.human_id, &absent_flag);
+    if (absent_flag < 0) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human ID map entry: human_id=%u", human.human_id);
     }
-    size_t index = kv_size(domino_all_human_list);
+    const size_t index = kv_size(domino_all_human_list);
     kv_push(DominoHuman, domino_all_human_list, human);
     kv_push(DominoHumanData, domino_all_human_data_list, data);
-    kh_val(dominoHumanIdMap, map_slot) = (uint32_t)index;
+    kh_val(dominoHumanIdMap, map_index) = (uint32_t)index;
 }
 
 void serdeSaveHuman(const char* save_path) {

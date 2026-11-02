@@ -2,7 +2,6 @@
 
 #include "../host/entry.h"
 #include "../human/state.h"
-#include "../human/store.h"
 #include "../nav/storage_view.h"
 #include "../social/entry.h"
 #include "serde.h"

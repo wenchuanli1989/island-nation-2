@@ -58,13 +58,25 @@ void dominoHumanModuleInit(void) {
     dominoHumanExecutionInit();
 }
 
+void dominoHumanModuleInitAfter(void) {
+    dominoHumanExecutionInitAfter();
+}
+
 void dominoHumanModuleStart(void) {
-    /* time 仍冻结；引擎在全部线程创建后解冻，无需没有准备工作的启动握手。 */
+    /* InitAfter 已恢复调度；引擎在全部线程创建后解冻，无需额外的启动握手。 */
     dominoHumanExecutionStart();
+}
+
+void dominoHumanModuleNotifyTimeChanged(void) {
+    dominoHumanExecutionNotifyTimeChanged();
 }
 
 void dominoHumanModuleStop(void) {
     dominoHumanExecutionStop();
+}
+
+void dominoHumanModuleSettle(domino_runtime_ms_t now_ms) {
+    dominoHumanExecutionSettle(now_ms);
 }
 
 void dominoHumanModuleDestroy(void) {
