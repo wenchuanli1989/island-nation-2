@@ -1,555 +1,452 @@
 #include "executor.h"
 
-#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 
 #include "../entry.h"
 #include "../game_timer/entry.h"
-#include "../logger/entry.h"
-#include "../queue/message.h"
 #include "../time/entry.h"
-#include "domino_shared_common.h"
-#include "domino_shared_queue.h"
-#include "entry.h"
-#include "needs.h"
+#include "advance.h"
+#include "behavior/entry.h"
+#include "candidate.h"
+#include "data.h"
+#include "motivation/entry.h"
 #include "planner.h"
 #include "rules.h"
+#include "runtime.h"
 #include "state.h"
 #include "store.h"
 #include "task/entry.h"
 
-/** @file executor.c
- * @brief human 世界的唯一运行期写入者；内部规划结果和到期通知从 inbox 进入。
- * @note 每人最多一个有效规划请求，直接入队，等待规划结果消息推进。
- * 任务失败时同步设置人物异常，可信加载保留该状态；不反复扫描任务推导人物状态。
- * 计时器只用于任务开始、任务结束或精力阈值；等待规划结果由消息驱动。
- */
-
 typedef struct HumanExecution {
+    DominoExecutionMetrics metrics;
     DominoThreadQueue inbox;
     thrd_t thread;
+    struct DominoHumanRuntime* runtimes;
+    domino_human_id_t pending[DOMINO_HUMAN_WORLD_COUNT_MAX];
+    uint32_t pending_head, pending_count;
+    uint64_t batch_id;
 } HumanExecution;
-
-/** @brief 本次选择同时带回任务、执行接口和开始时刻；不跨任务池增删保留。 */
-typedef struct TaskSelection {
-    DominoTask* task_ptr;
-    const DominoTaskOps* ops_ptr;
-    domino_runtime_ms_t begin_ms;
-} TaskSelection;
-
 static HumanExecution g_execution;
-enum {
-    HUMAN_EXECUTION_BATCH_COUNT = 64U,
-    HUMAN_WAKEUP_EVENT_TYPE = 1U,
-};
-
-/** @brief 执行线程先撤销当前唤醒身份，再标记取消；已出队的旧通知由消费端忽略。 */
-static void cancelWakeup(DominoHuman* human_ptr) {
-    const domino_game_timer_id_t game_timer_id = human_ptr->wakeup_game_timer_id;
-    if (game_timer_id == 0U) {
+enum { RESULT_QUOTA = 8, BUSINESS_QUOTA = 16, LOCAL_QUOTA = 16 };
+static_assert(RESULT_QUOTA * 6 + BUSINESS_QUOTA == 64, "all seven queues have a positive bounded quota");
+DominoExecutionMetrics dominoHumanExecutionMetrics(void) {
+    return g_execution.metrics;
+}
+static void requireCode(DOMINO_CODE code) {
+    if (code != CODE_OK)
+        DOMINO_EXIT_WITH_ERROR(code, "human execution queue operation failed");
+}
+static void markPending(DominoHuman* human) {
+    if (human->runtime->pending)
+        return;
+    if (g_execution.pending_count == DOMINO_HUMAN_WORLD_COUNT_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "human pending capacity");
+    uint32_t index = (g_execution.pending_head + g_execution.pending_count) % DOMINO_HUMAN_WORLD_COUNT_MAX;
+    g_execution.pending[index] = human->human_id;
+    ++g_execution.pending_count;
+    human->runtime->pending = true;
+}
+static void cancelWakeup(DominoHuman* human) {
+    uint64_t id = human->wakeup_game_timer_id;
+    human->wakeup_game_timer_id = 0;
+    human->wakeup_due_ms = 0;
+    if (!id)
+        return;
+    DOMINO_CODE code = dominoGameTimerCancel(id, &g_execution.inbox);
+    if (code != CODE_OK && code != ERR_NOT_FOUND)
+        requireCode(code);
+}
+static void scheduleWakeup(DominoHuman* human, DominoHumanCheckTime time) {
+    if (!time.valid) {
+        cancelWakeup(human);
         return;
     }
-    human_ptr->wakeup_game_timer_id = 0U;
-    human_ptr->wakeup_due_ms = 0U;
-    const DOMINO_CODE code = dominoGameTimerCancel(game_timer_id, &g_execution.inbox);
-    if (code != CODE_OK && code != ERR_NOT_FOUND) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot cancel human=%" PRIu32 " wakeup game_timer=%" PRIu64, human_ptr->human_id, game_timer_id);
-    }
+    if (human->wakeup_game_timer_id && human->wakeup_due_ms <= time.at_ms)
+        return;
+    cancelWakeup(human);
+    requireCode(dominoGameTimerScheduleAt(&g_execution.inbox, time.at_ms, 1, human->human_id, &human->wakeup_game_timer_id));
+    human->wakeup_due_ms = time.at_ms;
 }
-
-/** @brief 为人物登记唯一绝对截止点；同一有效截止点复用原登记，0 毫秒同样合法。
- * @return 是否建立了新登记；业务调用方据此记录日志，加载准备不记录业务日志。
- */
-static bool scheduleWakeup(DominoHuman* human_ptr, domino_runtime_ms_t due_ms) {
-    if (human_ptr->wakeup_game_timer_id != 0U && human_ptr->wakeup_due_ms == due_ms) {
+static bool scopeNeeded(const DominoHuman* human, DominoPlannerKind kind, DominoPlanScope scope, uint32_t now) {
+    uint32_t id = scope.object_id;
+    const DominoHumanData* data = human->data;
+    if (kind == DOMINO_PLANNER_MOTIVATION) {
+        if (!id)
+            return !data->motivation_count;
+        const DominoMotivation* motivation = dominoGetMotivationByID(id);
+        return motivation && motivation->owner_human_id == human->human_id && dominoMotivationNeedsReassessment(motivation, data);
+    }
+    if (kind == DOMINO_PLANNER_TASK && scope.accepted_task) {
+        const DominoTask* task = dominoGetTaskByID(id);
+        return task && task->owner_human_id == human->human_id && dominoTaskQuery(task, data, now).needs_arrangement;
+    }
+    if (kind == DOMINO_PLANNER_TASK) {
+        const DominoMotivation* motivation = dominoGetMotivationByID(id);
+        return motivation && motivation->owner_human_id == human->human_id && dominoMotivationNeedsTask(motivation, data);
+    }
+    const DominoTask* task = dominoGetTaskByID(id);
+    return task && task->owner_human_id == human->human_id && dominoTaskQuery(task, data, now).needs_behavior;
+}
+static DominoHumanCheckTime* retryFor(DominoHuman* human, DominoPlannerKind kind, DominoPlanScope scope) {
+    uint32_t id = scope.object_id;
+    if (kind == DOMINO_PLANNER_MOTIVATION)
+        return &human->data->motivation_retry;
+    if (kind == DOMINO_PLANNER_TASK && !scope.accepted_task) {
+        DominoMotivation* motivation = dominoGetMotivationByID(id);
+        return motivation ? &motivation->retry : nullptr;
+    }
+    DominoTask* task = dominoGetTaskByID(id);
+    return task ? &task->retry : nullptr;
+}
+static void retryScope(DominoHuman* human, DominoPlannerKind kind, DominoPlanScope scope, uint32_t now) {
+    DominoHumanCheckTime* retry = retryFor(human, kind, scope);
+    if (retry)
+        *retry = (DominoHumanCheckTime){dominoHumanTimeAdd(now, 3000), true};
+}
+static bool eligible(DominoHuman* human, DominoPlannerKind kind, DominoPlanScope scope, uint32_t now) {
+    if (!scopeNeeded(human, kind, scope, now))
         return false;
-    }
-    cancelWakeup(human_ptr);
-    const DOMINO_CODE code =
-        dominoGameTimerScheduleAt(&g_execution.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &human_ptr->wakeup_game_timer_id);
-    if (code != CODE_OK) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot schedule human=%" PRIu32 " wakeup due_ms=%" PRIu32, human_ptr->human_id, due_ms);
-    }
-    human_ptr->wakeup_due_ms = due_ms;
-    return true;
-}
-
-/** @brief 按 data_id 定位人物，仅消费当前 game_timer_id；旧通知不能清除后来登记的唤醒。
- * @pre 消息来自私有 inbox，计时器原样回传本模块登记的人物 ID 和事件类型。
- */
-static DominoHuman* consumeWakeup(const DominoGameTimerRequestMessage* game_timer_ptr) {
-    DominoHuman* human_ptr = dominoGetHumanByID((domino_human_id_t)game_timer_ptr->data_id);
-    if (!human_ptr || human_ptr->wakeup_game_timer_id != game_timer_ptr->game_timer_id) {
-        return nullptr;
-    }
-    human_ptr->wakeup_game_timer_id = 0U;
-    human_ptr->wakeup_due_ms = 0U;
-    return game_timer_ptr->cancelled_flag ? nullptr : human_ptr;
-}
-
-/** @brief 仅记录请求的状态变化；DEBUG 关闭时不构造逐人历史或轮询日志。 */
-static void logPlanEvent(domino_human_id_t human_id, uint64_t request_id, const char* outcome_ptr, const char* reason_ptr, DOMINO_CODE code) {
-    DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG,
-                      "plan human=%" PRIu32 " request=%" PRIu64 " outcome=%s reason=%s code=%d", human_id, request_id, outcome_ptr, reason_ptr,
-                      (int)code);
-}
-
-/** @brief 异常人物停止调度；已发请求的结果失效，草案仍由结果消费者释放。 */
-static void discardHumanScheduling(DominoHuman* human_ptr) {
-    cancelWakeup(human_ptr);
-    human_ptr->active_plan_request_id = 0U;
-}
-
-/** @brief 已提交任务的业务失败立即终结任务并隔离人物；资源及协议故障仍由各入口致命退出。 */
-static void failTask(DominoHuman* human_ptr, DominoTask* task_ptr, domino_runtime_ms_t now_ms, DOMINO_CODE failure_code) {
-    if (failure_code != ERR_GAME_STATE_INVALID && failure_code != ERR_OUT_OF_RANGE) {
-        DOMINO_EXIT_WITH_ERROR(failure_code, "invalid execution state for task=%" PRIu32 " human=%" PRIu32, task_ptr->task_id, human_ptr->human_id);
-    }
-    task_ptr->status = DOMINO_TASK_STATUS_FAILED;
-    task_ptr->ended_at_ms = now_ms;
-    DominoBehavior* behavior_ptr = dominoGetBehaviorByID(task_ptr->current_behavior_id);
-    behavior_ptr->status = DOMINO_BEHAVIOR_STATUS_FAILED;
-    behavior_ptr->ended_at_ms = now_ms;
-    // 启动失败时该槽原本为空，推进失败时该槽只属于当前任务。
-    human_ptr->data->active_task_id_list[task_ptr->channel_index] = 0U;
-    human_ptr->status = DOMINO_HUMAN_STATUS_EXCEPTION;
-    DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_ERROR,
-                      "task failed human=%" PRIu32 " task=%" PRIu32 " code=%d; human entered exception state", human_ptr->human_id, task_ptr->task_id,
-                      (int)failure_code);
-}
-
-/** @brief 睡眠固定主通道，主通道须无未终结任务；次通道任务不阻止提交。 */
-static bool canPlanSleep(const DominoHuman* human_ptr) {
-    const DominoHumanData* data_ptr = human_ptr->data;
-    if (data_ptr->task_count >= DOMINO_HUMAN_TASK_COUNT_MAX) {
-        return false;
-    }
-    for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        const DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
-        if (task_ptr->status < DOMINO_TASK_STATUS_SUCCEEDED && task_ptr->channel_index == DOMINO_HUMAN_TASK_CHANNEL_PRIMARY) {
+    DominoHumanCheckTime* retry = retryFor(human, kind, scope);
+    if (retry && retry->valid) {
+        if (now < retry->at_ms)
             return false;
-        }
+        retry->valid = false;
     }
     return true;
 }
-
-/** @brief 取得已实现且支持当前任务形态的执行接口；未接入的任务仍可留在 store。 */
-static const DominoTaskOps* getTaskOps(const DominoTask* task_ptr) {
-    const DominoTaskOps* ops_ptr = dominoHumanGetTaskOps(task_ptr->type);
-    return ops_ptr && ops_ptr->supports(task_ptr) ? ops_ptr : nullptr;
+static void offerOpportunity(DominoHuman* human, DominoPlannerKind kind, DominoPlanScope scope, uint32_t now) {
+    struct DominoHumanRuntime* runtime = human->runtime;
+    if (!eligible(human, kind, scope, now))
+        return;
+    if (runtime->requests[kind].request_id && runtime->requests[kind].trigger_scope.object_id == scope.object_id &&
+        runtime->requests[kind].trigger_scope.accepted_task == scope.accepted_task)
+        return;
+    for (uint8_t i = 0; i < runtime->opportunity_count[kind]; ++i)
+        if (runtime->opportunities[kind][i].object_id == scope.object_id && runtime->opportunities[kind][i].accepted_task == scope.accepted_task)
+            return;
+    if (runtime->opportunity_count[kind] == DOMINO_PLAN_OPPORTUNITY_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "planning opportunity capacity");
+    runtime->opportunities[kind][runtime->opportunity_count[kind]++] = scope;
 }
-
-/** @brief 同一人物已有活动任务使用此类型时，其他通道不能再启动同类型任务。 */
-static bool isTaskTypeRunning(const DominoHumanData* data_ptr, DOMINO_TASK_TYPE type) {
-    for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-        const domino_task_id_t active_id = data_ptr->active_task_id_list[channel];
-        if (active_id != 0U && dominoGetTaskByID(active_id)->type == type) {
-            return true;
+static void refreshOpportunities(DominoHuman* human, uint32_t now) {
+    struct DominoHumanRuntime* runtime = human->runtime;
+    if (human->data->motivation_retry.valid && human->data->motivation_retry.at_ms <= now)
+        human->data->motivation_retry.valid = false;
+    for (uint8_t i = 0; i < human->data->motivation_count; ++i) {
+        DominoMotivation* motivation = dominoGetMotivationByID(human->data->motivation_ids[i]);
+        if (motivation->retry.valid && motivation->retry.at_ms <= now)
+            motivation->retry.valid = false;
+    }
+    for (uint8_t i = 0; i < human->data->task_count; ++i) {
+        DominoTask* task = dominoGetTaskByID(human->data->task_id_list[i]);
+        if (task->retry.valid && task->retry.at_ms <= now)
+            task->retry.valid = false;
+    }
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k) {
+        DominoPlanRequestState* request = &runtime->requests[k];
+        if (request->request_id && (now >= request->deadline_ms || !scopeNeeded(human, (DominoPlannerKind)k, request->trigger_scope, now))) {
+            if (now >= request->deadline_ms)
+                retryScope(human, (DominoPlannerKind)k, request->trigger_scope, now);
+            request->request_id = 0;
+        }
+        uint8_t retained = 0;
+        for (uint8_t i = 0; i < runtime->opportunity_count[k]; ++i) {
+            DominoPlanScope scope = runtime->opportunities[k][i];
+            if (eligible(human, (DominoPlannerKind)k, scope, now))
+                runtime->opportunities[k][retained++] = scope;
+        }
+        runtime->opportunity_count[k] = retained;
+    }
+    if (!human->data->motivation_count)
+        offerOpportunity(human, DOMINO_PLANNER_MOTIVATION, (DominoPlanScope){.object_id = 0}, now);
+    for (uint8_t i = 0; i < human->data->motivation_count; ++i) {
+        uint32_t id = human->data->motivation_ids[i];
+        offerOpportunity(human, DOMINO_PLANNER_MOTIVATION, (DominoPlanScope){.object_id = id}, now);
+        offerOpportunity(human, DOMINO_PLANNER_TASK, (DominoPlanScope){.object_id = id}, now);
+    }
+    // 初始机会按保存的通道逻辑顺序恢复；已有机会次序不被重复扫描刷新。
+    for (uint8_t c = 0; c < DOMINO_HUMAN_TASK_CHANNEL_COUNT; ++c) {
+        uint32_t id = human->data->active_task_id_list[c];
+        if (id) {
+            offerOpportunity(human, DOMINO_PLANNER_TASK, (DominoPlanScope){id, true}, now);
+            offerOpportunity(human, DOMINO_PLANNER_BEHAVIOR, (DominoPlanScope){.object_id = id}, now);
+        }
+        for (uint8_t q = 0; q < human->data->queue_count[c]; ++q) {
+            id = human->data->channel_queue[c][q];
+            offerOpportunity(human, DOMINO_PLANNER_TASK, (DominoPlanScope){id, true}, now);
+            offerOpportunity(human, DOMINO_PLANNER_BEHAVIOR, (DominoPlanScope){.object_id = id}, now);
         }
     }
-    return false;
 }
-
-/** @brief 按各任务的效果边界推进到同一时刻；自然需求每个边界只结算一次，回调只结算自身效果。
- * @param finish_all_flag Stop 使用 true，单项失败后仍结算其他活动通道和自然需求；运行期失败则立即隔离人物。
- * @note 本过程不增删任务池、不启动下一任务、不登记计时器。
- */
-static bool settleHumanTasks(DominoHuman* human_ptr, domino_runtime_ms_t now_ms, bool finish_all_flag) {
-    DominoHumanData* data_ptr = human_ptr->data;
-    if (now_ms < data_ptr->needs_updated_at_ms) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "human=%" PRIu32 " time precedes need settlement", human_ptr->human_id);
+static void includeTime(DominoHumanCheckTime* best, DominoHumanCheckTime value, uint32_t now) {
+    if (value.valid && value.at_ms > now && (!best->valid || value.at_ms < best->at_ms))
+        *best = value;
+}
+static void maintainWakeup(DominoHuman* human, uint32_t now) {
+    DominoHumanData* data = human->data;
+    DominoHumanCheckTime best = {0};
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k) {
+        DominoPlanRequestState* request = &human->runtime->requests[k];
+        if (request->request_id)
+            includeTime(&best, (DominoHumanCheckTime){request->deadline_ms, true}, now);
+        else if (human->runtime->opportunity_count[k])
+            markPending(human);
     }
-    DominoTask* active_tasks[DOMINO_HUMAN_TASK_CHANNEL_COUNT] = {0};
-    const DominoTaskOps* active_ops[DOMINO_HUMAN_TASK_CHANNEL_COUNT] = {0};
-    for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-        const domino_task_id_t task_id = data_ptr->active_task_id_list[channel];
-        if (task_id == 0U) {
+    includeTime(&best, data->motivation_retry, now);
+    for (uint8_t i = 0; i < data->motivation_count; ++i)
+        includeTime(&best, dominoGetMotivationByID(data->motivation_ids[i])->retry, now);
+    for (uint8_t i = 0; i < data->task_count; ++i) {
+        const DominoTask* task = dominoGetTaskByID(data->task_id_list[i]);
+        if (task->has_execution && task->execution.status != DOMINO_TASK_STATUS_OPEN)
             continue;
-        }
-        active_tasks[channel] = dominoGetTaskByID(task_id);
-        active_ops[channel] = getTaskOps(active_tasks[channel]);
-        if (!active_ops[channel]) {
-            DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "human=%" PRIu32 " active task=%" PRIu32 " has no supported executor", human_ptr->human_id,
-                                   task_id);
-        }
+        DominoTaskSummary summary = dominoTaskQuery(task, data, now);
+        includeTime(&best, summary.next, now);
+        includeTime(&best, task->retry, now);
+        includeTime(&best, task->finish_deadline, now);
+        if (!task->has_execution)
+            includeTime(&best, task->start_deadline, now);
+        if (data->queue_count[task->channel_index] && data->channel_queue[task->channel_index][0] == task->task_id)
+            includeTime(&best, task->not_before, now);
     }
-    bool succeeded_flag = true;
-    for (;;) {
-        domino_runtime_ms_t step_ms = now_ms;
-        for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-            if (!active_tasks[channel]) {
-                continue;
-            }
-            domino_runtime_ms_t settle_ms;
-            domino_runtime_ms_t wakeup_ms;
-            const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(active_tasks[channel]->current_behavior_id);
-            active_ops[channel]->get_times(active_tasks[channel], behavior_ptr, &settle_ms, &wakeup_ms);
-            if (settle_ms <= behavior_ptr->accounted_at_ms || settle_ms < data_ptr->needs_updated_at_ms) {
-                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "task=%" PRIu32 " returned a non-advancing settlement time", active_tasks[channel]->task_id);
-            }
-            if (settle_ms < step_ms) {
-                step_ms = settle_ms;
-            }
-        }
-        dominoHumanApplyNaturalNeeds(data_ptr, step_ms);
-        for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-            DominoTask* task_ptr = active_tasks[channel];
-            if (!task_ptr) {
-                continue;
-            }
-            const DOMINO_CODE code = active_ops[channel]->advance(task_ptr, human_ptr, step_ms);
-            if (code != CODE_OK) {
-                failTask(human_ptr, task_ptr, step_ms, code);
-                if (!finish_all_flag) {
-                    return false;
-                }
-                succeeded_flag = false;
-                active_tasks[channel] = nullptr;
-                continue;
-            }
-            if (task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED) {
-                data_ptr->active_task_id_list[channel] = 0U;
-                active_tasks[channel] = nullptr;
-            }
-        }
-        if (step_ms == now_ms) {
-            return succeeded_flag;
-        }
+    if (data->energy > DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY) {
+        uint32_t delta = (data->energy - DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY) * DOMINO_HUMAN_NEED_MINUTE_MS - data->needs_phase_ms;
+        includeTime(&best, (DominoHumanCheckTime){dominoHumanTimeAdd(now, delta), true}, now);
     }
+    scheduleWakeup(human, best);
 }
-
-void dominoHumanExecutionSettle(domino_runtime_ms_t now_ms) {
-    for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
-        DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
-        /* 异常只阻止运行期继续调度；已经开始的其他通道及自然需求仍须结算到停钟时刻。 */
-        settleHumanTasks(human_ptr, now_ms, true);
-    }
+static void advanceHuman(DominoHuman* human, uint32_t now) {
+    dominoHumanSettle(human, now);
+    dominoHumanRecycle(human);
+    dominoHumanStartReady(human, now);
+    refreshOpportunities(human, now);
 }
-
-/** @brief 回收成功终态，无需再次查询执行接口；删除会移动任务和行为池，不跨此调用保留池内指针。 */
-static void recycleCompletedTasks(DominoHumanData* data_ptr) {
-    for (uint8_t index = 0U; index < data_ptr->task_count;) {
-        const DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
-        if (task_ptr->status == DOMINO_TASK_STATUS_SUCCEEDED) {
-            dominoHumanStoreRecycleTask(data_ptr, index);
+static void processPending(DominoHuman* human) {
+    uint32_t now;
+    dominoTimeGetRuntimeMs(&now);
+    advanceHuman(human, now);
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k) {
+        struct DominoHumanRuntime* runtime = human->runtime;
+        if (runtime->requests[k].request_id || !runtime->opportunity_count[k] || runtime->posted_batch[k] == g_execution.batch_id)
             continue;
-        }
-        index++;
+        DominoPlanScope scope = runtime->opportunities[k][0];
+        --runtime->opportunity_count[k];
+        memmove(runtime->opportunities[k], runtime->opportunities[k] + 1, runtime->opportunity_count[k] * sizeof(DominoPlanScope));
+        dominoHumanPlannerSubmit(human, (DominoPlannerKind)k, dominoHumanPlanningPriority(human, (DominoPlannerKind)k, scope), scope);
+        runtime->posted_batch[k] = g_execution.batch_id;
     }
+    maintainWakeup(human, now);
 }
-
-/** @brief 从空通道选出最早可执行的任务，同刻按人物清单顺序；正在运行的同类型任务不能成为候选。
- * @pre 调用方已确认本通道空闲。
- */
-static TaskSelection selectNextTask(const DominoHumanData* data_ptr, uint8_t channel_index) {
-    TaskSelection selected = {0};
-    for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
-        if (task_ptr->channel_index != channel_index || task_ptr->status != DOMINO_TASK_STATUS_PLANNED ||
-            isTaskTypeRunning(data_ptr, task_ptr->type)) {
-            continue;
-        }
-        const DominoTaskOps* ops_ptr = getTaskOps(task_ptr);
-        if (!ops_ptr) {
-            continue;
-        }
-        const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(task_ptr->current_behavior_id);
-        const domino_runtime_ms_t begin_ms =
-            task_ptr->planned_begin_ms > behavior_ptr->planned_begin_ms ? task_ptr->planned_begin_ms : behavior_ptr->planned_begin_ms;
-        if (!selected.task_ptr || begin_ms < selected.begin_ms) {
-            selected = (TaskSelection){.task_ptr = task_ptr, .ops_ptr = ops_ptr, .begin_ms = begin_ms};
-        }
-    }
-    return selected;
+static void processResult(DominoHumanPlanResultMessage* result) {
+    ++g_execution.metrics.results;
+    if (result->queued_at_ns)
+        dominoTimingRecord(&g_execution.metrics.result_wait[result->planner_kind][result->request_priority],
+                           dominoMonotonicTimeNs() - result->queued_at_ns);
+    dominoRWLockWriteLock(&domino_human_data_lock);
+    uint64_t lock_start = dominoMonotonicTimeNs();
+    DominoHuman* human = dominoGetHumanByID(result->human_id);
+    if (dominoHumanPlannerMatches(human, result->planner_kind, result->request_priority, result->request_id)) {
+        uint32_t now;
+        dominoTimeGetRuntimeMs(&now);
+        DominoPlanRequestState* request = &human->runtime->requests[result->planner_kind];
+        DominoPlanScope scope = request->trigger_scope;
+        bool expired = now >= request->deadline_ms;
+        dominoHumanSettle(human, now);
+        bool needed = scopeNeeded(human, result->planner_kind, scope, now);
+        bool accepted = !expired && needed && result->outcome == DOMINO_PLAN_CANDIDATE &&
+                        dominoHumanAcceptCandidate(human, result->planner_kind, scope, result->candidate, now);
+        if (!accepted)
+            ++g_execution.metrics.rejected;
+        request->request_id = 0;
+        dominoHumanCheckTasks(human, now, false);
+        if (needed && (!accepted || scopeNeeded(human, result->planner_kind, scope, now)))
+            retryScope(human, result->planner_kind, scope, now);
+        markPending(human);
+    } else
+        ++g_execution.metrics.stale;
+    dominoTimingRecord(&g_execution.metrics.write_lock, dominoMonotonicTimeNs() - lock_start);
+    dominoRWLockWriteUnlock(&domino_human_data_lock);
+    dominoHumanFreeCandidate(result->candidate);
 }
-
-/** @brief 主通道优先，各空槽分别启动已到时任务；同类型冲突保留为 PLANNED，业务失败隔离人物。 */
-static bool startReadyTasks(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
-    DominoHumanData* data_ptr = human_ptr->data;
-    for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-        if (data_ptr->active_task_id_list[channel] != 0U) {
-            continue;
-        }
-        const TaskSelection selected = selectNextTask(data_ptr, channel);
-        if (!selected.task_ptr || selected.begin_ms > now_ms) {
-            continue;
-        }
-        DominoTask* task_ptr = selected.task_ptr;
-        const DOMINO_CODE code = selected.ops_ptr->start(task_ptr, human_ptr, now_ms);
-        if (code != CODE_OK) {
-            failTask(human_ptr, task_ptr, now_ms, code);
-            return false;
-        }
-        task_ptr->status = DOMINO_TASK_STATUS_RUNNING;
-        task_ptr->started_flag = true;
-        task_ptr->started_at_ms = now_ms;
-        data_ptr->active_task_id_list[channel] = task_ptr->task_id;
-    }
-    return true;
-}
-
-/** @brief 从业务事实计算最近截止点；调用方已确认所有活动任务具有支持的执行接口。 */
-static bool getHumanWakeup(const DominoHuman* human_ptr, domino_runtime_ms_t* due_ms_out_ptr) {
-    const DominoHumanData* data_ptr = human_ptr->data;
-    bool has_wakeup_flag = false;
-    domino_runtime_ms_t due_ms = 0U;
-    for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-        domino_runtime_ms_t channel_due_ms;
-        const domino_task_id_t task_id = data_ptr->active_task_id_list[channel];
-        if (task_id != 0U) {
-            const DominoTask* task_ptr = dominoGetTaskByID(task_id);
-            const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(task_ptr->current_behavior_id);
-            domino_runtime_ms_t settle_ms;
-            // 活动任务已在加载准备、本轮结算或启动时确认支持，无需重复检查形态。
-            dominoHumanGetTaskOps(task_ptr->type)->get_times(task_ptr, behavior_ptr, &settle_ms, &channel_due_ms);
-        } else {
-            const TaskSelection selected = selectNextTask(data_ptr, channel);
-            if (!selected.task_ptr) {
-                continue;
+static void processMessage(const DominoHumanExecutionMessage* message) {
+    DominoEngineMessage response = {.type = DOMINO_ENGINE_MSG_NPC_RESULT};
+    bool reply = false;
+    dominoRWLockWriteLock(&domino_human_data_lock);
+    uint64_t lock_start = dominoMonotonicTimeNs();
+    DominoHuman* human = nullptr;
+    if (message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_NAME) {
+        dominoHumanSetDisplayName(message->payload.name.client_id, &message->payload.name.request, &response.payload.result);
+        reply = true;
+    } else if (message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER) {
+        const DominoGameTimerRequestMessage* timer = &message->payload.game_timer;
+        if (!timer->cancelled_flag) {
+            human = dominoGetHumanByID((uint32_t)timer->data_id);
+            if (human && human->wakeup_game_timer_id == timer->game_timer_id) {
+                human->wakeup_game_timer_id = 0;
+                human->wakeup_due_ms = 0;
             }
-            channel_due_ms = selected.begin_ms;
-        }
-        if (!has_wakeup_flag || channel_due_ms < due_ms) {
-            due_ms = channel_due_ms;
-            has_wakeup_flag = true;
-        }
-    }
-    if (human_ptr->active_plan_request_id == 0U && data_ptr->energy > DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY && canPlanSleep(human_ptr)) {
-        const domino_runtime_ms_t trigger_ms = dominoHumanGetSleepTriggerMs(data_ptr);
-        if (!has_wakeup_flag || trigger_ms < due_ms) {
-            due_ms = trigger_ms;
-            has_wakeup_flag = true;
-        }
-    }
-    *due_ms_out_ptr = due_ms;
-    return has_wakeup_flag;
-}
-
-/** @brief 合并三个通道的结束／开始和精力阈值，只保留人物最近的一个唤醒；相同时刻复用原计时器。 */
-static void updateHumanWakeup(DominoHuman* human_ptr) {
-    domino_runtime_ms_t due_ms;
-    const bool has_wakeup_flag = getHumanWakeup(human_ptr, &due_ms);
-    if (has_wakeup_flag) {
-        if (scheduleWakeup(human_ptr, due_ms)) {
-            DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG, "human wakeup human=%" PRIu32 " due_ms=%" PRIu32,
-                              human_ptr->human_id, due_ms);
         }
     } else {
-        cancelWakeup(human_ptr);
+        uint32_t id =
+            message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_SLEEP_CONDITION ? message->payload.condition.human_id : message->payload.energy.human_id;
+        human = dominoGetHumanByID(id);
+        if (human) {
+            // 精力随时间变化，必须先结算旧区间再接受绝对值；纯条件的同值通知可直接忽略。
+            bool changed = message->type != DOMINO_HUMAN_EXECUTION_MESSAGE_SLEEP_CONDITION ||
+                           human->data->sleep_allowed != message->payload.condition.sleep_allowed;
+            if (changed) {
+                uint32_t now;
+                dominoTimeGetRuntimeMs(&now);
+                dominoHumanSettle(human, now);
+                if (message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_SLEEP_CONDITION)
+                    dominoHumanApplySleepCondition(human, message->payload.condition.sleep_allowed);
+                else
+                    dominoHumanApplyEnergy(human, message->payload.energy.energy);
+                dominoHumanCheckTasks(human, now, message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_ENERGY);
+                refreshOpportunities(human, now);
+                maintainWakeup(human, now);
+            } else
+                human = nullptr;
+        }
     }
+    if (human)
+        markPending(human);
+    uint64_t queued = message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_SLEEP_CONDITION ? message->payload.condition.queued_at_ns
+                      : message->type == DOMINO_HUMAN_EXECUTION_MESSAGE_ENERGY        ? message->payload.energy.queued_at_ns
+                                                                                      : 0;
+    if (queued)
+        dominoTimingRecord(&g_execution.metrics.condition_latency, dominoMonotonicTimeNs() - queued);
+    dominoTimingRecord(&g_execution.metrics.write_lock, dominoMonotonicTimeNs() - lock_start);
+    dominoRWLockWriteUnlock(&domino_human_data_lock);
+    if (reply)
+        dominoLoopProduceToMain(&response);
 }
-
-void dominoHumanExecutionInitAfter(void) {
-    static_assert(HUMAN_EXECUTION_BATCH_COUNT <= DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, "initial scheduling batches must fit the timer queue");
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    uint32_t prepared_count = 0U;
-    for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
-        DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
-        const DominoHumanData* data_ptr = human_ptr->data;
-        /* 异常人物仍可能留下需要在 Stop 结算的活动通道，执行能力也必须在 Start 前准备好。 */
-        for (uint8_t channel = 0U; channel < DOMINO_HUMAN_TASK_CHANNEL_COUNT; channel++) {
-            const domino_task_id_t task_id = data_ptr->active_task_id_list[channel];
-            if (task_id != 0U && !getTaskOps(dominoGetTaskByID(task_id))) {
-                DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "human=%" PRIu32 " active task=%" PRIu32 " has no supported executor",
-                                       human_ptr->human_id, task_id);
-            }
-        }
-        if (human_ptr->status == DOMINO_HUMAN_STATUS_EXCEPTION) {
-            continue;
-        }
-        bool immediate_flag = data_ptr->energy <= DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY && canPlanSleep(human_ptr);
-        for (uint8_t task_index = 0U; task_index < data_ptr->task_count && !immediate_flag; task_index++) {
-            immediate_flag = dominoGetTaskByID(data_ptr->task_id_list[task_index])->status == DOMINO_TASK_STATUS_SUCCEEDED;
-        }
-        domino_runtime_ms_t due_ms;
-        if (immediate_flag) {
-            /* 留队规划可以重做；终态回收及新规划均由启动后的正常业务处理，不在加载时改变事实。 */
-            scheduleWakeup(human_ptr, now_ms);
-        } else if (getHumanWakeup(human_ptr, &due_ms)) {
-            scheduleWakeup(human_ptr, due_ms);
-        } else {
-            continue;
-        }
-        if (++prepared_count == HUMAN_EXECUTION_BATCH_COUNT) {
-            dominoGameTimerPrepareRequests();
-            prepared_count = 0U;
-        }
-    }
-    dominoGameTimerPrepareRequests();
-}
-
-/** @brief 已完成共同结算，只复核当前睡眠资格；其他通道的日程变动不要求重做睡眠草案。
- * @pre 请求身份已匹配；草案由受控 planner 构造且独占，不重复验证其中不变的人物归属、类型和通道。
- */
-static void applyPlanResult(DominoHuman* human_ptr, const DominoHumanPlanResult* result_ptr, domino_runtime_ms_t now_ms) {
-    const DominoHumanPlanRequestMessage* request_ptr = &result_ptr->request;
-    switch (result_ptr->outcome) {
-        case DOMINO_HUMAN_PLAN_TIME_RANGE:
-        case DOMINO_HUMAN_PLAN_STATE_CHANGED:
-            logPlanEvent(request_ptr->human_id, request_ptr->request_id, "no_plan",
-                         result_ptr->outcome == DOMINO_HUMAN_PLAN_TIME_RANGE ? "time_range" : "state_changed", CODE_OK);
-            return;
-        case DOMINO_HUMAN_PLAN_DRAFT:
-            break;
-        default:
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "unknown plan result outcome=%d human=%" PRIu32 " request=%" PRIu64, (int)result_ptr->outcome,
-                                   request_ptr->human_id, request_ptr->request_id);
-    }
-    if (!canPlanSleep(human_ptr)) {
-        logPlanEvent(request_ptr->human_id, request_ptr->request_id, "stale", "sleep_no_longer_eligible", CODE_OK);
-        return;
-    }
-
-    // 预检防止过时草案入池后立即启动失败；任务启动仍独立校验已持有任务的业务条件。
-    domino_runtime_ms_t planned_end_ms;
-    DOMINO_CODE code = dominoHumanPrepareSleep(human_ptr->data->energy, now_ms, &planned_end_ms);
-    if (code == CODE_OK) {
-        code = dominoHumanStoreAddValidatedTask(&result_ptr->draft, human_ptr->data);
-    }
-    logPlanEvent(request_ptr->human_id, request_ptr->request_id, code == CODE_OK ? "accepted" : "rejected", "current_sleep_conditions", code);
-}
-
-/** @brief 到期通知和规划结果共用一次推进：结算 → 回收 → 提交草案 → 启动 → 更新调度。
- * @param plan_ptr 非空表示已匹配身份的规划结果；仅 STATE_CHANGED 允许按本轮重新结算的需求再次规划。
- * 时长越界及草案拒绝不立即重试，避免在条件未变时循环提交。
- */
-static void advanceHuman(DominoHuman* human_ptr, const DominoHumanPlanResult* plan_ptr) {
-    if (human_ptr->status == DOMINO_HUMAN_STATUS_EXCEPTION) {
-        return;
-    }
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    if (!settleHumanTasks(human_ptr, now_ms, false)) {
-        goto failed;
-    }
-    recycleCompletedTasks(human_ptr->data);
-    if (plan_ptr) {
-        applyPlanResult(human_ptr, plan_ptr, now_ms);
-    }
-    if (!startReadyTasks(human_ptr, now_ms)) {
-        goto failed;
-    }
-    const bool can_request_plan_flag = !plan_ptr || plan_ptr->outcome == DOMINO_HUMAN_PLAN_STATE_CHANGED;
-    if (can_request_plan_flag && human_ptr->active_plan_request_id == 0U && human_ptr->data->energy <= DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY &&
-        canPlanSleep(human_ptr)) {
-        // 本批写锁覆盖入队及身份发布，规划器取得读锁后才检查此身份。
-        human_ptr->active_plan_request_id = dominoHumanPlannerSubmit(human_ptr->human_id);
-    }
-    updateHumanWakeup(human_ptr);
-    return;
-
-failed:
-    // 仅业务推进撤销调度；Stop 复用共同结算时不再访问已停止的计时器。
-    discardHumanScheduling(human_ptr);
-}
-
-/** @brief 按消息用途分发；草案行为块始终由结果消费者释放。 */
-static void processMessage(DominoHumanExecutionMessage* message_ptr) {
-    switch (message_ptr->type) {
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_PLAN_RESULT: {
-            const DominoHumanPlanRequestMessage* request_ptr = &message_ptr->payload.plan.request;
-            DominoHuman* human_ptr = dominoGetHumanByID(request_ptr->human_id);
-            if (human_ptr && human_ptr->active_plan_request_id == request_ptr->request_id) {
-                human_ptr->active_plan_request_id = 0U;
-                advanceHuman(human_ptr, &message_ptr->payload.plan);
-            } else {
-                logPlanEvent(request_ptr->human_id, request_ptr->request_id, "stale", "request_identity", CODE_OK);
-            }
-            free(message_ptr->payload.plan.draft.behaviors_ptr);
-            return;
-        }
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER: {
-            DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.game_timer);
-            if (human_ptr) {
-                advanceHuman(human_ptr, nullptr);
-            }
-            return;
-        }
-        default:
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human executor message type=%d", (int)message_ptr->type);
-    }
-}
-
-static int humanExecutionThread(void* arg_ptr) {
-    (void)arg_ptr;
-    DominoHumanExecutionMessage messages[HUMAN_EXECUTION_BATCH_COUNT];
+static int executionThread(void* pointer) {
+    (void)pointer;
     for (;;) {
         uint64_t epoch;
-        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_execution.inbox, &epoch);
-        if (code != CODE_OK) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot snapshot human executor inbox");
-        }
-        if (dominoEngineIsStopping()) {
+        requireCode(dominoThreadQueueSnapshot(&g_execution.inbox, &epoch));
+        if (dominoEngineIsStopping())
             return 0;
-        }
-        const uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
-        if (freeze_epoch != 0U) {
-            dominoTimeModuleWait(freeze_epoch);
+        uint64_t freeze = dominoTimeModuleGetFreezeEpoch();
+        if (freeze) {
+            dominoTimeModuleWait(freeze);
             continue;
         }
-        /* 初始调度已在 InitAfter 建立；每轮最多处理 64 条消息，冻结和退出只在下一轮观察。 */
-        uint32_t consumed_count;
-        code = dominoThreadQueueConsumeBatch(&g_execution.inbox, messages, HUMAN_EXECUTION_BATCH_COUNT, &consumed_count, false);
-        if (code != CODE_OK && code != ERR_QUEUE_EMPTY) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot consume human executor inbox");
+        if (g_execution.batch_id == UINT64_MAX)
+            DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "executor batch counter exhausted");
+        ++g_execution.batch_id;
+        uint32_t local_count = g_execution.pending_count < LOCAL_QUOTA ? g_execution.pending_count : LOCAL_QUOTA;
+        bool worked = false;
+        for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k)
+            for (uint8_t p = 0; p < DOMINO_PLAN_PRIORITY_COUNT; ++p)
+                for (uint8_t i = 0; i < RESULT_QUOTA; ++i) {
+                    DominoHumanPlanResultMessage result;
+                    if (!dominoHumanPlannerConsume((DominoPlannerKind)k, (DominoPlanPriority)p, &result))
+                        break;
+                    processResult(&result);
+                    worked = true;
+                }
+        for (uint8_t i = 0; i < BUSINESS_QUOTA; ++i) {
+            DominoHumanExecutionMessage message;
+            DOMINO_CODE code = dominoThreadQueueConsume(&g_execution.inbox, &message, false);
+            if (code == ERR_QUEUE_EMPTY)
+                break;
+            requireCode(code);
+            processMessage(&message);
+            worked = true;
         }
-        if (consumed_count != 0U) {
-            // 出队已经释放队列锁；一次写锁覆盖本批消息及池布局变化。
+        for (uint32_t i = 0; i < local_count; ++i) {
+            uint32_t id = g_execution.pending[g_execution.pending_head];
+            g_execution.pending_head = (g_execution.pending_head + 1) % DOMINO_HUMAN_WORLD_COUNT_MAX;
+            --g_execution.pending_count;
             dominoRWLockWriteLock(&domino_human_data_lock);
-            for (uint32_t index = 0U; index < consumed_count; index++) {
-                processMessage(&messages[index]);
-            }
+            uint64_t lock_start = dominoMonotonicTimeNs();
+            DominoHuman* human = dominoGetHumanByID(id);
+            human->runtime->pending = false;
+            processPending(human);
+            dominoTimingRecord(&g_execution.metrics.write_lock, dominoMonotonicTimeNs() - lock_start);
             dominoRWLockWriteUnlock(&domino_human_data_lock);
+            worked = true;
         }
-        if (consumed_count == HUMAN_EXECUTION_BATCH_COUNT) {
+        if (worked || g_execution.pending_count)
             continue;
-        }
-        code = dominoThreadQueueWait(&g_execution.inbox, epoch);
-        if (code != CODE_OK) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot wait on human executor inbox");
-        }
+        requireCode(dominoThreadQueueWait(&g_execution.inbox, epoch));
     }
 }
-
 void dominoHumanExecutionInit(void) {
     dominoThreadQueueInit(&g_execution.inbox, sizeof(DominoHumanExecutionMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
                           DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     dominoHumanPlannerInit(&g_execution.inbox);
 }
-
-void dominoHumanExecutionDestroy(void) {
-    /* 全部线程已结束且业务事实已保存；计时通知可重建，未提交草案可按人物需求重做。 */
-    dominoHumanPlannerDestroy();
-    DominoHumanExecutionMessage message;
-    DOMINO_CODE code;
-    while ((code = dominoThreadQueueConsume(&g_execution.inbox, &message, false)) == CODE_OK) {
-        if (message.type == DOMINO_HUMAN_EXECUTION_MESSAGE_PLAN_RESULT) {
-            free(message.payload.plan.draft.behaviors_ptr);
+void dominoHumanExecutionInitAfter(void) {
+    size_t count = kv_size(domino_all_human_list);
+    if (count > DOMINO_HUMAN_WORLD_COUNT_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "world human limit");
+    if (count) {
+        g_execution.runtimes = calloc(count, sizeof(*g_execution.runtimes));
+        if (!g_execution.runtimes)
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot allocate human runtime");
+    }
+    for (size_t i = 0; i < kv_size(domino_all_task_list); ++i) {
+        DominoTask* task = &kv_A(domino_all_task_list, i);
+        task->plan_version = 1;
+        task->arrangement_version = 1;
+        if (!dominoTaskSupported(task->type))
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "unsupported loaded task");
+    }
+    uint32_t now;
+    dominoTimeGetRuntimeMs(&now);
+    for (size_t i = 0; i < count; ++i) {
+        DominoHuman* human = &kv_A(domino_all_human_list, i);
+        human->runtime = &g_execution.runtimes[i];
+        for (uint8_t c = 0; c < DOMINO_HUMAN_TASK_CHANNEL_COUNT; ++c)
+            human->runtime->channel_version[c] = 1;
+        for (uint8_t j = 0; j < human->data->task_count; ++j) {
+            const DominoTask* task = dominoGetTaskByID(human->data->task_id_list[j]);
+            const DominoBehavior* behavior = dominoGetBehaviorByID(task->execution.current_behavior_id);
+            if (behavior && !dominoBehaviorPlanValid(&behavior->plan))
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "unsupported loaded behavior");
+            (void)dominoTaskQuery(task, human->data, now);
         }
+        dominoHumanRefreshStatus(human, now);
+        markPending(human);  // 不结算、不提交规划；Start 后首次有界检查完整工作清单。
+        maintainWakeup(human, now);
+        if (i % 64 == 63)
+            dominoGameTimerPrepareRequests();
     }
-    if (code != ERR_QUEUE_EMPTY) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot drain human executor inbox during destroy");
-    }
-    dominoThreadQueueDestroy(&g_execution.inbox);
-    memset(&g_execution, 0, sizeof(g_execution));
+    dominoGameTimerPrepareRequests();
 }
-
 void dominoHumanExecutionStart(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_execution.thread, humanExecutionThread, nullptr), ERR_THREAD_CREATE,
-                                  "cannot create human executor thread");
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_execution.thread, executionThread, nullptr), ERR_THREAD_CREATE, "cannot create executor");
     dominoHumanPlannerStart();
 }
-
 void dominoHumanExecutionNotifyTimeChanged(void) {
     dominoThreadQueueWakeAll(&g_execution.inbox);
     dominoHumanPlannerNotifyTimeChanged();
 }
-
 void dominoHumanExecutionStop(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_execution.thread, nullptr), ERR_THREAD_JOIN, "cannot join human executor thread");
-    /* 执行器最后一批仍可提交规划；先结束生产者，再 join 规划线程。 */
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_execution.thread, nullptr), ERR_THREAD_JOIN, "cannot join executor");
     dominoHumanPlannerStop();
 }
+void dominoHumanExecutionSettle(uint32_t now) {
+    for (size_t i = 0; i < kv_size(domino_all_human_list); ++i)
+        dominoHumanSettle(&kv_A(domino_all_human_list, i), now);
+}
+void dominoHumanExecutionDestroy(void) {
+    dominoHumanPlannerDestroy();
+    dominoThreadQueueDestroy(&g_execution.inbox);
+    free(g_execution.runtimes);
+    memset(&g_execution, 0, sizeof(g_execution));
+}
+void dominoHumanExecutionPost(DominoHumanExecutionMessage* message) {
+    requireCode(dominoThreadQueueProduce(&g_execution.inbox, message, false));
+}
+
+#ifdef DOMINO_PLAYGROUND_MODE
+#include "playground.h"
+void dominoHumanExecutionTestResult(DominoHumanPlanResultMessage* result) {
+    processResult(result);
+}
+#endif

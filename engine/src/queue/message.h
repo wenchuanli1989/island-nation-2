@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "domino_engine.h"
 #include "domino_shared_human_task.h"
 #include "domino_shared_queue.h"
 #include "domino_shared_types.h"
@@ -13,8 +14,8 @@
  * @brief 引擎内部队列消息及其复用载荷；按计时登记、人物规划和人物执行用途命名。
  * @note 单类型队列直接保存相应请求结构；多类型队列使用 id + union payload + type。
  * 引擎对外消息定义于 domino_engine.h。
- * 内部消息不跨会话保存：计时登记／通知由持久化人物需求及任务／行为进度重建，未提交规划由人物需求重新生成；
- * 已提交任务及行为保存正式身份和进度，加载时不重放旧请求或草案，不重复结算已生效结果。
+ * 内部消息不跨会话保存：计时登记／通知由持久化人物需求及任务／行为进度重建，未提交规划由人物、动机及已接受任务事实重新生成；
+ * 已提交任务及行为保存正式身份和进度，加载时不重放旧请求或候选，不重复结算已生效结果。
  */
 
 /** @brief 64 位登记 ID，不是时间值；业务毫秒统一使用 32 位 domino_runtime_ms_t。 */
@@ -37,68 +38,127 @@ static_assert(offsetof(DominoGameTimerRequestMessage, game_timer_id) == 0,
               "DominoGameTimerRequestMessage game_timer_id must be first for queue ID writeback");
 static_assert(sizeof(DominoGameTimerRequestMessage) == 32, "DominoGameTimerRequestMessage size must be 32 bytes");
 
-/** @brief 未提交的任务计划及自有行为副本；不携带正式任务 ID、执行状态或行为 ID 清单。
- * @note 结构体复制仅复制行为地址；跨线程成功投递后转移该块所有权，接收方负责释放。
- * store 提交按值复制行为，成功或失败均不接管草案行为块，调用方随后仍须释放。
- */
-typedef struct DominoTaskDraft {
-    DominoBehavior* behaviors_ptr;
-    domino_human_id_t owner_human_id;
-    domino_runtime_ms_t planned_begin_ms;
-    domino_runtime_ms_t planned_end_ms;
-    DOMINO_TASK_TYPE type;
-    uint8_t channel_index;
-    uint8_t behavior_count;
-    uint8_t priority_class;
-} DominoTaskDraft;
-
-/** @brief 人物规划请求；规划器的单类型请求队列直接保存本结构，业务数据由规划器持 human 读锁查询。 */
+/** @brief 类别/优先级由队列和固定请求槽推导。 */
+typedef enum { DOMINO_PLANNER_MOTIVATION, DOMINO_PLANNER_TASK, DOMINO_PLANNER_BEHAVIOR, DOMINO_PLANNER_COUNT } DominoPlannerKind;
+typedef enum { DOMINO_PLAN_HIGH, DOMINO_PLAN_NORMAL, DOMINO_PLAN_PRIORITY_COUNT } DominoPlanPriority;
+typedef struct DominoPlanScope {
+    uint32_t object_id;
+    bool accepted_task;
+} DominoPlanScope;
+typedef struct DominoPlanRequestState {
+    uint64_t request_id;
+    DominoPlanScope trigger_scope;
+    domino_runtime_ms_t deadline_ms;
+    DominoPlanPriority request_priority;
+} DominoPlanRequestState;
 typedef struct DominoHumanPlanRequestMessage {
-    uint64_t request_id;  ///< 必须为首字段，由请求队列生成；结果载荷原样保留，不使用结果队列的外层 ID。
+    uint64_t request_id;
+    uint64_t queued_at_ns;  ///< 性能采样，与业务资格分开，不持久化。
     domino_human_id_t human_id;
 } DominoHumanPlanRequestMessage;
 
-static_assert(offsetof(DominoHumanPlanRequestMessage, request_id) == 0,
-              "DominoHumanPlanRequestMessage request_id must be first for queue ID writeback");
-
-typedef enum DominoHumanPlanOutcome {
-    DOMINO_HUMAN_PLAN_DRAFT,
-    DOMINO_HUMAN_PLAN_TIME_RANGE,     ///< 草案时长超过剩余可表示业务时间；当前时钟仍有效。
-    DOMINO_HUMAN_PLAN_STATE_CHANGED,  ///< 请求身份仍有效，但当前精力不再满足规划条件。
-} DominoHumanPlanOutcome;
-
-/** @brief 人物规划结果载荷，按值嵌入执行器的 PLAN_RESULT 消息；request 复用原规划请求并保留关联身份。
- * @note DRAFT 的 draft 独占另行分配的行为块，不引用全局行为池；其他结果的行为指针为空。
- * 结果入队成功后行为块归执行器；store 提交仅复制，执行器在消费或销毁留队结果时释放原块。
- */
-typedef struct DominoHumanPlanResult {
-    DominoTaskDraft draft;
-    DominoHumanPlanRequestMessage request;
-    DominoHumanPlanOutcome outcome;
-} DominoHumanPlanResult;
-
-/** @brief 人物执行器收件消息的类型，由消费者据此选择有效载荷。 */
-typedef enum DominoHumanExecutionMessageType {
-    DOMINO_HUMAN_EXECUTION_MESSAGE_NONE = 0,
+enum { DOMINO_PLAN_ITEM_MAX = 8, DOMINO_PLAN_STEP_MAX = 255, DOMINO_PLAN_BYTES_MAX = 65536, DOMINO_PLAN_LOCAL_NONE = UINT16_MAX };
+typedef enum { DOMINO_PLAN_CANDIDATE, DOMINO_PLAN_UNCHANGED, DOMINO_PLAN_UNAVAILABLE } DominoPlanOutcome;
+/** @brief 每类一块连续只读载荷；偏移均相对于块首，构造按实际大小分配。 */
+typedef struct DominoPlanCandidate {
+    uint32_t bytes;
+    uint16_t item_count;
+    uint16_t step_count;
+} DominoPlanCandidate;
+typedef struct DominoMotivationSuggestion {
+    domino_motivation_id_t motivation_id;  ///< 0 表示新增。
+    DominoMotivationType type;
+    bool needs_action;
+    bool optional;
+} DominoMotivationSuggestion;
+typedef struct DominoMotivationCandidate {
+    DominoPlanCandidate header;
+    DominoMotivationSuggestion items[];
+} DominoMotivationCandidate;
+typedef struct DominoTaskSuggestion {
+    uint64_t expected_arrangement_version;
+    uint64_t expected_queue_version;
+    uint64_t work_round;
+    DominoTaskDependency dependencies[DOMINO_TASK_DEPENDENCY_MAX];
+    uint16_t dependency_local[DOMINO_TASK_DEPENDENCY_MAX];
+    DominoHumanCheckTime not_before, start_deadline, finish_deadline;
+    domino_task_id_t task_id;  ///< 0 表示新增；其他值只调整原记录的许可安排。
+    domino_motivation_id_t motivation_id;
+    DOMINO_TASK_TYPE type;
+    uint8_t channel_index;
+    uint8_t queue_position;
+    uint8_t target_energy;
+    uint8_t dependency_count;
+    bool optional;
+    bool finish_inclusive;
+    bool yield_current;
+    bool cancel;
+} DominoTaskSuggestion;
+typedef struct DominoTaskCandidate {
+    DominoPlanCandidate header;
+    DominoTaskSuggestion items[];
+} DominoTaskCandidate;
+typedef struct DominoBehaviorSuggestion {
+    uint64_t expected_plan_version;
+    uint32_t steps_offset;
+    domino_task_id_t task_id;
+    domino_behavior_id_t expected_behavior_id;
+    domino_runtime_ms_t adjusted_duration_ms;
+    domino_runtime_ms_t expected_duration_ms;  ///< 调整当前行为时依赖的旧参数，进度自然增加不使其失效。
+    uint16_t step_count;
+    bool replace_plans;
+    bool depends_on_behavior;
+    bool requires_unstarted;
+    bool adjust_current;
+    bool optional;
+} DominoBehaviorSuggestion;
+typedef struct DominoBehaviorCandidate {
+    DominoPlanCandidate header;
+    DominoBehaviorSuggestion items[];
+} DominoBehaviorCandidate;
+/** @brief 结果沿原优先级进入独立队列。候选成功投递后整块归执行器。 */
+typedef struct DominoHumanPlanResultMessage {
+    uint64_t id;
+    uint64_t request_id;
+    uint64_t queued_at_ns;
+    DominoPlanCandidate* candidate;
+    domino_human_id_t human_id;
+    DominoPlannerKind planner_kind;
+    DominoPlanPriority request_priority;
+    DominoPlanOutcome outcome;
+} DominoHumanPlanResultMessage;
+typedef struct DominoHumanConditionUpdate {
+    uint64_t queued_at_ns;
+    domino_human_id_t human_id;
+    bool sleep_allowed;
+} DominoHumanConditionUpdate;
+typedef struct DominoHumanEnergyUpdate {
+    uint64_t queued_at_ns;
+    domino_human_id_t human_id;
+    uint8_t energy;
+} DominoHumanEnergyUpdate;
+typedef struct DominoHumanNameUpdate {
+    uint64_t client_id;
+    DominoNpcRequest request;
+} DominoHumanNameUpdate;
+typedef enum {
+    DOMINO_HUMAN_EXECUTION_MESSAGE_NONE,
     DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER,
-    DOMINO_HUMAN_EXECUTION_MESSAGE_PLAN_RESULT,
+    DOMINO_HUMAN_EXECUTION_MESSAGE_SLEEP_CONDITION,
+    DOMINO_HUMAN_EXECUTION_MESSAGE_ENERGY,
+    DOMINO_HUMAN_EXECUTION_MESSAGE_NAME,
 } DominoHumanExecutionMessageType;
-
-/** @brief 人物执行器的混合收件消息，同时接收规划结果和计时到期通知。
- * @note id 必须位于首字段，供通用队列回写；队列按值复制整条消息。
- * type 决定 payload 的有效成员；发送者直接初始化对应成员，无需分配或释放外层载荷。
- * 规划草案中的行为块仍为独占资源，入队成功转移所有权，失败仍归发送者；消费者处理或丢弃后按业务协议释放。
- * 载荷内部指针不会递归复制，不得指向发送者栈或可移动容器元素；game_timer 的队列指针由业务方保证生命周期。
- */
 typedef struct DominoHumanExecutionMessage {
-    uint64_t id;  ///< 所属收件队列回写的消息 ID，与载荷内部的业务 ID 独立。
+    uint64_t id;
     union {
-        DominoHumanPlanResult plan;
         DominoGameTimerRequestMessage game_timer;
+        DominoHumanConditionUpdate condition;
+        DominoHumanEnergyUpdate energy;
+        DominoHumanNameUpdate name;
     } payload;
     DominoHumanExecutionMessageType type;
 } DominoHumanExecutionMessage;
-
-static_assert(offsetof(DominoHumanExecutionMessage, id) == 0, "DominoHumanExecutionMessage id must be first for queue ID writeback");
-
+static_assert(offsetof(DominoHumanExecutionMessage, id) == 0, "queue ID first");
+static_assert(offsetof(DominoHumanPlanResultMessage, id) == 0, "queue ID first");
+static_assert(offsetof(DominoHumanPlanRequestMessage, request_id) == 0, "queue ID first");
 #endif

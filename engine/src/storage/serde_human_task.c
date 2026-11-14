@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "../human/state.h"
 #include "../human/store.h"
 #include "domino_shared_common.h"
@@ -5,65 +7,134 @@
 #include "serde.h"
 #include "serde_registry.h"
 
-/* 仅从当前格式的可信字段构造记录；容量与资源检查由所属加载步骤承担。 */
-#define TASK_READ_UINT(object, record, field) ((record)->field = (typeof((record)->field))yyjson_get_uint(yyjson_obj_get(object, #field)))
-#define TASK_READ_BOOL(object, record, field) ((record)->field = yyjson_get_bool(yyjson_obj_get(object, #field)))
-
-/** @brief 按可信行为 ID 数组恢复任务序列；行为实体由独立分片导入。 */
-static void deserializeTask(yyjson_val* object, DominoTask* task_ptr) {
-    TASK_READ_UINT(object, task_ptr, task_id);
-    TASK_READ_UINT(object, task_ptr, owner_human_id);
-    TASK_READ_UINT(object, task_ptr, planned_begin_ms);
-    TASK_READ_UINT(object, task_ptr, planned_end_ms);
-    TASK_READ_UINT(object, task_ptr, started_at_ms);
-    TASK_READ_UINT(object, task_ptr, ended_at_ms);
-    TASK_READ_UINT(object, task_ptr, current_behavior_id);
-    TASK_READ_UINT(object, task_ptr, type);
-    TASK_READ_UINT(object, task_ptr, channel_index);
-    TASK_READ_UINT(object, task_ptr, status);
-    TASK_READ_UINT(object, task_ptr, priority_class);
-    TASK_READ_BOOL(object, task_ptr, started_flag);
-    yyjson_val* behaviors = yyjson_obj_get(object, "behavior_id_list");
-    size_t count = yyjson_arr_size(behaviors);
-    if (count > DOMINO_TASK_BEHAVIOR_COUNT_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task behavior count exceeds task capacity: task_id=%u count=%zu", task_ptr->task_id,
-                               count);
-    }
-    task_ptr->behavior_count = (uint8_t)count;
-    serdeReadU32Array(behaviors, task_ptr->behavior_id_list, DOMINO_TASK_BEHAVIOR_COUNT_MAX);
+#define READ(obj, ptr, field) ((ptr)->field = (typeof((ptr)->field))yyjson_get_uint(yyjson_obj_get(obj, #field)))
+#define WRITE(obj, ptr, field)                                                     \
+    do {                                                                           \
+        if (!yyjson_mut_obj_add_uint(doc, obj, #field, (ptr)->field))              \
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot serialize human AI"); \
+    } while (0)
+static void readCheck(yyjson_val* obj, DominoHumanCheckTime* value) {
+    READ(obj, value, at_ms);
+    value->valid = yyjson_get_bool(yyjson_obj_get(obj, "valid"));
 }
-
-#undef TASK_READ_UINT
-#undef TASK_READ_BOOL
-
-/** @brief 显式写入任务事实及行为 ID。 */
-static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task) {
-    yyjson_mut_val* object = yyjson_mut_obj(doc);
-    if (!object || !yyjson_mut_obj_add_uint(doc, object, "task_id", task->task_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "owner_human_id", task->owner_human_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", task->planned_begin_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", task->planned_end_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", task->started_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", task->ended_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "current_behavior_id", task->current_behavior_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "channel_index", task->channel_index) || !yyjson_mut_obj_add_uint(doc, object, "type", task->type) ||
-        !yyjson_mut_obj_add_uint(doc, object, "status", task->status) ||
-        !yyjson_mut_obj_add_uint(doc, object, "priority_class", task->priority_class) ||
-        !yyjson_mut_obj_add_bool(doc, object, "started_flag", task->started_flag)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task fields");
+static yyjson_mut_val* writeCheck(yyjson_mut_doc* doc, DominoHumanCheckTime value) {
+    yyjson_mut_val* obj = yyjson_mut_obj(doc);
+    if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "at_ms", value.at_ms) || !yyjson_mut_obj_add_bool(doc, obj, "valid", value.valid))
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot serialize check time");
+    return obj;
+}
+static void deserializeTask(yyjson_val* object, DominoTask* value) {
+    READ(object, value, task_id);
+    READ(object, value, owner_human_id);
+    READ(object, value, motivation_id);
+    READ(object, value, work_round);
+    READ(object, value, first_record_id);
+    READ(object, value, record_count);
+    READ(object, value, type);
+    READ(object, value, channel_index);
+    READ(object, value, target_energy);
+    READ(object, value, waiting_condition);
+    READ(object, value, finish_inclusive);
+    readCheck(yyjson_obj_get(object, "retry"), &value->retry);
+    readCheck(yyjson_obj_get(object, "not_before"), &value->not_before);
+    readCheck(yyjson_obj_get(object, "start_deadline"), &value->start_deadline);
+    readCheck(yyjson_obj_get(object, "finish_deadline"), &value->finish_deadline);
+    yyjson_val* execution = yyjson_obj_get(object, "execution");
+    value->has_execution = yyjson_is_obj(execution);
+    if (value->has_execution) {
+        READ(execution, &value->execution, successful_behavior_count);
+        READ(execution, &value->execution, completed_active_ms);
+        READ(execution, &value->execution, current_behavior_id);
+        READ(execution, &value->execution, started_at_ms);
+        READ(execution, &value->execution, ended_at_ms);
+        READ(execution, &value->execution, status);
+        READ(execution, &value->execution, last_reason);
     }
-    yyjson_mut_val* behaviors = yyjson_mut_obj_add_arr(doc, object, "behavior_id_list");
-    if (!behaviors) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task fields");
-    }
-    for (uint32_t index = 0; index < task->behavior_count; index++) {
-        if (!yyjson_mut_arr_add_uint(doc, behaviors, task->behavior_id_list[index])) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task fields");
+    yyjson_val* plans = yyjson_obj_get(object, "plans");
+    size_t plan_count = yyjson_arr_size(plans);
+    if (plan_count + value->record_count > DOMINO_TASK_BEHAVIOR_COUNT_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "task step capacity");
+    value->plan_count = (uint16_t)plan_count;
+    if (plan_count) {
+        value->plans = malloc(plan_count * sizeof(*value->plans));
+        if (!value->plans)
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot load plans");
+        for (size_t i = 0; i < plan_count; ++i) {
+            yyjson_val* row = yyjson_arr_get(plans, i);
+            READ(row, &value->plans[i], type);
+            READ(row, &value->plans[i], duration_ms);
         }
+    }
+    yyjson_val* deps = yyjson_obj_get(object, "dependencies");
+    size_t dep_count = yyjson_arr_size(deps);
+    if (dep_count > DOMINO_TASK_DEPENDENCY_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "dependency capacity");
+    value->dependency_count = (uint8_t)dep_count;
+    for (size_t i = 0; i < dep_count; ++i) {
+        yyjson_val* row = yyjson_arr_get(deps, i);
+        READ(row, &value->dependencies[i], task_id);
+        READ(row, &value->dependencies[i], condition);
+        READ(row, &value->dependencies[i], stages);
+        READ(row, &value->dependencies[i], resolved_result);
+    }
+}
+static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* value) {
+    yyjson_mut_val* object = yyjson_mut_obj(doc);
+    if (!object)
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot serialize task");
+    WRITE(object, value, task_id);
+    WRITE(object, value, owner_human_id);
+    WRITE(object, value, motivation_id);
+    WRITE(object, value, work_round);
+    WRITE(object, value, first_record_id);
+    WRITE(object, value, record_count);
+    WRITE(object, value, type);
+    WRITE(object, value, channel_index);
+    WRITE(object, value, target_energy);
+    WRITE(object, value, waiting_condition);
+    WRITE(object, value, finish_inclusive);
+    if (!yyjson_mut_obj_add_val(doc, object, "retry", writeCheck(doc, value->retry)))
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "check time field");
+    if (!yyjson_mut_obj_add_val(doc, object, "not_before", writeCheck(doc, value->not_before)))
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "check time field");
+    if (!yyjson_mut_obj_add_val(doc, object, "start_deadline", writeCheck(doc, value->start_deadline)))
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "check time field");
+    if (!yyjson_mut_obj_add_val(doc, object, "finish_deadline", writeCheck(doc, value->finish_deadline)))
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "check time field");
+    if (value->has_execution) {
+        yyjson_mut_val* execution = yyjson_mut_obj_add_obj(doc, object, "execution");
+        if (!execution)
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "execution field");
+        WRITE(execution, &value->execution, successful_behavior_count);
+        WRITE(execution, &value->execution, completed_active_ms);
+        WRITE(execution, &value->execution, current_behavior_id);
+        WRITE(execution, &value->execution, started_at_ms);
+        WRITE(execution, &value->execution, ended_at_ms);
+        WRITE(execution, &value->execution, status);
+        WRITE(execution, &value->execution, last_reason);
+    }
+    yyjson_mut_val* plans = yyjson_mut_obj_add_arr(doc, object, "plans");
+    yyjson_mut_val* deps = yyjson_mut_obj_add_arr(doc, object, "dependencies");
+    if (!plans || !deps)
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "task arrays");
+    for (uint16_t i = 0; i < value->plan_count; ++i) {
+        yyjson_mut_val* row = yyjson_mut_obj(doc);
+        if (!row || !yyjson_mut_arr_append(plans, row))
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "plan row");
+        WRITE(row, &value->plans[i], type);
+        WRITE(row, &value->plans[i], duration_ms);
+    }
+    for (uint8_t i = 0; i < value->dependency_count; ++i) {
+        yyjson_mut_val* row = yyjson_mut_obj(doc);
+        if (!row || !yyjson_mut_arr_append(deps, row))
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "dependency row");
+        WRITE(row, &value->dependencies[i], task_id);
+        WRITE(row, &value->dependencies[i], condition);
+        WRITE(row, &value->dependencies[i], stages);
+        WRITE(row, &value->dependencies[i], resolved_result);
     }
     return object;
 }
-
 void serdeSaveHumanTask(const char* save_path) {
     const size_t total_count = kv_size(domino_all_task_list);
     if (total_count > UINT32_MAX) {

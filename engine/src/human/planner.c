@@ -1,144 +1,223 @@
 #include "planner.h"
 
-#include <assert.h>
-#include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 
 #include "../entry.h"
-#include "../queue/message.h"
 #include "../time/entry.h"
-#include "domino_shared_common.h"
-#include "domino_shared_human.h"
-#include "entry.h"
-#include "task/sleep.h"
-
-/** @file planner.c
- * @brief 按 FIFO 批量接收规划身份，丢弃已失效请求，持读锁查询人物数据并回传睡眠规划结果。
- * @note 请求不拥有动态资源；只有结果可以持有草案行为块，成功投递后由执行器释放。
- * Init 已准备全部资源，规划线程只在批次边界检查退出和冻结；只读共享世界，草案由执行器提交。
- */
+#include "candidate.h"
+#include "rules.h"
+#include "runtime.h"
 
 typedef struct HumanPlanner {
-    DominoThreadQueue inbox;
-    DominoThreadQueue* result_queue_ptr;
+    DominoThreadQueue requests[DOMINO_PLAN_PRIORITY_COUNT];
+    DominoThreadQueue results[DOMINO_PLAN_PRIORITY_COUNT];
+    DominoThreadQueue* wake_queue;
     thrd_t thread;
+    DominoPlannerMetrics metrics;
+    DominoPlannerConfig config;
+    DominoPlannerKind kind;
 } HumanPlanner;
-
-static HumanPlanner g_planner;
-enum {
-    HUMAN_PLANNER_BATCH_COUNT = 64U,  ///< 每批处理后检查冻结和退出，不限制排队请求总数。
-};
-
-/** @brief 持读锁取得本次需要的最新值，解锁后构造草案并非阻塞回传；冻结或停止不打断已开始的批次。
- * @note 请求排队后世界可能变化，读取时复核身份；不存在或已替换的请求解锁后直接丢弃。
- * 身份匹配时仍回传草案或无草案原因，不结算世界，不跨读锁范围保留借用指针。
- * 结果消费时执行器仍须重新验证当前日程和业务条件，读锁不使草案永久有效。
- */
-static void planAndSendResult(const DominoHumanPlanRequestMessage* request_ptr) {
-    dominoHumanReadLock();
-    const DominoHuman* human_ptr = dominoGetHumanByID(request_ptr->human_id);
-    if (!human_ptr || human_ptr->active_plan_request_id != request_ptr->request_id) {
-        dominoHumanReadUnlock();
-        return;
-    }
-    // 运行期执行器在同一写锁内将人物置异常并清除请求身份，匹配的请求只属于正常人物。
-    assert(human_ptr->status == DOMINO_HUMAN_STATUS_NORMAL);
-    const uint8_t energy = human_ptr->data->energy;
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    dominoHumanReadUnlock();
-
-    DominoHumanExecutionMessage message = {.type = DOMINO_HUMAN_EXECUTION_MESSAGE_PLAN_RESULT, .payload.plan = {.request = *request_ptr}};
-    DominoHumanPlanResult* result_ptr = &message.payload.plan;
-    DOMINO_CODE code = dominoHumanBuildSleepTaskDraft(request_ptr->human_id, energy, now_ms, &result_ptr->draft);
-    switch (code) {
-        case CODE_OK:
-            result_ptr->outcome = DOMINO_HUMAN_PLAN_DRAFT;
-            break;
-        case ERR_OUT_OF_RANGE:
-            // 已提交人物数据保证精力范围；剩余业务时间不足时不生成行为块。
-            result_ptr->outcome = DOMINO_HUMAN_PLAN_TIME_RANGE;
-            break;
-        case ERR_GAME_STATE_INVALID:
-            result_ptr->outcome = DOMINO_HUMAN_PLAN_STATE_CHANGED;
-            break;
-        default:
-            DOMINO_EXIT_WITH_ERROR(code, "cannot build sleep plan human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id,
-                                   request_ptr->request_id);
-    }
-    code = dominoThreadQueueProduce(g_planner.result_queue_ptr, &message, false);
-    if (code != CODE_OK) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot deliver plan result human=%" PRIu32 " request=%" PRIu64, request_ptr->human_id, request_ptr->request_id);
-    }
-    // 成功后结果及行为块归执行器；不再访问或释放已转交的草案。
+static HumanPlanner g_planners[DOMINO_PLANNER_COUNT];
+static void requireCode(DOMINO_CODE code) {
+    if (code != CODE_OK)
+        DOMINO_EXIT_WITH_ERROR(code, "planner queue operation failed");
 }
-
-static int humanPlannerThread(void* arg_ptr) {
-    (void)arg_ptr;
-    DominoHumanPlanRequestMessage requests[HUMAN_PLANNER_BATCH_COUNT];
+bool dominoHumanPlannerMatches(const DominoHuman* human, DominoPlannerKind kind, DominoPlanPriority priority, uint64_t id) {
+    if (!human || kind >= DOMINO_PLANNER_COUNT || priority >= DOMINO_PLAN_PRIORITY_COUNT || !id)
+        return false;
+    const DominoPlanRequestState* request = &human->runtime->requests[kind];
+    return request->request_id == id && request->request_priority == priority;
+}
+static void processRequest(HumanPlanner* planner, DominoPlanPriority priority, const DominoHumanPlanRequestMessage* message) {
+    uint64_t start = dominoMonotonicTimeNs();
+    planner->metrics.queue_ns[priority] += start - message->queued_at_ns;
+    dominoTimingRecord(&planner->metrics.queue_samples[priority], start - message->queued_at_ns);
+    ++planner->metrics.requests[priority];
+    dominoHumanReadLock();
+    uint64_t locked = dominoMonotonicTimeNs();
+    const DominoHuman* human = dominoGetHumanByID(message->human_id);
+    uint32_t now;
+    dominoTimeGetRuntimeMs(&now);
+    DominoHumanPlanResultMessage result = {
+        .request_id = message->request_id, .human_id = message->human_id, .planner_kind = planner->kind, .request_priority = priority};
+    bool valid =
+        dominoHumanPlannerMatches(human, planner->kind, priority, message->request_id) && now < human->runtime->requests[planner->kind].deadline_ms;
+    if (valid) {
+        DominoPlanScope scope = human->runtime->requests[planner->kind].trigger_scope;
+        switch (planner->kind) {
+            case DOMINO_PLANNER_MOTIVATION:
+                result.candidate = dominoHumanPlanMotivations(human, scope, now, planner->config.computation_budget, &result.outcome);
+                break;
+            case DOMINO_PLANNER_TASK:
+                result.candidate = dominoHumanPlanTasks(human, scope, now, planner->config.computation_budget, &result.outcome);
+                break;
+            case DOMINO_PLANNER_BEHAVIOR:
+                result.candidate = dominoHumanPlanBehaviors(human, scope, now, planner->config.computation_budget, &result.outcome);
+                break;
+            default:
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "planner kind invalid");
+        }
+    } else
+        ++planner->metrics.stale_count;
+    uint64_t lock_ns = dominoMonotonicTimeNs() - locked;
+    planner->metrics.read_lock_ns += lock_ns;
+    dominoTimingRecord(&planner->metrics.lock_samples, lock_ns);
+    dominoHumanReadUnlock();
+    if (valid) {
+        result.queued_at_ns = dominoMonotonicTimeNs();
+        requireCode(dominoThreadQueueProduce(&planner->results[priority], &result, false));
+        dominoThreadQueueWakeAll(planner->wake_queue);
+    }
+    uint64_t elapsed = dominoMonotonicTimeNs() - start;
+    planner->metrics.request_ns[priority] += elapsed;
+    dominoTimingRecord(&planner->metrics.request_samples[priority], elapsed);
+}
+static bool consumePlannerBatch(HumanPlanner* planner) {
+    uint64_t start = dominoMonotonicTimeNs();
+    uint32_t taken[DOMINO_PLAN_PRIORITY_COUNT] = {0};
+    for (uint8_t p = 0; p < DOMINO_PLAN_PRIORITY_COUNT; ++p) {
+        uint32_t quota = p == DOMINO_PLAN_HIGH ? planner->config.high_quota : 1;
+        for (; taken[p] < quota; ++taken[p]) {
+            DominoHumanPlanRequestMessage message;
+            DOMINO_CODE code = dominoThreadQueueConsume(&planner->requests[p], &message, false);
+            if (code == ERR_QUEUE_EMPTY)
+                break;
+            requireCode(code);
+            processRequest(planner, (DominoPlanPriority)p, &message);
+        }
+    }
+    if (taken[0] || taken[1]) {
+        ++planner->metrics.batch_count;
+        uint64_t elapsed = dominoMonotonicTimeNs() - start;
+        planner->metrics.batch_ns += elapsed;
+        dominoTimingRecord(&planner->metrics.batch_samples, elapsed);
+        if (taken[0] > planner->metrics.max_high_batch)
+            planner->metrics.max_high_batch = taken[0];
+        if (taken[1] > planner->metrics.max_normal_batch)
+            planner->metrics.max_normal_batch = taken[1];
+        return true;
+    }
+    return false;
+}
+/** @brief 唯一私有循环：固定 K 高 + 1 普通；失效项仍占额度，计算不跨批次。 */
+static int plannerThread(void* pointer) {
+    HumanPlanner* planner = pointer;
     for (;;) {
         uint64_t epoch;
-        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_planner.inbox, &epoch);
-        if (code != CODE_OK) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot snapshot human planner inbox");
-        }
-        if (dominoEngineIsStopping()) {
-            return CODE_OK;
-        }
-        const uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
-        if (freeze_epoch != 0U) {
+        requireCode(dominoThreadQueueSnapshot(&planner->requests[DOMINO_PLAN_NORMAL], &epoch));
+        if (dominoEngineIsStopping())
+            return 0;
+        uint64_t freeze_epoch = dominoTimeModuleGetFreezeEpoch();
+        if (freeze_epoch) {
             dominoTimeModuleWait(freeze_epoch);
             continue;
         }
-        uint32_t consumed_count;
-        code = dominoThreadQueueConsumeBatch(&g_planner.inbox, requests, HUMAN_PLANNER_BATCH_COUNT, &consumed_count, false);
-        if (code != CODE_OK && code != ERR_QUEUE_EMPTY) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot consume human planner requests");
-        }
-        for (uint32_t index = 0U; index < consumed_count; index++) {
-            planAndSendResult(&requests[index]);
-        }
-        if (consumed_count == HUMAN_PLANNER_BATCH_COUNT) {
+        if (consumePlannerBatch(planner))
             continue;
-        }
-        code = dominoThreadQueueWait(&g_planner.inbox, epoch);
-        if (code != CODE_OK) {
-            DOMINO_EXIT_WITH_ERROR(code, "cannot wait for human planner request");
+        requireCode(dominoThreadQueueWait(&planner->requests[DOMINO_PLAN_NORMAL], epoch));
+    }
+}
+void dominoHumanPlannerInit(DominoThreadQueue* wake_queue) {
+    // 十二队列最大槽位约 48 MiB；候选实际按需分配，额外预算见 candidate.c。
+    static_assert(6ULL * DOMINO_THREAD_QUEUE_MAX_CAPACITY * (sizeof(DominoHumanPlanRequestMessage) + sizeof(DominoHumanPlanResultMessage)) <=
+                      64ULL * 1024 * 1024,
+                  "planning queue budget");
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k) {
+        HumanPlanner* planner = &g_planners[k];
+        planner->kind = (DominoPlannerKind)k;
+        planner->wake_queue = wake_queue;
+        planner->config = g_domino_engine_launch_config.planners[k];
+        if (!planner->config.high_quota && !planner->config.request_timeout_ms && !planner->config.computation_budget)
+            planner->config = (DominoPlannerConfig){4, 3000, 512};
+        if (!planner->config.high_quota || planner->config.high_quota > 63 || !planner->config.request_timeout_ms ||
+            !planner->config.computation_budget || planner->config.computation_budget > 4096)
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid planner quota, timeout or budget");
+        for (uint8_t p = 0; p < DOMINO_PLAN_PRIORITY_COUNT; ++p) {
+            dominoThreadQueueInit(&planner->requests[p], sizeof(DominoHumanPlanRequestMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
+                                  DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+            dominoThreadQueueInit(&planner->results[p], sizeof(DominoHumanPlanResultMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
+                                  DOMINO_THREAD_QUEUE_MAX_CAPACITY);
         }
     }
 }
-
-void dominoHumanPlannerInit(DominoThreadQueue* result_queue_ptr) {
-    dominoThreadQueueInit(&g_planner.inbox, sizeof(DominoHumanPlanRequestMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
-                          DOMINO_THREAD_QUEUE_MAX_CAPACITY);
-    g_planner.result_queue_ptr = result_queue_ptr;
-}
-
 void dominoHumanPlannerStart(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planner.thread, humanPlannerThread, nullptr), ERR_THREAD_CREATE,
-                                  "cannot create human planner thread");
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k)
+        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planners[k].thread, plannerThread, &g_planners[k]), ERR_THREAD_CREATE, "cannot start planner");
 }
-
-void dominoHumanPlannerNotifyTimeChanged(void) {
-    dominoThreadQueueWakeAll(&g_planner.inbox);
-}
-
-uint64_t dominoHumanPlannerSubmit(domino_human_id_t human_id) {
-    DominoHumanPlanRequestMessage request = {.human_id = human_id};
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_planner.inbox, &request, false);
-    if (code != CODE_OK) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot submit plan request human=%" PRIu32, human_id);
-    }
-    return request.request_id;
-}
-
 void dominoHumanPlannerStop(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_planner.thread, nullptr), ERR_THREAD_JOIN, "cannot join human planner thread");
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k)
+        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_planners[k].thread, nullptr), ERR_THREAD_JOIN, "cannot join planner");
+}
+void dominoHumanPlannerNotifyTimeChanged(void) {
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k)
+        dominoThreadQueueWakeAll(&g_planners[k].requests[DOMINO_PLAN_NORMAL]);
+}
+void dominoHumanPlannerSubmit(DominoHuman* human, DominoPlannerKind kind, DominoPlanPriority priority, DominoPlanScope scope) {
+    HumanPlanner* planner = &g_planners[kind];
+    uint32_t now;
+    dominoTimeGetRuntimeMs(&now);
+    uint32_t deadline = dominoHumanTimeAdd(now, planner->config.request_timeout_ms);
+    DominoHumanPlanRequestMessage message = {.human_id = human->human_id, .queued_at_ns = dominoMonotonicTimeNs()};
+    requireCode(dominoThreadQueueProduce(&planner->requests[priority], &message, false));
+    human->runtime->requests[kind] = (DominoPlanRequestState){message.request_id, scope, deadline, priority};
+    if (priority == DOMINO_PLAN_HIGH)
+        dominoThreadQueueWakeAll(&planner->requests[DOMINO_PLAN_NORMAL]);
+}
+bool dominoHumanPlannerConsume(DominoPlannerKind kind, DominoPlanPriority priority, DominoHumanPlanResultMessage* result) {
+    DOMINO_CODE code = dominoThreadQueueConsume(&g_planners[kind].results[priority], result, false);
+    if (code == ERR_QUEUE_EMPTY)
+        return false;
+    requireCode(code);
+    return true;
+}
+DominoPlannerMetrics dominoHumanPlannerMetrics(DominoPlannerKind kind) {
+    return g_planners[kind].metrics;
+}
+void dominoHumanPlannerDestroy(void) {
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k)
+        for (uint8_t p = 0; p < DOMINO_PLAN_PRIORITY_COUNT; ++p) {
+            DominoHumanPlanResultMessage result;
+            while (dominoHumanPlannerConsume((DominoPlannerKind)k, (DominoPlanPriority)p, &result))
+                dominoHumanFreeCandidate(result.candidate);
+            dominoThreadQueueDestroy(&g_planners[k].requests[p]);
+            dominoThreadQueueDestroy(&g_planners[k].results[p]);
+        }
+    dominoHumanCandidateResetMetrics();
+    memset(g_planners, 0, sizeof(g_planners));
 }
 
-void dominoHumanPlannerDestroy(void) {
-    // 线程已结束且业务事实已保存；未提交规划由下次 InitAfter 按人物需求重新触发，旧请求身份不跨会话。
-    dominoThreadQueueDestroy(&g_planner.inbox);
-    memset(&g_planner, 0, sizeof(g_planner));
+#ifdef DOMINO_PLAYGROUND_MODE
+#include "playground.h"
+void dominoHumanPlannerTestLeaveCandidate(DominoHuman* human) {
+    dominoHumanPlannerSubmit(human, DOMINO_PLANNER_MOTIVATION, DOMINO_PLAN_HIGH, (DominoPlanScope){0});
+    if (!consumePlannerBatch(&g_planners[DOMINO_PLANNER_MOTIVATION]) || !dominoHumanCandidateLiveBytes())
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "queued candidate fixture missing");
 }
+void dominoHumanPlannerTestFairness(void) {
+    for (uint8_t k = 0; k < DOMINO_PLANNER_COUNT; ++k) {
+        HumanPlanner* planner = &g_planners[k];
+        uint32_t quota = planner->config.high_quota;
+        uint64_t epoch;
+        requireCode(dominoThreadQueueSnapshot(&planner->requests[DOMINO_PLAN_NORMAL], &epoch));
+        for (uint32_t i = 0; i < quota * 2; ++i) {
+            DominoHumanPlanRequestMessage request = {.human_id = UINT32_MAX, .queued_at_ns = dominoMonotonicTimeNs()};
+            requireCode(dominoThreadQueueProduce(&planner->requests[DOMINO_PLAN_HIGH], &request, false));
+        }
+        dominoThreadQueueWakeAll(&planner->requests[DOMINO_PLAN_NORMAL]);
+        // 检查与 Wait 之间仅高队列到达，也必须由统一等待对象的版本发现。
+        requireCode(dominoThreadQueueWait(&planner->requests[DOMINO_PLAN_NORMAL], epoch));
+        for (uint32_t i = 0; i < 2; ++i) {
+            DominoHumanPlanRequestMessage request = {.human_id = UINT32_MAX, .queued_at_ns = dominoMonotonicTimeNs()};
+            requireCode(dominoThreadQueueProduce(&planner->requests[DOMINO_PLAN_NORMAL], &request, false));
+        }
+        if (!consumePlannerBatch(planner) || planner->metrics.requests[0] != quota || planner->metrics.requests[1] != 1 ||
+            planner->metrics.stale_count != quota + 1)
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "fixed planner fairness failed");
+        if (!consumePlannerBatch(planner) || planner->metrics.requests[0] != quota * 2 || planner->metrics.requests[1] != 2 ||
+            consumePlannerBatch(planner))
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "planner FIFO quota failed");
+    }
+}
+#endif

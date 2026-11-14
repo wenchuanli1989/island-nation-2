@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "../human/state.h"
 #include "../human/store.h"
 #include "domino_shared_common.h"
@@ -5,61 +7,63 @@
 #include "serde.h"
 #include "serde_registry.h"
 
-/* 只解码当前格式的可信事实；实体容量与索引资源由导入入口检查。 */
-#define BEHAVIOR_READ_UINT(object, record, field) ((record)->field = (typeof((record)->field))yyjson_get_uint(yyjson_obj_get(object, #field)))
-
-static void deserializeBehavior(yyjson_val* object, DominoBehavior* behavior_ptr) {
-    BEHAVIOR_READ_UINT(object, behavior_ptr, behavior_id);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, type);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, planned_begin_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, planned_end_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, started_at_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, ended_at_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, accounted_at_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, active_elapsed_ms);
-    BEHAVIOR_READ_UINT(object, behavior_ptr, status);
-    behavior_ptr->started_flag = yyjson_get_bool(yyjson_obj_get(object, "started_flag"));
+#define READ(obj, ptr, field) ((ptr)->field = (typeof((ptr)->field))yyjson_get_uint(yyjson_obj_get(obj, #field)))
+#define WRITE(obj, ptr, field)                                                     \
+    do {                                                                           \
+        if (!yyjson_mut_obj_add_uint(doc, obj, #field, (ptr)->field))              \
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot serialize human AI"); \
+    } while (0)
+static void deserializeBehavior(yyjson_val* object, DominoBehavior* value) {
+    READ(object, value, behavior_id);
+    READ(object, value, task_id);
+    READ(object, value, next_record_id);
+    READ(object, value, started_at_ms);
+    READ(object, value, ended_at_ms);
+    READ(object, value, active_elapsed_ms);
+    READ(object, value, effect_phase_ms);
+    READ(object, value, status);
+    yyjson_val* plan = yyjson_obj_get(object, "plan");
+    READ(plan, &value->plan, duration_ms);
+    READ(plan, &value->plan, type);
 }
-
-#undef BEHAVIOR_READ_UINT
-
-/** @brief 独立写入全局行为事实；睡眠目标时长由计划区间推导。 */
-static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavior* behavior_ptr) {
+static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavior* value) {
     yyjson_mut_val* object = yyjson_mut_obj(doc);
-    if (!object || !yyjson_mut_obj_add_uint(doc, object, "behavior_id", behavior_ptr->behavior_id) ||
-        !yyjson_mut_obj_add_uint(doc, object, "type", behavior_ptr->type) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_begin_ms", behavior_ptr->planned_begin_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "planned_end_ms", behavior_ptr->planned_end_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "started_at_ms", behavior_ptr->started_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "ended_at_ms", behavior_ptr->ended_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "accounted_at_ms", behavior_ptr->accounted_at_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "active_elapsed_ms", behavior_ptr->active_elapsed_ms) ||
-        !yyjson_mut_obj_add_uint(doc, object, "status", behavior_ptr->status) ||
-        !yyjson_mut_obj_add_bool(doc, object, "started_flag", behavior_ptr->started_flag)) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human behavior fields");
-    }
+    if (!object)
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot serialize behavior");
+    WRITE(object, value, behavior_id);
+    WRITE(object, value, task_id);
+    WRITE(object, value, next_record_id);
+    WRITE(object, value, started_at_ms);
+    WRITE(object, value, ended_at_ms);
+    WRITE(object, value, active_elapsed_ms);
+    WRITE(object, value, effect_phase_ms);
+    WRITE(object, value, status);
+    yyjson_mut_val* plan = yyjson_mut_obj_add_obj(doc, object, "plan");
+    if (!plan)
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "plan fields");
+    WRITE(plan, &value->plan, duration_ms);
+    WRITE(plan, &value->plan, type);
     return object;
 }
-
 void serdeSaveHumanBehavior(const char* save_path) {
     const size_t total_count = kv_size(domino_all_behavior_list);
     if (total_count > UINT32_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human behavior count exceeds storage limit: count=%zu", total_count);
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds storage limit: count=%zu", total_count);
     }
     const uint32_t shard_count = storageEntityShardCount((uint32_t)total_count, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA);
     for (uint32_t shard = 0U; shard < shard_count; shard++) {
         yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
         if (!doc) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human behavior JSON document: shard=%u", shard);
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task JSON document: shard=%u", shard);
         }
         yyjson_mut_val* root = yyjson_mut_obj(doc);
         if (!root) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human behavior JSON root: shard=%u", shard);
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task JSON root: shard=%u", shard);
         }
         yyjson_mut_doc_set_root(doc, root);
         yyjson_mut_val* entities = yyjson_mut_obj_add_arr(doc, root, "entities");
         if (!entities || !yyjson_mut_obj_add_str(doc, root, "type", "human_behavior") || !yyjson_mut_obj_add_uint(doc, root, "shard_id", shard)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human behavior shard fields: shard=%u", shard);
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human task shard fields: shard=%u", shard);
         }
         const size_t start = (size_t)shard * DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA;
         const size_t remaining_count = total_count - start;
@@ -67,7 +71,7 @@ void serdeSaveHumanBehavior(const char* save_path) {
         for (size_t index = start; index < start + count; index++) {
             yyjson_mut_val* object = serializeBehavior(doc, &kv_A(domino_all_behavior_list, index));
             if (!yyjson_mut_arr_append(entities, object)) {
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human behavior record: behavior_id=%u",
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human task record: behavior_id=%u",
                                        kv_A(domino_all_behavior_list, index).behavior_id);
             }
         }
@@ -76,7 +80,7 @@ void serdeSaveHumanBehavior(const char* save_path) {
     }
 }
 
-/** @brief 直接调用 human store 导入可信行为，保留全局顺序、身份和执行进度。 */
+/** @brief 按全局顺序直接调用 human store 导入可信任务并建立 ID 索引；人物任务清单由 human.data 恢复，不在此重建。 */
 void serdeLoadHumanBehavior(const char* save_path, uint32_t total_count, uint32_t shard_count) {
     storageValidateLoadCount(total_count, sizeof(DominoBehavior));
     for (uint32_t shard = 0U; shard < shard_count; shard++) {
@@ -86,11 +90,11 @@ void serdeLoadHumanBehavior(const char* save_path, uint32_t total_count, uint32_
         size_t count;
         yyjson_val* object;
         yyjson_arr_foreach(entities, index, count, object) {
-            DominoBehavior behavior = {0};
-            deserializeBehavior(object, &behavior);
-            const DOMINO_CODE code = dominoHumanStoreImportBehavior(&behavior);
+            DominoBehavior task = {0};
+            deserializeBehavior(object, &task);
+            const DOMINO_CODE code = dominoHumanStoreImportBehavior(&task);
             if (code != CODE_OK) {
-                DOMINO_EXIT_WITH_ERROR(code, "Cannot import human behavior: behavior_id=%u", behavior.behavior_id);
+                DOMINO_EXIT_WITH_ERROR(code, "Cannot import human task: behavior_id=%u", task.behavior_id);
             }
         }
         yyjson_doc_free(doc);

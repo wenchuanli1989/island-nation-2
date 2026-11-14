@@ -13,34 +13,89 @@
  * @note 任务由引擎内部自主决策和规划，不为测试增加对外任务提交接口。
  */
 
-/** @brief 客户端收发队列当前只支持 NONE；不提供客户端任务、规划请求或规划结果类型。 */
+#include "domino_shared_human_task.h"
+
 typedef enum DominoEngineMsgType {
     DOMINO_ENGINE_MSG_NONE = 0,
+    DOMINO_ENGINE_MSG_QUERY_NPC,
+    DOMINO_ENGINE_MSG_SET_NPC_NAME,
+    DOMINO_ENGINE_MSG_NPC_RESULT,
 } DominoEngineMsgType;
-
-/** @brief 客户端与主循环之间的对外队列消息；当前单一消息类型直接复用此结构。 */
+typedef enum {
+    DOMINO_NPC_QUERY_COMPLETE,
+    DOMINO_NPC_NAME_CHANGED,
+    DOMINO_NPC_UNCHANGED,
+    DOMINO_NPC_VERSION_CONFLICT,
+    DOMINO_NPC_REJECTED
+} DominoNpcResultStatus;
+typedef struct DominoNpcRequest {
+    uint64_t session_id;
+    uint64_t request_id;
+    uint64_t expected_name_version;
+    domino_human_id_t human_id;
+    uint16_t name_len;
+    char name[DOMINO_HUMAN_DISPLAY_NAME_MAX + 1];
+} DominoNpcRequest;
+typedef struct DominoNpcChannelSummary {
+    domino_task_id_t task_id;
+    domino_behavior_id_t behavior_id;
+    DOMINO_TASK_TYPE task_type;
+    DOMINO_BEHAVIOR_TYPE behavior_type;
+    domino_runtime_ms_t active_elapsed_ms;
+    uint8_t behavior_status;
+} DominoNpcChannelSummary;
+/** @brief 单次读锁内复制的有界摘要，无借用指针；读取不补结算。 */
+typedef struct DominoNpcSummary {
+    uint64_t name_version;
+    uint64_t implementation_count;
+    DominoNpcChannelSummary channels[DOMINO_HUMAN_TASK_CHANNEL_COUNT];
+    domino_runtime_ms_t read_at_ms;
+    domino_runtime_ms_t settled_at_ms;
+    domino_human_id_t human_id;
+    uint8_t energy, food, water, hygiene, recreation, social;
+    uint8_t motivation_count;
+    uint8_t status;
+    char name[DOMINO_HUMAN_DISPLAY_NAME_MAX + 1];
+} DominoNpcSummary;
+typedef struct DominoNpcResult {
+    uint64_t session_id;
+    uint64_t request_id;
+    DominoNpcSummary summary;
+    DominoNpcResultStatus status;
+    DOMINO_CODE reason;
+} DominoNpcResult;
+/** @brief 外部消息按 id → payload → type 布局；请求关联身份不被队列 ID 覆盖。 */
 typedef struct DominoEngineMessage {
-    uint64_t id;  ///< 入队成功时由所属队列生成并回写的消息 ID。
-    uint64_t u64[4];
-    uint32_t u32[5];
-    uint32_t type;
+    uint64_t id;
+    union {
+        DominoNpcRequest npc;
+        DominoNpcResult result;
+    } payload;
+    DominoEngineMsgType type;
 } DominoEngineMessage;
+static_assert(offsetof(DominoEngineMessage, id) == 0, "queue ID first");
+static_assert(sizeof(DominoEngineMessage) <= 1200, "bounded message fits MTU budget");
 
-static_assert(offsetof(DominoEngineMessage, id) == 0, "DominoEngineMessage id must be first for queue ID writeback");
-static_assert(sizeof(DominoEngineMessage) == 64U, "engine message must be 64 bytes");
-
+typedef struct DominoPlannerConfig {
+    uint32_t high_quota;
+    domino_runtime_ms_t request_timeout_ms;
+    uint32_t computation_budget;
+} DominoPlannerConfig;
 typedef struct DominoEngineLaunchConfig {
     /**
      * @brief 必填存档目录；初始化时复制路径并移除末尾 '/'，不接受根目录或末级目录名为 .、.. 的路径。
      * 仅根 meta.json 不存在时创建空世界；无法加载有效世界时打印致命错误并退出进程。
      */
     const char* storage_path;
+    uint64_t client_id;               ///< 接入层绑定的管理身份，0 使用本地身份 1；请求不能指定身份。
+    DominoPlannerConfig planners[3];  ///< 每类全零时使用默认值 4/3000ms/512；其他配置要求全部为正。
 
     /**
      * @brief 下次保存是否记录分片和模块 meta 的 CRC32C/size；关闭时摘要写 0。
      * 加载始终使用存档自身声明的校验策略。
      */
     bool storage_integrity_verify;
+
 } DominoEngineLaunchConfig;
 
 /**
@@ -56,6 +111,7 @@ typedef struct DominoEngineLaunchConfig {
 extern void dominoEngineInit(DominoEngineLaunchConfig launch_config);
 
 typedef struct DominoEngineClientData {
+    uint64_t session_id;         ///< 本轮会话身份，旧会话请求会被拒绝。
     uint64_t game_date_time_ns;  ///< Start 写入的累计未冻结现实纳秒基准，不会持续更新；业务计时使用 32 位现实毫秒。
     /* 以下日历字段尚未由引擎计算或写入。 */
     uint32_t game_date_time_sec;
@@ -63,7 +119,7 @@ typedef struct DominoEngineClientData {
     uint32_t game_year;
     uint32_t game_month;
 
-    uint8_t reserved[4072];  ///< 预留字段，填充至 4096 字节。
+    uint8_t reserved[4064];  ///< 预留字段，填充至 4096 字节。
 } DominoEngineClientData;
 static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096 bytes");
 

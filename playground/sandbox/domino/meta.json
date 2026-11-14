@@ -1,5 +1,5 @@
 {
-  "version": 25,
+  "version": 26,
   "integrity_verify": false,
   "info": {
     "account_id": "sandbox-account"
@@ -23,7 +23,8 @@
       "asset": 0,
       "movable_object": 0,
       "name": 0,
-      "description": 0
+      "description": 0,
+      "motivation": 0
     }
   },
   "sub_module": {
@@ -80,6 +81,10 @@
       "size": 0
     },
     "road_line": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "human_motivation": {
       "crc32c": 0,
       "size": 0
     }

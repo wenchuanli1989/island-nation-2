@@ -266,4 +266,6 @@ void serdeLoadMovableObject(const char* save_path, uint32_t total_count, uint32_
 void serdeSaveRegion(const char* save_path);
 void serdeLoadRegion(const char* save_path, uint32_t total_count, uint32_t shard_count);
 
+void serdeSaveHumanMotivation(const char* save_path);
+void serdeLoadHumanMotivation(const char* save_path, uint32_t total_count, uint32_t shard_count);
 #endif

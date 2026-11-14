@@ -1,3 +1,5 @@
+> 本文保留早期设计讨论；当前实现及验收以 [npc_ai.md](npc_ai.md)、[README.md](README.md#npc-ai-验证) 和 [AGENTS.md](AGENTS.md) 为准。旧草案、异常停调度和旧存档结构已替换。
+
 # Human 自主日常行为：规划与执行技术实施方案
 
 本文面向 Domino 当前 C23 代码，目标是支持同一宿主世界约 10,000 个 human 的自主日常活动，并保留按实际瓶颈扩展的空间。

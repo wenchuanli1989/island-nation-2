@@ -20,14 +20,16 @@ enum {
     DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS = 6000U,
 };
 
-/** @brief 统一检查睡眠恢复条件，按每完整现实分钟净恢复 9 分精力计算绝对结束时刻。
- * @param energy 已保证在 0..100 内的当前精力。
- * @param now_ms 本次睡眠开始的累计未冻结现实毫秒。
- * @param end_ms_out_ptr 非空输出；成功时完整写入结束时刻，失败保持不变。
- * @return CODE_OK 成功；精力已满足返回 ERR_GAME_STATE_INVALID，结束时刻溢出返回 ERR_OUT_OF_RANGE。
- * @note 内部纯计算入口，供草案构造、结果接收与任务启动各自检查当前条件；新计划的触发阈值由构造器检查。
- * 不读取时钟、不修改人物，也不替代按真实时间边界进行的睡眠结算。
- */
-DOMINO_CODE dominoHumanPrepareSleep(uint8_t energy, domino_runtime_ms_t now_ms, domino_runtime_ms_t* end_ms_out_ptr);
-
+#include "domino_shared_common.h"
+/** @brief 所有业务时间加减都先校验，不回绕或饱和。 */
+static inline domino_runtime_ms_t dominoHumanTimeAdd(domino_runtime_ms_t base, domino_runtime_ms_t delta) {
+    if (delta > UINT32_MAX - base)
+        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "human business time overflow");
+    return base + delta;
+}
+static inline domino_runtime_ms_t dominoHumanTimeSpan(domino_runtime_ms_t begin, domino_runtime_ms_t end) {
+    if (end < begin)
+        DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "human business time reversed");
+    return end - begin;
+}
 #endif

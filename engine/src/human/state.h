@@ -17,6 +17,7 @@ KHASHL_MAP_INIT(KH_LOCAL, DominoHumanIDMap, dominoHumanIdMap, domino_human_id_t,
 
 typedef kvec_t(DominoHuman) DominoHumanVec;
 typedef kvec_t(DominoHumanData) DominoHumanDataVec;
+typedef kvec_t(DominoMotivation) DominoMotivationVec;
 typedef kvec_t(DominoTask) DominoTaskVec;
 typedef kvec_t(DominoBehavior) DominoBehaviorVec;
 
@@ -24,6 +25,7 @@ extern DominoRWLock domino_human_data_lock;
 extern DominoHumanVec domino_all_human_list;
 extern DominoHumanDataVec domino_all_human_data_list;
 extern DominoHumanIDMap* dominoHumanIdMap;
+extern DominoMotivationVec domino_all_motivation_list;
 extern DominoTaskVec domino_all_task_list;
 extern DominoBehaviorVec domino_all_behavior_list;
 

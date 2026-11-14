@@ -10,6 +10,10 @@ static size_t countHuman(void) {
     return kv_size(domino_all_human_list);
 }
 
+static size_t countHumanMotivation(void) {
+    return kv_size(domino_all_motivation_list);
+}
+
 static size_t countHumanTask(void) {
     return kv_size(domino_all_task_list);
 }
@@ -123,6 +127,14 @@ const StorageModuleType g_storage_module_types[] = {
         .save_fn = serdeSaveHuman,
         .load_fn = serdeLoadHuman,
         .bind_references_fn = serdeBindHumanReferences,
+    },
+    {
+        .type_name = "human_motivation",
+        .max_per_shard = DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA,
+        .count_fn = countHumanMotivation,
+        .shard_count_fn = storageEntityShardCount,
+        .save_fn = serdeSaveHumanMotivation,
+        .load_fn = serdeLoadHumanMotivation,
     },
     {
         .type_name = "human_behavior",

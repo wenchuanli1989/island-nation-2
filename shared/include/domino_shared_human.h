@@ -32,12 +32,9 @@
 #define DOMINO_MAX_ORG_COUNT_PER_HUMAN 5
 #define DOMINO_MAX_ORG_BOSS_COUNT_PER_HUMAN 5
 
-/** @brief 人物业务状态；异常状态持久化，执行器跳过其任务、需求和规划，不自动恢复。 */
-typedef enum {
-    DOMINO_HUMAN_STATUS_NORMAL = 0,  ///< 正常参与模拟。
-    DOMINO_HUMAN_STATUS_EXCEPTION,   ///< 已提交任务失败或取消，保留业务现场并停止后续执行。
-    DOMINO_HUMAN_STATUS_COUNT,
-} DOMINO_HUMAN_STATUS;
+/** @brief 由合法活动或可启动动作推导；空闲和修复不隔离人物。 */
+typedef enum { DOMINO_HUMAN_STATUS_NORMAL, DOMINO_HUMAN_STATUS_THINKING } DOMINO_HUMAN_STATUS;
+struct DominoHumanRuntime;
 
 /** @brief 六项需求共用的百分制上限，字段直接保存整数分。 */
 enum {
@@ -46,17 +43,27 @@ enum {
 
 /** @brief 4096 字节人物数据；与核心共享 human_id 和数组索引，前部集中日程、需求与当前位置。 */
 typedef struct DominoHumanData {
-    /* 活动任务、决策、需求与生命状态；以下字段共占前 36 字节。 */
-    uint64_t random_state;                                                  ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
+    uint64_t display_name_version;
+    uint64_t manager_client_id;
+    uint64_t random_state;  ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
+    DominoHumanCheckTime motivation_retry;
+    domino_motivation_id_t motivation_ids[DOMINO_HUMAN_MOTIVATION_COUNT_MAX];
+    domino_task_id_t channel_queue[DOMINO_HUMAN_TASK_CHANNEL_COUNT][DOMINO_HUMAN_TASK_COUNT_MAX];
+    char display_name[DOMINO_HUMAN_DISPLAY_NAME_MAX + 1];
+    uint8_t queue_count[DOMINO_HUMAN_TASK_CHANNEL_COUNT];
+    uint8_t motivation_count;
+    bool sleep_allowed;
+    /* 活动任务、需求与生命状态。 */
     domino_human_id_t human_id;                                             ///< 与配对 DominoHuman.human_id 相同，必须非零。
     domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];  ///< 每槽最多一个活动任务，0 表示空槽；三个槽的任务类型须互异。
-    domino_runtime_ms_t needs_updated_at_ms;  ///< 自然需求已结算到的累计未冻结现实毫秒；按完整分钟推进，未满分钟保留，0 合法。
-    uint8_t energy;                           ///< 精力，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t food;                             ///< 饱食度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t water;                            ///< 水分充足度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t hygiene;                          ///< 清洁度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t recreation;                       ///< 娱乐满足度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t social;                           ///< 社交满足度，0..100 整数分，自然变化按现实分钟结算。
+    domino_runtime_ms_t settled_at_ms;
+    domino_runtime_ms_t needs_phase_ms;  ///< 自然需求不足一分钟的业务相位。
+    uint8_t energy;                      ///< 精力，0..100 整数分，自然变化按现实分钟结算。
+    uint8_t food;                        ///< 饱食度，0..100 整数分，自然变化按现实分钟结算。
+    uint8_t water;                       ///< 水分充足度，0..100 整数分，自然变化按现实分钟结算。
+    uint8_t hygiene;                     ///< 清洁度，0..100 整数分，自然变化按现实分钟结算。
+    uint8_t recreation;                  ///< 娱乐满足度，0..100 整数分，自然变化按现实分钟结算。
+    uint8_t social;                      ///< 社交满足度，0..100 整数分，自然变化按现实分钟结算。
     uint8_t health;
     uint8_t body_hp_value;
 
@@ -178,16 +185,16 @@ typedef struct DominoHumanData {
     uint8_t recent_visited_address_list_count;
     uint8_t recent_visited_address_id_list_head_index;
 
-    uint8_t other_info[2545];  ///< 预留补齐 4096 字节，不持久化。
+    uint8_t other_info[2025];  ///< 预留补齐 4096 字节，不持久化。
 } DominoHumanData;
 
 static_assert(sizeof(DominoHumanData) == 4096, "DominoHumanData must be exactly 4096 bytes");
 
 /** @brief 64 字节人物核心，集中保存身份、空间定位和运行调度标识；data 必须存在且独占。 */
 typedef struct DominoHuman {
-    DominoHumanData* data;            ///< 借用同索引的 Data；数组布局改变后须重新绑定。
-    uint64_t active_plan_request_id;  ///< 运行态：已提交且仍有效的规划请求 ID，0 表示无有效请求，不持久化。
-    uint64_t wakeup_game_timer_id;    ///< 运行态：人物唯一有效唤醒计时器 ID，0 表示未登记，不持久化。
+    DominoHumanData* data;               ///< 借用同索引的 Data；数组布局改变后须重新绑定。
+    struct DominoHumanRuntime* runtime;  ///< 借用固定运行数组；三类请求及待办不持久化。
+    uint64_t wakeup_game_timer_id;       ///< 运行态：人物唯一有效唤醒计时器 ID，0 表示未登记，不持久化。
 
     /* movable_object_id 为 0 时保存静态坐标，否则保存绑定后的运动对象指针。 */
     union {
@@ -202,7 +209,7 @@ typedef struct DominoHuman {
     domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_game_timer_id 非零时有效，不持久化。
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。
     domino_movable_object_id_t movable_object_id;  ///< 运动对象 ID，0 表示无关联对象。
-    domino_status_t status;                        ///< 持久化业务状态，取 DOMINO_HUMAN_STATUS。
+    domino_status_t status;                        ///< 由当前执行事实重建的工作状态，不持久化。
     uint8_t region_index;
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;

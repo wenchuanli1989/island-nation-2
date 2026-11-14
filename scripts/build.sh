@@ -27,7 +27,8 @@ configure_project() {
         [[ ! -f "$build_dir/Makefile" ]] || cmake --build "$build_dir" --target clean
         set -- --fresh "$@"
     fi
-    cmake --preset "$preset" "$@"
+    # 普通构建恢复默认入口；playground-build 的显式目录参数仍可覆盖。
+    cmake --preset "$preset" -DPLAYGROUND_SOURCE_DIR="$WORKSPACE_DIR/playground/src" "$@"
 }
 
 # 显示使用说明
@@ -47,8 +48,8 @@ show_usage() {
   format [target-dir]              运行 clang-format 格式化代码（可选：指定目录）
   clang-tidy [--strict] [target-dir]  运行 clang-tidy 检查代码
   scan-build [target]           使用 Clang Static Analyzer 分析代码
-  playground-build <source-dir> [debug|release]  为指定目录构建Playground（需包含 main.c）
-  playground-run <c-file> [debug|release] [program-args...]  构建并运行Playground（c-file 需位于 playground/ 下）
+  playground-build <source-dir> [debug|release|sanitize|tsan]  为指定目录构建Playground（需包含 main.c）
+  playground-run <c-file> [debug|release|sanitize|tsan] [program-args...]  构建并运行Playground（c-file 需位于 playground/ 下）
 
 clang-tidy 选项:
   --strict                   严格模式：发现错误时退出
@@ -85,12 +86,12 @@ playground_build_for_directory() {
             cmake_preset="debug"
             build_dir="build-debug"
             ;;
-        release)
-            cmake_preset="release"
-            build_dir="build-release"
+        release|sanitize|tsan)
+            cmake_preset="$build_type"
+            build_dir="build-$build_type"
             ;;
         *)
-            echo "错误: 不支持的构建类型 '$build_type'，仅支持 debug 或 release" >&2
+            echo "错误: 不支持的构建类型 '$build_type'，仅支持 debug、release、sanitize 或 tsan" >&2
             exit 1
             ;;
     esac
@@ -258,8 +259,8 @@ main() {
             local source_file="$1"
             local build_type="debug"
 
-            # 可选第二个参数指定构建类型（debug 或 release），默认为 debug
-            if [[ "${2:-}" == "debug" || "${2:-}" == "release" ]]; then
+            # 可选第二个参数指定构建预设，默认为 debug
+            if [[ "${2:-}" == "debug" || "${2:-}" == "release" || "${2:-}" == "sanitize" || "${2:-}" == "tsan" ]]; then
                 build_type="$2"
                 shift 2
             else
@@ -268,8 +269,7 @@ main() {
 
             playground_build_for_directory "$source_file" "$build_type"
 
-            local build_dir="build-debug"
-            [[ "$build_type" == "release" ]] && build_dir="build-release"
+            local build_dir="build-$build_type"
 
             local program="$WORKSPACE_DIR/$build_dir/bin/domino-playground"
             [[ ! -f "$program" ]] && { echo "错误: 程序不存在: $program" >&2; exit 1; }

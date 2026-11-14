@@ -35,4 +35,5 @@ extern bool dominoEngineIsStopping(void);
  */
 extern void dominoLoopProduceToMain(DominoEngineMessage* message_ptr);
 
+uint64_t dominoEngineClientSessionID(void);
 #endif

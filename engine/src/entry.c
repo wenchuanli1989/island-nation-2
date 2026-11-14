@@ -93,6 +93,11 @@ void dominoEngineThawTime(void) {
     notifyBusinessThreads();
 }
 
+// 会话序号属于进程，不随实例销毁清零，拒绝前一轮会话载荷。
+static uint64_t g_client_session_id;
+uint64_t dominoEngineClientSessionID(void) {
+    return g_client_session_id;
+}
 DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
     DOMINO_CODE code = checkClientWorldAccess();
     if (code == CODE_OK && message_ptr == nullptr) {
@@ -106,6 +111,18 @@ DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
             DOMINO_PRINT_MESSAGE("message submission rejected (%s, code=%d)", dominoErrorCodeToString(code), (int)code);
         }
         return code;
+    }
+    if (message_ptr->type != DOMINO_ENGINE_MSG_NONE && message_ptr->type != DOMINO_ENGINE_MSG_QUERY_NPC &&
+        message_ptr->type != DOMINO_ENGINE_MSG_SET_NPC_NAME)
+        return ERR_INVALID_MESSAGE;
+    if (message_ptr->type != DOMINO_ENGINE_MSG_NONE) {
+        const DominoNpcRequest* request = &message_ptr->payload.npc;
+        if (request->session_id != g_client_session_id || !request->request_id || !request->human_id)
+            return ERR_INVALID_PARAM;
+        if (message_ptr->type == DOMINO_ENGINE_MSG_SET_NPC_NAME &&
+            (request->name_len > DOMINO_HUMAN_DISPLAY_NAME_MAX || request->name[request->name_len] != '\0' ||
+             memchr(request->name, 0, request->name_len)))
+            return ERR_INVALID_PLAYER_NAME;
     }
     const DOMINO_CODE result = dominoThreadQueueProduce(&g_domino_to_main_loop_queue, message_ptr, false);
     if (result != CODE_OK) {
@@ -242,6 +259,9 @@ void dominoEngineStart(DominoEngineClientData* client_data_out_ptr) {
     }
     atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STARTING);
     /* 时钟保持冻结，等所有消费者就绪后再恢复。 */
+    if (g_client_session_id == UINT64_MAX)
+        DOMINO_EXIT_WITH_ERROR(ERR_ID_EXHAUSTED, "client session exhausted");
+    ++g_client_session_id;
     dominoLoggerModuleStart();
     dominoHumanModuleStart();
     dominoGameTimerModuleStart();
@@ -250,6 +270,7 @@ void dominoEngineStart(DominoEngineClientData* client_data_out_ptr) {
     atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_RUNNING);
     dominoEngineThawTime();
     if (client_data_out_ptr != nullptr) {
+        client_data_out_ptr->session_id = g_client_session_id;
         client_data_out_ptr->game_date_time_ns = dominoGetRuntimeDateTimeBase();
     }
     DOMINO_PRINT_MESSAGE("engine started at runtime_ns=%" PRIu64, dominoGetRuntimeDateTimeBase());
