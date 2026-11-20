@@ -1,6 +1,6 @@
 # Clang格式化配置文件
 # 基于Google代码风格，针对C语言优化
-# 与 CODING_STANDARDS.md 保持一致
+# 与 AGENTS.md「编码规范」保持一致
 
 # Language 注释掉以支持 C 和 C++ 头文件
 # Language: C

@@ -1,310 +1,188 @@
 # Domino 游戏内核项目
 
-基于 C23 编写的开放世界模拟内核。当前仓库重点在本地引擎、公共数据结构、日志、导航和 JSON 存档；在线/远程桥接层保留目录骨架，后续再接网络通信。
+基于 C23 的开放世界模拟内核，支持单机离线和在线多人两种模式。当前重点是本地引擎、公共数据结构、日志、导航、NPC AI 和 JSON 存档；在线／远程桥接层只有目录骨架，后续再接网络通信。
 
-**版本**: 0.0.1 | **C 标准**: C23 | **构建**: CMake + Clang
+**版本**：0.0.1 | **C 标准**：C23 | **构建**：CMake + Clang
 
----
+## 文档导航
 
-### 模块结构
+| 文档 | 内容 |
+| --- | --- |
+| [项目宪法](doc/项目宪法.md) | 核心约束：总则、生命周期、GameTimer、消息队列、日志、存档、简化校验、游戏时间、模块调用、业务数据、客户端边界 |
+| [AGENTS.md](AGENTS.md) | 实现细则与现状：构建细节、生命周期调用顺序、数据架构、NPC AI、存档格式、编码规范 |
+| [npc_ai.md](npc_ai.md) | NPC AI（动机 → 任务 → 行为 → 动画）设计边界 |
+| [blueprint.md](blueprint.md) | 长期设计目标：核心玩法、宿主世界、账号与国家交互、模拟流水线阶段 |
+
+## 模块结构
 
 ```
 domino/
-├── shared/              # 公共类型、错误码、日志、线程队列及文件/时间/路径工具
-├── engine/              # 本地引擎核心，包含 common/host/human/nav/social/storage/time/logger
-├── engine-remote/       # 远程引擎桥接层目录，当前仍处于骨架阶段
+├── shared/              # 公共类型、错误码、日志、线程队列、读写锁及文件／时间／路径工具
+├── engine/              # 本地引擎核心：common/host/human/nav/social/storage/time/game_timer/logger
+├── engine-remote/       # 远程引擎桥接层，骨架
 │   ├── local/           # 计划用于本地代理远程 engine
 │   └── server/          # 计划用于在线模式服务端入口
-├── client-hub/          # 客户端适配层目录，当前仍处于骨架阶段
+├── client-hub/          # 客户端适配层，骨架
+├── lib/                 # 第三方库：yyjson、klib、tinycthread
 └── playground/          # 算法实验和子系统原型验证
 ```
 
-client-hub 与 engine-remote/local 当前仍只管理各自的日志资源，公开入口也统一为四阶段：
+## 当前状态
 
-| 模块 | 初始化 | 启动 | 停止 | 销毁 |
-| --- | --- | --- | --- | --- |
-| client-hub | `dominoClientHubInit()` | `dominoClientHubStart()` | `dominoClientHubStop()` | `dominoClientHubDestroy()` |
-| engine-remote/local | `dominoEngineRemoteLocalInit()` | `dominoEngineRemoteLocalStart()` | `dominoEngineRemoteLocalStop()` | `dominoEngineRemoteLocalDestroy()` |
+- **引擎生命周期：** 对外只允许 `Init → Start → Stop → Destroy`；只调用过 Init 的实例也须先 Stop 再 Destroy。销毁后可在同一进程重新 Init 并切换存档。接口返回 `void`，非法顺序或错误线程调用直接报错退出。详见宪法第一章和 AGENTS.md 的「生命周期实现」。
+- **骨架模块：** client-hub、engine-remote/local 目前只管理各自的日志资源，提供四阶段入口（如 `dominoClientHubInit()`），尚未代管引擎。
+- **客户端通道：** `dominoEnginePushMsg()`／`dominoEnginePopMsg()` 只有通道骨架，尚未定义任何业务场景，主循环会丢弃收到的消息。
+- **NPC AI：** 第一阶段只实现恢复精力动机与自主睡眠。
+- **存档：** JSON 格式，版本 31，不兼容旧格式。保存时先写 staging 目录再 rename 提交；同一存档目录不允许多个进程同时使用。样例存档位于 `playground/sandbox/domino`。
 
-调用方按 Init → Start → Stop → Destroy 管理顺序；仅 Init 的实例也须先 Stop 再 Destroy。Start 只启动线程，Stop 排空日志并 join，Destroy 释放资源；销毁后可重新 Init。这些骨架入口尚未代管 engine 的生命周期，原有一次性运行入口已移除。
+## 环境要求
 
-引擎对外 Init／Start／Stop／Destroy 严格检查以下状态转换及调用线程，并保留 STARTING／STOPPING／DESTROYING 等协调状态。重复或错序调用在操作资源前直接输出 stderr 并退出，不静默返回，不依赖 assert。受引擎编排的内部模块和辅助调用链遵循资源有效的前置条件，不重复检查已由引擎保证的模块、索引或固定队列初始化条件，也不维护仅为这些重复检查存在的状态或查询接口。可直接调用的公共业务入口仍校验自身访问资格与输入，例如公开道路增删接口保留初始化资格检查。
+- Linux，目标环境为 Ubuntu 26.04 LTS
+- CMake 4.2.1+、Clang 22（C23）
+- glibc 2.43+：时间采样依赖 `timespec_get` 的 `TIME_MONOTONIC`；系统 glibc 版本较低时，见下文「独立 glibc」
+- Docker／Docker Compose（可选，用于远程开发）
 
-| 方法 | 允许的进入状态 | 成功后的状态 |
-| --- | --- | --- |
-| Init | 未初始化 | 已初始化 |
-| Start | 已初始化 | 运行中 |
-| Stop | 已初始化或运行中 | 已停止 |
-| Destroy | 已停止 | 未初始化 |
+## 构建
 
-仅 Init 的引擎 Stop 跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新，然后进入引擎 STOPPED 状态。内部无线程模块遵循 Init → Destroy，nav 由引擎按 Init → InitAfter → DestroyBefore → Destroy 调用；time Init 只准备冻结等待的互斥锁和条件变量，由引擎保证在客户端 DESTROYING 路径中释放同步资源并复位快照。这些内部接口不自行校验调用顺序；线程就绪、队列排空、业务参数及真实资源失败检查仍保留。shared logger／queue 可独立于引擎使用，继续保留各自的公共生命周期校验；client-hub 和 engine-remote 的日志包装层直接使用该公共边界。
-
-### 当前引擎生命周期
-
-`dominoEngineInit(launch_config)` 按固定顺序初始化模块：
-
-```text
-logger -> main queues -> common -> time -> host -> nav(before) -> social -> human -> game_timer -> storage(load) -> nav(after)
-```
-
-- `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，其他查询、读取或解析失败均打印 stderr 并退出进程。
-- `launch_config.storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载使用存档自身声明的校验策略。
-- Init 准备日志文件、主循环双向队列、human 执行器收件箱、三类规划器的十二条队列与运行映射表、game_timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
-- 每次 `dominoEngineInit()` 使用静态初值或上一轮 Destroy 已恢复的空世界基线，再从当前 `storage_path` 加载；上一轮成功 Destroy 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
-- `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
-
-客户端不得直接提交任务请求、规划请求或规划结果，也不通过客户端消息转发这些内容。任务由引擎内部自主决策、规划并提交；测试通过模块内部夹具、存档场景或自主调度验证，不为测试增加引擎对外任务提交接口。
-
-引擎不提供通用的内部数据读写，客户端不能按实体类别、字段 ID 或内部结构布局读取或写入引擎数据。需要客户端交互时，每个业务场景单独定义消息类型，参数和返回数据结构针对该场景设计，定义在只依赖 C 标准库头文件的 `domino_engine_protocol.h`；`domino_engine.h` 包含它并声明生命周期及收发接口。当前尚未定义业务场景：`dominoEnginePushMsg()`／`dominoEnginePopMsg()`、主循环和接入层只保留通道骨架，`DominoEngineMessage` 只有 `id` 和 `type`，主循环把收到的消息按不支持的类型记录一次并丢弃，不回包。
-
-`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 依次创建执行器和动机／任务／行为三个规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。human InitAfter 已为每个人物准备首次本地待办，执行器启动后按有限批次推进人物、投递规划并登记唤醒。Start 返回不表示全部人物已经登记 game_timer、完成规划或启动任务。
-
-普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结；观察到冻结后不开始新批次，未取出的消息留队。已通过入口检查的有限批次即使随后发生冻结，仍可完整出队、处理及投递消息。主循环、human 执行器和规划器按观察到的冻结代次进入 time 等待；正常无工作时仍使用队列版本等待。time Thaw 广播冻结等待者；Stop 保持时钟冻结并单独通知 time，原有队列及 GameTimer 通知保留。原本等待消息或计时的线程在普通冻结时保持等待。恢复直接续接留队消息和已有调度，不再全员扫描。队列自身不检查冻结，引擎内部当前批次的规划请求及结果仍可入队，消费线程观察到冻结后留待恢复处理；日志继续输出。冻结成功本身不保证世界已经停止写入或可立即保存。
-
-time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
-
-所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行器、动机／任务／行为三个规划线程和 game_timer，再把全部人物的共同结算游标推进到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 game_timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 game_timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
-
-Init／Start／Stop／Destroy、Freeze／Thaw 等生命周期接口返回 `void`。无论处于初始化、开始、停止、冻结、解冻、销毁还是运行阶段，致命错误都通过 `DOMINO_EXIT_WITH_ERROR` 直接输出到 stderr，再由 `common.c` 中的公共方法执行 `exit(EXIT_FAILURE)`；标准退出处理仍可执行。不再维护实例首错、`FAILED` 生命周期状态或跨线程故障传播。正常启动就绪、生命周期状态、通知、join 和资源释放顺序继续保留；失败退出不进入正常保存或清理流程。保存失败由后续新进程按磁盘事务恢复。`lib/` 下第三方库代码保持原样，其原有终止行为保留，不纳入项目自有模块的退出实现改造。
-
-业务资格拒绝、查询未命中、队列为空及正常排空结束仍按接口返回业务或控制结果，不统一视为致命错误。运行阶段的非致命错误和正常日志通过日志模块输出；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断统一使用 `DOMINO_PRINT_MESSAGE` 直接输出 stdout。日志级别不决定是否退出，致命错误必须显式调用公共退出方法。所有等级日志按模块文件、实例默认文件、stdout 的顺序选择唯一输出目标，日志内容不写 stderr；日志队列满时向当前模块的同一输出流同步提示一次并刷新，再通过条件变量等待直到入队。业务队列仍非阻塞入队，内部运行链路无法继续交付必要消息时直接报错退出。logger 在 Init 中以追加模式打开文件并准备队列，Start 创建 writer，Stop 排空队列、join writer 并刷新输出，Destroy 关闭所拥有的文件并释放队列，调用方显式管理顺序；stdout 只刷新、不关闭。
-
-首次 Init 使用静态初值，再次 Init 使用上一轮 Destroy 已复位的空状态；Init 只创建资源、绑定本轮配置和加载数据，不重复清空全局容器、世界计数或模块结构。time Init 只初始化等待同步资源，不重置时钟或提前采样；加载只恢复累计基准，Start 解冻时才建立单调起点。通用 queue／logger 首次对象须以静态初值、`={0}` 或 `calloc` 零初始化，Init 在创建资源前检测重复调用；Destroy 后可直接再次 Init。
-
-Destroy 返回前，common、host、social 等模块的容器指针、数量、容量及索引指针均已清空，game_timer 的线程句柄存储和唤醒状态随模块整体复位；引擎配置、路径及线程句柄存储也恢复初始值。世界保存和容器释放完成后调用 `dominoTimeModuleDestroy()`，释放 time 等待同步资源，把内存中的累计基准、单调采样起点、快照版本及等待计数归零，将冻结代次恢复为 1 并保持冻结。不依赖下一次 Init 覆盖旧状态，也不改动已保存的累计时间；再次加载同一存档时继续恢复原基准。
-
-### 数据与存档
-
-- 全局实体以 `kvec` 扁平数组保存，`khashl` 维护 `id -> array index` 映射。ID 的 `0` 值保留为无效值，全局自增计数器随存档持久化。
-- `DominoHuman` 固定为 64 字节，保存唯一 `human_id`、必需的 data 指针、运行期调度状态（NORMAL／THINKING，不持久化）、位置或运动对象引用及地域／空间。规划请求资格、唤醒计时器和本地待办保存在 human 模块内部与人物同序的运行数组中，不进入核心或存档。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组同序，共用人物 ID 索引；AI 字段（结算游标、需求、待处理外部信息、动机与任务清单、运行任务和待执行队列、显示称呼）集中在 data 前部，身高体重、情绪、财富、组织关系、建筑与地址等相关属性分组保存。其他核心实体多为 128 字节。结构按自然对齐紧凑排列，`other_info` 补齐预留空间；这一布局尚无缓存性能实测结果。
-- storage 先把完整存档写入同父目录 staging 并刷盘，再按 `active -> .prev`、`staging -> active` 的顺序 rename；每次关键目录项变更后都会刷父目录，避免半成品覆盖正式存档。实体按注册表顺序写入 `regions.json` 或 `{type}_{shard_id}.json`，再写 `{type}.meta.json` 和根 `meta.json`。
-- 加载 `meta.json` 前会自动恢复未完成的存档事务：只有 `.prev` 时恢复旧存档，active 与 `.prev` 同时存在时保留已提交的 active 并清理旧备份。active、staging 或 `.prev` 为 symlink/普通文件时会拒绝加载或提交，递归清理也只删除 symlink 本身，不进入链接目标。
-- 存档事务按单写者设计，同一个 `storage_path` 不允许多个 Domino 进程并发加载或保存。事务提交与恢复实现见 [`engine/src/storage/transaction.c`](engine/src/storage/transaction.c)。
-- `nav` 运行期长期维护 canonical 基础段与追加式增量尾，增删不会触发全量排序；保存前才把逻辑删除的数据排到末尾，并按 `(region_index, road_network_type)` 压实 data segment。路径矩阵和 fork road 指针缓存只存在内存中，不参与序列化。
-- NPC AI 按 [`npc_ai.md`](npc_ai.md) 的 动机 → 任务 → 行为 → 动画 架构实现第一阶段（恢复精力动机与自主睡眠）。全局动机池、任务池和行为记录池分别保存 `DominoMotivation`、`DominoTask`、`DominoBehavior`，各由 ID map 定位；动机、任务和行为 ID 以存档世界内最后已分配值递增，耗尽致命退出，永不复用。任务在计划接受时取得 `task_id`（尚无执行部分），首次启动才建立执行部分；未来行为计划是任务独占的值序列，行为只在启动时分配 ID 并建立执行记录。每人物持有最多 8 个动机、32 个任务；同一时间只有一个运行任务，其余排在一条待执行队列中，统一保存 `task_id`，任务之间没有依赖。运行任务有主通道（主行为）和两个辅助通道（辅助行为），每通道至多一个当前行为；同一任务内的行为可以独立，也可以有启动／伴随／完成依赖。外部信息登记后由运行任务的应激规则选择完全让位或接受插入辅助行为。人物只保存一个共同结算游标 `settled_at_ms`；自然需求在业务时间整分钟边界变化，行为周期效果在有效进度的整周期边界发放，两类相位分别由游标和有效进度取余得到，不另存；运行期与 Stop 共用分段结算、行为终态及行为依赖即时归并和统一任务决策。不保留人物异常停调度、PLANNED／RUNNING 混合状态或行为 PENDING／SKIPPED。
-- 当前存档版本为 31，拒绝旧格式。`human.entities[].data` 保存结算游标、睡眠条件、显示称呼、待处理外部信息（类别、来源、轮次）、动机／任务清单、运行任务和待执行队列；`human_motivation` 保存动机身份、类型、生命周期（终态在 `status` 中，回收后的动机不再保存）、需求轮次与承接任务、累计实施次数、最近失败原因和按时间顺序的最近 10 条成功明细；`human_task` 保存工作身份、动机引用、回应的外部信息类别、完成指标、截止点、最后已分配的步骤序号、未来行为计划值（步骤序号、通道、插入标志、行为依赖）、行为规划重试依据、让位请求和完成条件已成立标志，以及可选执行部分（实际时刻、各通道当前行为、最近行为、主行为成功／失败／取消计数、归并进度和结束原因）；`human_behavior` 保存执行记录的步骤序号、通道、插入标志、行为依赖、类型、状态、实际时刻、目标有效时长、有效进度和结束原因。根 meta 的 `global_increment_id.motivation/task/behavior` 为最后已分配 ID。规划请求、候选、计划运行期版本、动机待评估和任务待规划标志、动机和任务的下次规划时刻、计时器和本地待办只属于本次运行，加载后由正式事实重建（InitAfter 为每个人物置动机待评估标志、为有有效动机的人物置任务待规划标志）。
-- `playground/sandbox/domino` 已同步版本 31，人物及其 data 的 `human_id=1`，`data.energy=20` 表示 20 分精力，`data.wealth=100`，动机、任务清单及待执行队列为空，运行任务为 0，没有待处理外部信息，显示称呼为空。`data.current_building_id=1` 引用名称为“样例住宅”的建筑，其类型、产权及睡眠资格规则尚未定义；样例不证明该建筑已具备睡眠服务。`data.sleep_address` 保持为 0，它是导航路口 ID，不能填写建筑 ID。
-
-### 第三方库维护策略
-
-`lib/klib/` 只保留 Domino 当前使用的 `kvec.h` 和 `khashl.h`。官方基线为 [attractivechaos/klib](https://github.com/attractivechaos/klib) master，2026-06-04 对比到 commit `97a0fcb790b43b9e5da8994f4671021fec036f19`；官方源码见 [`kvec.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/kvec.h) 和 [`khashl.h`](https://raw.githubusercontent.com/attractivechaos/klib/97a0fcb790b43b9e5da8994f4671021fec036f19/khashl.h)。本仓库版本属于随仓维护版：保留官方数据结构、宏接口和核心算法，只围绕 Domino 的高频内存访问、错误可诊断性和静态检查要求做窄范围补丁。
-
-- `kvec.h`：`kv_*` 扩容通过 `kv_realloc_array()` 检查大小溢出，并在分配失败时输出诊断后 `abort()`。`lib/` 下第三方库代码保持原样；生命周期、存档和运行期均使用原有公开接口，保留库内部的终止行为，不额外增加可失败接口或绕过层。数组布局、增长策略和原公开宏接口保持不变。
-- `khashl.h`：保留官方 `r30` 的开放寻址、75% 默认负载因子、Fibonacci hashing、bucket 布局和使用方式。本地只补强错误传播和边界保护：`KHASHL_SET_INIT`/`KHASHL_MAP_INIT` 生成的 `prefix##_resize()` 返回底层 resize 结果；收缩分支先保存 `Krealloc()` 返回值，失败时返回 `-1`，避免直接覆盖原 `keys` 指针；`kh_exist()` 增加 `x < kh_end(h)` 判断，降低错误迭代器导致越界读的风险。
-- 静态分析适配：两个头文件包裹 `NOLINTBEGIN`/`NOLINTEND`，屏蔽 klib 宏内部短变量名和多声明风格对 clang-tidy 的噪声，避免第三方宏风格污染项目质量检查。
-- 后续同步原则：从官方 klib 更新时优先保留上述本地补丁；如果官方已经覆盖同类修正，再移除本地重复补丁，保持差异可解释、可审计。
-
-### 注意事项
-- engine 内部不要把“地域”和“线程”做一对一绑定。当前数据是全局数组，地域只是过滤、分组、调度和存档分段维度；实际并发应由运行时根据对象优先级和批次创建工作任务。
-
-
----
-
-### 环境要求
-
-- Linux 目标环境：Ubuntu 26.04 LTS，glibc 2.43+；时间采样依赖 `timespec_get` 的 `TIME_UTC` 和 `TIME_MONOTONIC`。
-- CMake 4.2.1+
-- Clang 22（C23）
-- Docker / Docker Compose（可选，用于远程开发）
-
----
-
-### macOS 本地调试（当前 Intel Mac）
-
-本地调试入口保留，范围为默认引擎 Playground 的 Debug。当前时间采样要求 SDK 和运行库支持 `timespec_get(TIME_MONOTONIC)`；缺少该能力的 macOS 环境使用上述 Linux/Docker 环境。
-满足此条件时，使用支持 C23 的 Clang、CMake 4.2.1+，在仓库根目录执行：
+所有构建都通过 `scripts/build.sh` 执行，产物位于 `build-<preset>/bin/` 和 `build-<preset>/lib/`。
 
 ```bash
-./scripts/build.sh macos-debug
+./scripts/build.sh debug                 # 调试模式
+./scripts/build.sh debug engine          # 只构建单个目标：shared, engine, engine-remote-local, engine-remote-server, client-hub, playground
+./scripts/build.sh release               # 发布模式（-O3, LTO）
+./scripts/build.sh release-native        # 发布模式加 -march=native，产物仅限本机运行
+./scripts/build.sh profile               # gprof 性能分析
+./scripts/build.sh sanitize              # ASan + UBSan + LSan
+./scripts/build.sh tsan                  # ThreadSanitizer
+./scripts/build.sh clean                 # 清理所有 build-* 目录
 ```
 
-产物和编译数据库位于 `build-macos-debug/`，与 Docker 的 `build-debug/` 分开。
-macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供，业务代码继续使用标准线程 API。
-VS Code 安装 **clangd**、**CodeLLDB** 扩展后，可用 `F12` / `Cmd+点击` 跳转函数定义。
-选择 **「调试Playground」** 按 `F5`，会自动构建并调试固定入口 `playground/src/main.c`。
+### 独立 glibc
 
-### 构建
-
-**命令行构建**（推荐使用 `scripts/build.sh`）：
-
-```bash
-# 调试模式
-./scripts/build.sh debug
-
-# 发布模式
-./scripts/build.sh release
-
-# 本机极致优化（-march=native，仅限本机运行）
-./scripts/build.sh release-native
-
-# 单独构建某个目标，例如：shared, engine, client-hub, playground
-./scripts/build.sh debug engine
-
-# 清理
-./scripts/build.sh clean
-```
-
-**使用独立安装的 glibc 2.43（Linux x86_64）**：
-
-`scripts/build.sh` 仅通过环境变量 `DOMINO_GLIBC_ROOT` 选择独立 glibc；未设置或为空时使用系统默认 glibc，不探测安装目录：
+当系统 glibc 低于 2.43（例如 Ubuntu 24.04 的 2.39）时，通过环境变量 `DOMINO_GLIBC_ROOT` 指定独立安装的 glibc 2.43：
 
 ```bash
 DOMINO_GLIBC_ROOT="$HOME/.local/opt/glibc-2.43" ./scripts/build.sh debug
-
-# 使用系统默认 glibc
-env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
+env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ```
 
-该目录须包含配套的 glibc 运行库、开发头文件、启动对象、动态加载器、GCC 的 `libgcc_s.so.1`，以及 Linux 内核 ABI 头文件。
-当前独立安装来自 Ubuntu 官方 `resolute-updates` 的 `2.43-2ubuntu2.4` 软件包，解包后保留 `usr/include` 和
-`usr/lib/x86_64-linux-gnu` 布局，并提供 `lib -> usr/lib`、`lib64 -> usr/lib64` 链接；`scripts/setup-glibc.sh` 将软件包版本及 SHA256 记录在安装目录的 `glibc-packages.sha256` 中。
-安装不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。工具链同时选择编译用 sysroot、ELF 加载器和运行期库搜索路径，生成的程序可直接运行；运行时须保留该安装目录。
-改变或取消 `DOMINO_GLIBC_ROOT` 时，构建脚本会自动清理对应目录的编译产物并重建 CMake 配置缓存，重新检测工具链。
-系统 glibc 仍须满足上述环境要求；当前宿主机的 glibc 2.39 不支持 `TIME_MONOTONIC`，须指定独立安装的 2.43 才能编译当前源码。
+- **安装：** `scripts/setup-glibc.sh` 安装 Ubuntu 官方 `2.43-2ubuntu2.4` 软件包，并按 `scripts/glibc-2.43-amd64.sha256` 校验。它不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。
+- **构建与运行：** 工具链会同时设置 sysroot、ELF 加载器和运行期库路径，生成的程序可以直接运行，但运行时必须保留该安装目录。
+- **切换：** 改变或取消该变量时，构建脚本会自动清理对应产物并重建 CMake 缓存。
 
-**Playground 构建与运行**：
+## Playground
 
 ```bash
-# 构建并运行指定 playground 源码
-./scripts/build.sh playground-run playground/算法/路径规划/弗洛伊德/main.c
-
-# 仅构建
-./scripts/build.sh playground-build playground/算法/路径规划/弗洛伊德/main.c debug
+./scripts/build.sh playground-run playground/算法/路径规划/弗洛伊德/main.c          # 构建并运行
+./scripts/build.sh playground-build playground/算法/路径规划/弗洛伊德/main.c debug  # 只构建
 ```
 
-**NPC AI 验证**：
+默认 Playground 会完成一次引擎生命周期后退出，例如 `(cd build-debug && ./bin/domino-playground)`。存档写在 `build-debug/runtime/sandbox/`，再次运行会加载该存档。
+
+### NPC AI 验证
 
 ```bash
 ./scripts/build.sh playground-run playground/npc_ai/main.c debug      # 也支持 release、sanitize、tsan
 ```
 
-验证入口先运行模块内部夹具（`engine/src/human/playground.c`，仅 `DOMINO_PLAYGROUND_MODE` 编译）：自主睡眠闭环、分段与迟到结算一致、预测与真实结算共用算术、外部补足精力、睡眠条件失效与修复、实施历史滚动、请求身份与请求不设期限、候选必要／可选提交与容量、规划判断的信息差与轮次锚点、行为依赖同边界传播与失效、行为候选的依赖审核与启动、截止点边界、终态明细回收、同一任务主辅行为同边界共同作用、通知晚到、触发路径共用决策、应激接受插入（任务等插入行为结束再成功）、应激完全让位（回应任务就绪才让位、结束后原任务恢复）、外部信息轮次，测试验收专用人物输入（睡眠条件、精力、外部信息）的入口校验与先结算后写入，以及动机规划与任务规划的置位事件、动机终结与回收、下次规划时刻与整份拒绝的兜底时刻、行为结果的锚点复核与重试，以及行为规划只询问运行任务和队首（让位请求优先、队首之后不提前规划）。随后在真实线程下以样例存档副本运行端到端场景（测试线程持 human 读锁直接观察，不经客户端通道）：自主睡眠、客户端收发通道骨架（消息可入队、主循环拒绝未定义类型且不回包）、冻结、停止后读档延续（读档后每人动机、任务各规划一次，存档不含动机规划重试字段）、第二轮需求、条件失效与恢复、仅 Init 生命周期，以及受控规划器下睡眠遇到外部信息完全让位、回应通话与伴随的消息记录并行，停止保存后读档继续，通话结束后睡眠恢复。端到端存档写在构建目录的 `runtime/` 下（如 `build-debug/runtime/`）。
+验证分两步：
 
-**其他构建模式**：
+1. 运行模块内部夹具 `engine/src/human/playground.c`，覆盖结算一致性、规划请求与结果复核、候选提交与容量、行为依赖、应激让位与插入，以及规划触发等。
+2. 在真实线程下，用样例存档的副本运行端到端场景：自主睡眠、冻结、停止后读档继续、条件失效与恢复、仅 Init 的生命周期，以及睡眠被通话打断后恢复。
+
+端到端存档写在构建目录的 `runtime/` 下。验收清单见 [npc_ai.md](npc_ai.md) 第 12.4 节。
+
+## 代码质量
 
 ```bash
-./scripts/build.sh sanitize    # AddressSanitizer
-./scripts/build.sh tsan        # ThreadSanitizer
-./scripts/build.sh profile     # gprof 性能分析
+./scripts/build.sh format engine                 # clang-format，须指定模块或目录
+./scripts/build.sh clang-tidy                    # 静态检查
+./scripts/build.sh clang-tidy --strict engine    # 严格模式，发现错误时退出
+./scripts/build.sh scan-build                    # Clang Static Analyzer
 ```
 
----
+`format` 必须指定目标，不带目标时脚本直接报错，避免改写 `lib/` 下的第三方代码；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。
+
+## 开发环境
+
+### macOS 本地调试（Intel Mac）
+
+只支持默认 Playground 的 Debug 构建，且 SDK 须支持 `timespec_get(TIME_MONOTONIC)`；不满足时请改用 Linux 或 Docker。
+
+```bash
+./scripts/build.sh macos-debug
+```
+
+- **产物：** 位于 `build-macos-debug/`，与 Linux 的 `build-debug/` 分开。
+- **线程库：** macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供。
+- **调试：** VS Code 中选择「调试Playground」按 `F5`，会先构建再调试固定入口 `playground/src/main.c`。
 
 ### Codex Cloud
 
-独立脚本 `setup-codex-cloud.sh` 面向 **Debian 13（trixie）Linux x86_64**，普通用户即可执行，需要联网。在
-[Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
+`setup-codex-cloud.sh` 面向 Debian 13（trixie）x86_64，普通用户即可执行，需要联网。在 [Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
 
 | 配置 | 内容 |
 | --- | --- |
-| Install script（旧版界面为 Setup script） | `bash setup-codex-cloud.sh` |
+| Install script | `bash setup-codex-cloud.sh` |
 | Start instructions | 每个新 shell 先 `source /workspace/.local/domino/env.sh` |
-| Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可指定其他可写绝对路径，不含空白、双引号或反斜杠） |
-| Public internet access | 启用 Package managers；确保允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
+| Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可改为其他可写绝对路径，不含空白、双引号或反斜杠） |
+| Public internet access | 启用 Package managers，允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
 
-脚本独立于 Ubuntu 远程开发安装入口 `setup-dev.sh`，默认将工具链和 glibc 安装到 `/workspace/.local/domino`，不调用 `sudo`、不修改系统软件源、密钥、alternatives 或 dpkg 数据库。基础镜像须已提供 APT、Debian 签名密钥、curl、GnuPG、dpkg-deb、GCC/G++、Make、Git、Perl 和系统 Python 3.13；缺少时脚本会明确报错。
-
-脚本将 APT 配置、索引、缓存和日志隔离到安装目录，仅读取系统 dpkg 状态解析缺失依赖。校验 LLVM 官方密钥指纹和软件源签名后，下载并解包 Debian `trixie-backports` 的 CMake（>= 4.2.1）、Clang 22、格式化／分析／调试工具、ThinLTO 插件及 Sanitizer 运行库，不执行软件包维护脚本。安装根目录的 `packages.versions` 和 `packages.sha256` 记录本次工具软件包版本与摘要。
-
-Debian 13 系统 glibc 不提供当前源码所需的 `TIME_MONOTONIC`。脚本调用 `scripts/setup-glibc.sh` 下载固定版本 `2.43-2ubuntu2.4`，按 `scripts/glibc-2.43-amd64.sha256` 校验后解包至安装根目录的 `glibc-2.43/`，复用宿主工具链的 Linux ABI 头文件及 `libgcc_s.so.1`；不添加 Ubuntu APT 源，不替换系统 glibc。
-
-安装生成 `env.sh`，每个新 shell 都须先 source 它，以启用工具 PATH 并设置 `DOMINO_GLIBC_ROOT`；自定义安装目录时同步调整 source 路径。该文件会覆盖旧 Cloud 配置中的 `/opt/domino/glibc-2.43`，无需继续配置旧变量。工具包装器只为工具进程及其子进程设置依赖库路径，独立 glibc 不加入全局 `LD_LIBRARY_PATH`。脚本从仓库读取 glibc 辅助脚本和校验清单，须连同仓库使用，可重复执行以刷新安装。
-
-在仓库根目录使用现有命令构建、运行：
+- **安装内容：** 隔离 APT 配置，校验 LLVM 密钥和软件源签名后，解包 Debian `trixie-backports` 的 CMake、Clang 22、调试分析工具和 Sanitizer 运行库，并通过 `scripts/setup-glibc.sh` 安装独立 glibc 2.43。
+- **不改动系统：** 不调用 `sudo`，不修改系统软件源、密钥或 dpkg 数据库，也不执行软件包维护脚本。
+- **使用前提：** 脚本须连同仓库使用，可重复执行以刷新安装；基础镜像须已有 APT、curl、GnuPG、dpkg-deb、GCC、Make、Git、Perl 和 Python 3.13。
 
 ```bash
 bash setup-codex-cloud.sh
 source /workspace/.local/domino/env.sh
 ./scripts/build.sh debug
 (cd build-debug && ./bin/domino-playground)
-./scripts/build.sh release
-(cd build-release && ./bin/domino-playground)
 ```
 
-默认 Playground 完成一次引擎生命周期后退出，存档位于 `build-debug/runtime/sandbox/`；再次运行会加载该存档。
+2026-10-30 已在真实 Codex Cloud（Debian 13.6，无 sudo 的普通用户）完成验证：首次与重复安装，`debug`、`release`、`sanitize` 构建，以及 Playground 的保存和重载都通过。默认执行沙箱的 ptrace 限制会挡住 LeakSanitizer，需要放宽沙箱后再以同一普通用户运行。
 
-**用户目录安装验证（2026-10-30）**：在实际 Codex Cloud Debian 13.6 环境中，以 `agent`（UID 1000、无 sudo）完成首次安装和重复安装，使用 Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。
-
-- `debug`、`release`（含 ThinLTO）、`sanitize` 全量构建通过；Debug／Release 默认 Playground 的启动、保存和重载通过，ELF 加载器和 RUNPATH 指向用户目录下的 glibc。
-- ASan／UBSan／LeakSanitizer 的默认 Playground 及重载检查通过。当前默认执行沙箱会触发 LeakSanitizer 的 ptrace 限制，需要放宽执行沙箱后以同一普通用户运行；不需要 root，也未关闭泄漏检测。
-- 工具版本检查、LLDB Python 模块加载、重复 source 激活以及已读取的系统 APT 配置、签名密钥和 dpkg 状态摘要检查通过；系统 glibc 保持 2.41。未复测其他构建预设、完整静态分析、调试器附加或新环境恢复。
-
-**原系统级脚本的 Debian 13 验证记录（2026-10-30）**：使用官方 Debian 13.7 amd64 rootfs、PRoot 5.5、Clang 22.1.8、CMake 4.3.4 和独立 glibc 2.43。以下为改为用户目录安装前的历史记录，不代表当前脚本的验证结果。
-
-- 全新安装、重复安装、修复旧 sysroot 的 ABI 头文件断链均通过，系统 glibc 保持 2.41。
-- `debug`、`release`、`release-native`、`sanitize`、`tsan`、`profile` 六种配置全量构建通过，零警告、零错误；ELF 加载器和 RUNPATH 均指向独立 glibc。
-- Debug／Release／Release-native／Profile 的服务端、默认 Playground 及存档重载通过；当时的临时 `human_task_store` 回归通过，该入口现已移除。
-- LeakSanitizer 不能在 PRoot 的 ptrace 环境中运行；复制 Sanitizer 可执行文件，仅调整副本的加载器和 RUNPATH 到宿主可访问路径后，服务端及 Playground 的 ASan／UBSan／LeakSanitizer 检查通过。TSan 编译通过，但运行时内部崩溃；同一工具链的独立 `thrd_create`／`thrd_join` 最小程序也能复现，尚不能完成 TSan 运行检查。
-
-以上历史验证覆盖 Debian 13 用户态安装、编译和上述运行路径；当时未接入真实 Codex Cloud 托管实例，其平台网络、权限和内核行为未完成端到端验证。
-
-### 开发环境安装（Ubuntu 26.04 服务器）
-
-在 Ubuntu 26.04 服务器上直接执行：
+### Ubuntu 26.04 服务器
 
 ```bash
 sudo bash setup-dev.sh
-# 如需指定 LLVM 主版本：
-sudo LLVM_VERSION=22 bash setup-dev.sh
+sudo LLVM_VERSION=22 bash setup-dev.sh    # 指定 LLVM 主版本
 ```
 
-脚本可单独复制到服务器运行，不要求安装 Docker 或下载整个仓库；root 用户可直接执行 `bash setup-dev.sh`。
-脚本仅支持 Ubuntu 26.04，其他系统直接报错；使用系统自带 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
-脚本沿用原 Dockerfile 的开发环境配置：设置 root 的 Git 身份为 `domino <domino@domino.com>`、创建 SSH 密钥，并启用 root 密码登录，密码为 `123456`。
+- **使用方式：** 脚本可以单独复制到服务器运行，不需要 Docker 或整个仓库；只支持 Ubuntu 26.04，使用系统 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
+- **注意：** 脚本会把 root 的 Git 身份设为 `domino <domino@domino.com>`、创建 SSH 密钥，并开启 root 密码登录（密码 `123456`），只适合开发环境。
 
-### 开发环境（Docker + VSCode Remote）
+### Docker + VS Code Remote
 
-镜像基于 Ubuntu 26.04 LTS，LLVM 22 和 Kitware 软件源均使用 `resolute` 发行版。
-Dockerfile 在构建镜像时直接调用 `setup-dev.sh`，与服务器安装使用相同流程。
+镜像基于 Ubuntu 26.04 LTS，构建时直接调用 `setup-dev.sh`。
 
-1. 启动开发环境：`docker compose up -d --build`
-2. 连接 VSCode：
-   - `Cmd+Shift+P`，输入 "Remote-SSH: Connect to Host"
-   - 输入：`root@localhost -p 10022`
-   - 密码：`123456`
-3. 远程环境建议安装插件：**clangd**、**CodeLLDB**、**clang-format**、**GitLens**
+1. 启动：`docker compose up -d --build`（更新 Dockerfile 或安装脚本后重新执行）
+2. VS Code 执行「Remote-SSH: Connect to Host」，连接 `root@localhost -p 10022`，密码 `123456`
+3. 建议安装插件：clangd、CodeLLDB、clang-format、GitLens
 
-镜像通过 `update-alternatives` 将指定 LLVM 版本注册为 `/usr/bin/clang`、`clangd`、`clang-format` 等无版本号命令。
-SSH 会话会重新设置环境，不能仅依赖 Dockerfile 中的 `ENV PATH`，否则 VSCode 的非交互式构建任务可能找不到编译器。
-已有容器更新 Dockerfile 或安装脚本后，在宿主机项目目录重新执行 `docker compose up -d --build`，再重新连接 VSCode Remote-SSH。
-连接后可执行以下命令验证：
+连接后验证工具链：
 
 ```bash
 command -v clang clangd clang-format clang-tidy lldb scan-build
 ./scripts/build.sh playground-build playground/src/main.c debug
 ```
 
----
-
-### VSCode 任务
+### VS Code 任务与调试
 
 - **Playground**：对当前 C 文件执行构建或构建并运行（默认）
-- **Playground (Debug Build)**：仅构建当前 Playground 文件
-- **清理构建**：清理所有 build-* 目录
-- **运行 clang-format**：代码格式化
-- **运行 clang-tidy**：静态检查
+- **Playground (Debug Build)**：只构建当前 Playground 文件
+- **清理构建**、**运行clang-format**、**运行clang-tidy**
+- **调试**：设置断点后按 `F5`，选择「调试Playground」，会先执行 Playground 构建任务
 
----
+## 第三方库
 
-### 调试
+| 库 | 位置 | 说明 |
+| --- | --- | --- |
+| yyjson | `lib/yyjson/` | JSON 解析 |
+| klib | `lib/klib/` | 只保留 `kvec.h`、`khashl.h`；随仓维护版，基于官方 commit `97a0fcb7`，已带分配溢出检查、resize 失败返回值等本地补丁 |
+| TinyCThread | `lib/tinycthread/` | 为 macOS 提供 `<threads.h>` |
 
-- 设置断点
-- 按 `F5` 或使用调试面板
-- 选择配置 **「调试Playground」**（会先执行 Playground 构建任务；macOS 使用上述固定入口）
+第三方代码保持原样，不做修改；本地补丁的具体内容见 AGENTS.md 的「第三方库」。
 
----
-
-### 代码质量
-
-```bash
-./scripts/build.sh format          # 格式化
-./scripts/build.sh clang-tidy      # 静态检查
-./scripts/build.sh clang-tidy --strict engine   # 严格模式
-./scripts/build.sh scan-build      # Clang Static Analyzer
-```
-
----
-
-### 待办
+## 待办
 
 - CI/CD 配置

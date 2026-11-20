@@ -1,5 +1,5 @@
 # Clang-Tidy代码分析配置文件
-# 与 CODING_STANDARDS.md 保持一致
+# 与 AGENTS.md「编码规范」保持一致
 
 Checks: >
   bugprone-*,

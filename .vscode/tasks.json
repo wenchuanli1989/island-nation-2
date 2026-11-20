@@ -64,8 +64,12 @@
       "type": "shell",
       "command": "${workspaceFolder}/scripts/build.sh",
       "args": [
-        "format"
+        "format",
+        "${input:formatTarget}"
       ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "problemMatcher": []
     },
     {
@@ -80,6 +84,20 @@
     }
   ],
   "inputs": [
+    {
+      "id": "formatTarget",
+      "type": "pickString",
+      "description": "选择要格式化的模块或目录（不格式化 lib/ 第三方代码）",
+      "options": [
+        "engine",
+        "shared",
+        "client-hub",
+        "engine-remote",
+        "playground/src",
+        "playground/npc_ai"
+      ],
+      "default": "engine"
+    },
     {
       "id": "playgroundAction",
       "type": "pickString",
