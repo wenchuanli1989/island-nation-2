@@ -113,7 +113,7 @@ done
 
 # glibc 与工具链使用同一个可写根目录，不继承旧版 Cloud 的 /opt 设置。
 export DOMINO_GLIBC_ROOT="$CLOUD_ROOT/glibc-2.43"
-bash "$SCRIPT_DIR/scripts/setup-glibc.sh"
+bash "$SCRIPT_DIR/setup-glibc.sh"
 {
     printf 'export DOMINO_CLOUD_ROOT=%q\n' "$CLOUD_ROOT"
     printf 'export DOMINO_GLIBC_ROOT=%q\n' "$DOMINO_GLIBC_ROOT"

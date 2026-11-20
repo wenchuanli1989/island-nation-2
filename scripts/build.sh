@@ -45,7 +45,7 @@ show_usage() {
   tsan [target]                  构建项目（ThreadSanitizer模式）
   profile [target]               构建项目（性能分析模式）
   clean                    清理构建目录
-  format <target-dir>              运行 clang-format 格式化指定模块或目录（必须指定，避免改写 lib/ 第三方代码）
+  format <target-dir>              运行 clang-format 格式化指定模块或目录（必须指定，只格式化改动所在的模块）
   clang-tidy [--strict] [target-dir]  运行 clang-tidy 检查代码
   scan-build [target]           使用 Clang Static Analyzer 分析代码
   playground-build <source-dir> [debug|release|sanitize|tsan]  为指定目录构建Playground（需包含 main.c）
@@ -292,7 +292,7 @@ main() {
 
         format)
             echo "格式化代码..."
-            # 必须指定模块或目录：整库格式化会改写 lib/ 等处的第三方代码。
+            # 必须指定模块或目录：整库格式化会改写 playground/算法/ 中的第三方代码，并带来与任务无关的改动。
             [[ -z "${1:-}" ]] && { echo "错误: format 须指定模块或目录，例如 engine、shared、playground/npc_ai" >&2; exit 1; }
             local target_dir="$1"
             [[ ! -d "$target_dir" ]] && { echo "错误: '$target_dir' 不是一个目录" >&2; exit 1; }

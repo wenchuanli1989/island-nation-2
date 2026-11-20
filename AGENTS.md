@@ -25,11 +25,11 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 - **独立 glibc：** 系统 glibc 版本较低时，设置 `DOMINO_GLIBC_ROOT` 指向 `scripts/setup-glibc.sh` 安装的 glibc 2.43；未设置或为空时使用系统 glibc，脚本不探测安装目录。运行产物时须保留该目录。改变或取消该变量时，`build.sh` 会自动清理对应产物并重建 CMake 缓存。
 - **Codex Cloud：** 每个新 shell 先 `source /workspace/.local/domino/env.sh`（启用 PATH 并设置 `DOMINO_GLIBC_ROOT`），再使用 `scripts/build.sh`。
 - **平台：** 目标为 Windows、macOS、Linux、Android、iOS；当前只要求 Linux 编译通过，暂不要求 API 跨平台适配。macOS 只保留 `./scripts/build.sh macos-debug`：在 Intel Mac 上以 Debug 和 `DOMINO_PLAYGROUND_MODE=ON` 构建默认 Playground，产物在 `build-macos-debug/`；SDK 须支持 `timespec_get(TIME_MONOTONIC)`，缺失的 `<threads.h>` 由 `lib/tinycthread` 提供。
-- 安装脚本（`setup-codex-cloud.sh`、`setup-dev.sh`、`scripts/setup-glibc.sh`）、Docker 及 VS Code 配置见 README 的「独立 glibc」和「开发环境」。
+- 安装脚本（`scripts/` 下的 `setup-codex-cloud.sh`、`setup-dev.sh`、`setup-glibc.sh`）、Docker（`docker/`）及 VS Code 配置见 README 的「独立 glibc」和「开发环境」。
 
 ### 构建命令
 
-所有构建通过 `scripts/build.sh` 执行，输出位于 `build-<preset>/bin/` 和 `build-<preset>/lib/`。
+所有构建通过 `scripts/build.sh` 执行，可执行文件输出到 `build-<preset>/bin/`，静态库输出到 `build-<preset>/static-lib/`。
 
 ```bash
 ./scripts/build.sh debug [target]        # 调试模式
@@ -50,13 +50,13 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 ```
 
 - **构建目标：** 各构建模式都可追加 `target`：`shared`、`engine`、`engine-remote-local`、`engine-remote-server`、`client-hub`、`playground`，脚本拼成 CMake 目标 `domino-<target>`；省略时构建全部。
-- **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/npc_ai`；脚本拒绝不带目标的调用。目标覆盖 `lib/` 或 `playground/算法/` 时（如 `format playground`）会改写其中的第三方头文件，格式化后用 `git status --short -- lib/ playground/算法/` 确认这些文件未变。
+- **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/npc_ai`；脚本拒绝不带目标的调用。`lib/` 由 `lib/.clang-format` 关闭格式化；目标覆盖 `playground/算法/` 时（如 `format playground`）会改写其中的第三方 `khash.h`，格式化后用 `git status --short -- playground/算法/` 确认它未变。
 - **默认 Playground：** 入口为 `playground/src/main.c`。在构建目录下运行 `./bin/domino-playground`，完成一次引擎生命周期后退出；存档写在 `build-<preset>/runtime/sandbox/`，再次运行会加载该存档。
 - **实验与模块夹具：** `playground-build`／`playground-run` 以 `DOMINO_PLAYGROUND_MODE=ON` 构建，`PLAYGROUND_SOURCE_DIR` 指向 `playground/` 下含 `main.c` 的实验目录。模块内部夹具经 `engine/src/playground.c` 的 `dominoEnginePlayground()` 分派：参数为 `npc_ai <sandbox_dir> <work_dir>` 时运行 `engine/src/human/playground.c`，其余参数运行同文件内的导航演示；`playground/npc_ai/main.c` 是 NPC AI 的调用示例。
 
 ## 架构
 
-长期设计目标（模拟流水线阶段、账号与国家交互等）见 [blueprint.md](blueprint.md)。
+长期设计目标（模拟流水线阶段、账号与国家交互等）见 [blueprint.md](doc/blueprint.md)。
 
 ### 模块依赖链
 
@@ -151,7 +151,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 ## NPC AI 实现
 
-架构为 动机 → 任务 → 行为 → 动画，设计边界见 [`npc_ai.md`](npc_ai.md)。第一阶段的生产策略只实现恢复精力动机与自主睡眠。通用计时任务／行为（通话、消息、工作）、回应外部信息的动机／任务和插入行为，只用于在受控规划场景中验证主辅行为、行为依赖和应激。
+架构为 动机 → 任务 → 行为 → 动画，设计边界见 [`npc_ai.md`](doc/npc_ai.md)。第一阶段的生产策略只实现恢复精力动机与自主睡眠。通用计时任务／行为（通话、消息、工作）、回应外部信息的动机／任务和插入行为，只用于在受控规划场景中验证主辅行为、行为依赖和应激。
 
 信息差和执行器复核遵循宪法第六章。下文的配置字段和容量常量以代码为准，默认值见 `engine/src/human/rules.c` 的 `dominoHumanDefaultAiConfig()`。
 

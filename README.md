@@ -10,10 +10,11 @@
 | --- | --- |
 | [项目宪法](doc/项目宪法.md) | 核心约束：总则、生命周期、GameTimer、消息队列、日志、存档、简化校验、游戏时间、模块调用、业务数据、客户端边界 |
 | [AGENTS.md](AGENTS.md) | 实现细则与现状：构建细节、生命周期调用顺序、数据架构、NPC AI、存档格式、编码规范 |
-| [npc_ai.md](npc_ai.md) | NPC AI（动机 → 任务 → 行为 → 动画）设计边界 |
-| [blueprint.md](blueprint.md) | 长期设计目标：核心玩法、宿主世界、账号与国家交互、模拟流水线阶段 |
+| [npc_ai.md](doc/npc_ai.md) | NPC AI（动机 → 任务 → 行为 → 动画）设计边界 |
+| [blueprint.md](doc/blueprint.md) | 长期设计目标：核心玩法、宿主世界、账号与国家交互、模拟流水线阶段 |
+| [todo.md](doc/todo.md) | 待办与待研究事项 |
 
-## 模块结构
+## 目录结构
 
 ```
 domino/
@@ -24,7 +25,11 @@ domino/
 │   └── server/          # 计划用于在线模式服务端入口
 ├── client-hub/          # 客户端适配层，骨架
 ├── lib/                 # 第三方库：yyjson、klib、tinycthread
-└── playground/          # 算法实验和子系统原型验证
+├── playground/          # 算法实验和子系统原型验证
+├── doc/                 # 项目宪法、NPC AI 设计、蓝图、待办等文档
+├── scripts/             # 构建脚本与环境安装脚本
+├── cmake/               # 独立 glibc 工具链文件
+└── docker/              # 开发环境镜像
 ```
 
 ## 当前状态
@@ -44,7 +49,7 @@ domino/
 
 ## 构建
 
-所有构建都通过 `scripts/build.sh` 执行，产物位于 `build-<preset>/bin/` 和 `build-<preset>/lib/`。
+所有构建都通过 `scripts/build.sh` 执行，可执行文件位于 `build-<preset>/bin/`，静态库位于 `build-<preset>/static-lib/`。
 
 ```bash
 ./scripts/build.sh debug                 # 调试模式
@@ -90,7 +95,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 1. 运行模块内部夹具 `engine/src/human/playground.c`，覆盖结算一致性、规划请求与结果复核、候选提交与容量、行为依赖、应激让位与插入，以及规划触发等。
 2. 在真实线程下，用样例存档的副本运行端到端场景：自主睡眠、冻结、停止后读档继续、条件失效与恢复、仅 Init 的生命周期，以及睡眠被通话打断后恢复。
 
-端到端存档写在构建目录的 `runtime/` 下。验收清单见 [npc_ai.md](npc_ai.md) 第 12.4 节。
+端到端存档写在构建目录的 `runtime/` 下。验收清单见 [npc_ai.md](doc/npc_ai.md) 第 12.4 节。
 
 ## 代码质量
 
@@ -101,7 +106,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ./scripts/build.sh scan-build                    # Clang Static Analyzer
 ```
 
-`format` 必须指定目标，不带目标时脚本直接报错，避免改写 `lib/` 下的第三方代码；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。
+`format` 必须指定目标，不带目标时脚本直接报错；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。`lib/` 下的第三方代码由 `lib/.clang-format` 关闭格式化；`playground/算法/` 中的第三方 `khash.h` 没有这层保护，格式化覆盖该目录后须确认它未被改动。
 
 ## 开发环境
 
@@ -119,11 +124,11 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 
 ### Codex Cloud
 
-`setup-codex-cloud.sh` 面向 Debian 13（trixie）x86_64，普通用户即可执行，需要联网。在 [Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
+`scripts/setup-codex-cloud.sh` 面向 Debian 13（trixie）x86_64，普通用户即可执行，需要联网。在 [Codex Cloud 环境设置](https://learn.chatgpt.com/docs/environments/cloud-environments)中配置：
 
 | 配置 | 内容 |
 | --- | --- |
-| Install script | `bash setup-codex-cloud.sh` |
+| Install script | `bash scripts/setup-codex-cloud.sh` |
 | Start instructions | 每个新 shell 先 `source /workspace/.local/domino/env.sh` |
 | Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可改为其他可写绝对路径，不含空白、双引号或反斜杠） |
 | Public internet access | 启用 Package managers，允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
@@ -133,7 +138,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 - **使用前提：** 脚本须连同仓库使用，可重复执行以刷新安装；基础镜像须已有 APT、curl、GnuPG、dpkg-deb、GCC、Make、Git、Perl 和 Python 3.13。
 
 ```bash
-bash setup-codex-cloud.sh
+bash scripts/setup-codex-cloud.sh
 source /workspace/.local/domino/env.sh
 ./scripts/build.sh debug
 (cd build-debug && ./bin/domino-playground)
@@ -144,8 +149,8 @@ source /workspace/.local/domino/env.sh
 ### Ubuntu 26.04 服务器
 
 ```bash
-sudo bash setup-dev.sh
-sudo LLVM_VERSION=22 bash setup-dev.sh    # 指定 LLVM 主版本
+sudo bash scripts/setup-dev.sh
+sudo LLVM_VERSION=22 bash scripts/setup-dev.sh    # 指定 LLVM 主版本
 ```
 
 - **使用方式：** 脚本可以单独复制到服务器运行，不需要 Docker 或整个仓库；只支持 Ubuntu 26.04，使用系统 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
@@ -153,11 +158,11 @@ sudo LLVM_VERSION=22 bash setup-dev.sh    # 指定 LLVM 主版本
 
 ### Docker + VS Code Remote
 
-镜像基于 Ubuntu 26.04 LTS，构建时直接调用 `setup-dev.sh`。
+镜像定义在 `docker/`，基于 Ubuntu 26.04 LTS，构建时直接调用 `scripts/setup-dev.sh`。
 
-1. 启动：`docker compose up -d --build`（更新 Dockerfile 或安装脚本后重新执行）
+1. 启动：`docker compose -f docker/compose.yaml up -d --build`（更新 Dockerfile 或安装脚本后重新执行）
 2. VS Code 执行「Remote-SSH: Connect to Host」，连接 `root@localhost -p 10022`，密码 `123456`
-3. 建议安装插件：clangd、CodeLLDB、clang-format、GitLens
+3. 建议安装插件：clangd、CodeLLDB、GitLens
 
 连接后验证工具链：
 
@@ -182,7 +187,3 @@ command -v clang clangd clang-format clang-tidy lldb scan-build
 | TinyCThread | `lib/tinycthread/` | 为 macOS 提供 `<threads.h>` |
 
 第三方代码保持原样，不做修改；本地补丁的具体内容见 AGENTS.md 的「第三方库」。
-
-## 待办
-
-- CI/CD 配置

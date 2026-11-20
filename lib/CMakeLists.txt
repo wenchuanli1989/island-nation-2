@@ -15,3 +15,16 @@ target_include_directories(domino_yyjson PRIVATE
 )
 
 target_link_libraries(domino_yyjson PRIVATE domino_options)
+
+# macOS SDK 缺少 <threads.h>，由 TinyCThread 提供标准线程接口。
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    add_library(domino_tinycthread STATIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/tinycthread/tinycthread.c
+    )
+    target_compile_features(domino_tinycthread PRIVATE c_std_11)
+    target_compile_definitions(domino_tinycthread PUBLIC _DARWIN_C_SOURCE)
+    target_include_directories(domino_tinycthread SYSTEM PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/tinycthread/include
+    )
+    target_link_libraries(domino_tinycthread PUBLIC Threads::Threads)
+endif()

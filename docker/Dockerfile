@@ -4,7 +4,7 @@ FROM ubuntu:26.04
 ARG LLVM_VERSION=22
 ENV TZ=Asia/Shanghai
 
-# 与服务器使用同一份环境安装脚本。
+# 与服务器使用同一份环境安装脚本；构建上下文为 scripts/（见 compose.yaml）。
 COPY setup-dev.sh /tmp/setup-dev.sh
 RUN LLVM_VERSION="${LLVM_VERSION}" bash /tmp/setup-dev.sh \
     && rm /tmp/setup-dev.sh

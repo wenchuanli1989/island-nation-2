@@ -79,8 +79,7 @@
       "args": [
         "clang-tidy"
       ],
-      "problemMatcher": [],
-      "dependsOn": "配置CMake（调试）"
+      "problemMatcher": []
     }
   ],
   "inputs": [

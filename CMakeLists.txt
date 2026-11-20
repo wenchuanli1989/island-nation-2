@@ -10,10 +10,8 @@ project(Domino
 # 生成compile_commands.json（供clangd使用）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-
 # 设置输出目录
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/static-lib)
 
 # ============================================================================
@@ -30,9 +28,6 @@ option(DOMINO_ENABLE_NATIVE_ARCH
 
 # Playground 模式运行，用于测试模块内部实现逻辑（由 build.sh playground-build 传入 -D，见 playground/CMakeLists.txt）
 option(DOMINO_PLAYGROUND_MODE "Playground 模式运行，用于测试模块内部实现逻辑（playground-build 时启用）" OFF)
-
-# 云端/在线部署构建：定义项目级 DOMINO_CLOUD_BUILD（见 shared/include/domino_shared_build.h）
-option(DOMINO_CLOUD_BUILD "云端/在线部署构建（定义 DOMINO_CLOUD_BUILD）" OFF)
 
 # 当 DOMINO_PLAYGROUND_MODE=OFF 时，从源码列表中排除各级 playground.c（模块内部验证夹具）
 # 各模块在 GLOB 后调用：domino_exclude_playground_sources(SOURCES_VAR)
@@ -56,10 +51,6 @@ add_library(domino_options INTERFACE)
 if(DOMINO_PLAYGROUND_MODE)
     target_compile_definitions(domino_options INTERFACE DOMINO_PLAYGROUND_MODE)
 endif()
-
-target_compile_definitions(domino_options INTERFACE
-    $<$<BOOL:${DOMINO_CLOUD_BUILD}>:DOMINO_CLOUD_BUILD=1>
-)
 
 # 设置 C 标准（通过 INTERFACE 传播，替代全局设置）
 target_compile_features(domino_options INTERFACE c_std_23)
@@ -110,7 +101,6 @@ target_compile_options(domino_options INTERFACE
     -fno-common
 )
 
-
 # Release模式链接选项
 target_link_options(domino_options INTERFACE
     $<$<CONFIG:Release>:-Wl,-z,relro>           # 只读重定位
@@ -127,7 +117,10 @@ target_link_options(domino_options INTERFACE
 # 3. 可以灵活组合不同的 Build Type 和特殊选项
 # ============================================================================
 
-# 添加子目录（注意顺序：shared必须先构建，然后是core）
+# lib/ 中的 TinyCThread（仅 macOS）与 shared 共用线程库
+find_package(Threads REQUIRED)
+
+# 按依赖顺序添加子目录：第三方库 → shared → engine → 上层模块
 add_subdirectory(lib)
 add_subdirectory(shared)
 add_subdirectory(engine)
@@ -135,6 +128,3 @@ add_subdirectory(engine-remote/local)
 add_subdirectory(engine-remote/server)
 add_subdirectory(client-hub)
 add_subdirectory(playground)
-
-
-

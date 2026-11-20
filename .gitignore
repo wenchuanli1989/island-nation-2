@@ -1,11 +1,13 @@
 # 构建目录
 build-*/
-build
 
 # 静态分析报告
 scan-build-reports/
 
 temp/
+
+# 实验输出
+playground/人口模拟/人口演变.csv
 
 # 系统文件
 .DS_Store

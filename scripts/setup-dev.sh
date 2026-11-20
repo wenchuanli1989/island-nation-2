@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ubuntu 26.04 远程开发环境：sudo bash setup-dev.sh
+# Ubuntu 26.04 远程开发环境：sudo bash scripts/setup-dev.sh
 set -euo pipefail
 
 [[ $# -eq 0 ]] || { echo "用法: sudo bash $0（LLVM_VERSION 默认 22）" >&2; exit 1; }
