@@ -32,33 +32,52 @@
 #define DOMINO_MAX_ORG_COUNT_PER_HUMAN 5
 #define DOMINO_MAX_ORG_BOSS_COUNT_PER_HUMAN 5
 
-/** @brief 人物业务状态；异常状态持久化，执行器跳过其任务、需求和规划，不自动恢复。 */
+/** @brief 人物调度状态；由人物推进函数根据任务摘要计算，不持久化。 */
 typedef enum {
-    DOMINO_HUMAN_STATUS_NORMAL = 0,  ///< 正常参与模拟。
-    DOMINO_HUMAN_STATUS_EXCEPTION,   ///< 已提交任务失败或取消，保留业务现场并停止后续执行。
-    DOMINO_HUMAN_STATUS_COUNT,
-} DOMINO_HUMAN_STATUS;
+    DOMINO_HUMAN_STATE_THINKING = 0,  ///< 运行任务没有正在运行的行为（或没有运行任务），可以有待规划或等待中的任务。
+    DOMINO_HUMAN_STATE_NORMAL,        ///< 运行任务至少一个通道有正在运行的行为。
+    DOMINO_HUMAN_STATE_COUNT,
+} DOMINO_HUMAN_STATE;
 
 /** @brief 六项需求共用的百分制上限，字段直接保存整数分。 */
 enum {
     DOMINO_HUMAN_NEED_MAX = 100U,
+    DOMINO_HUMAN_DISPLAY_NAME_SIZE = 32U,  ///< 显示称呼缓冲大小，含结尾 NUL；空串表示未设置。
 };
 
-/** @brief 4096 字节人物数据；与核心共享 human_id 和数组索引，前部集中日程、需求与当前位置。 */
+/** @brief 人物 AI 持久标志。 */
+enum {
+    DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN = 1U << 0U,  ///< 睡眠执行条件当前不成立；由获准的人物条件接口修改。
+};
+
+/** @brief 4096 字节人物数据；与核心共享 human_id 和数组索引，前部集中 AI 调度、需求与当前位置。 */
 typedef struct DominoHumanData {
-    /* 活动任务、决策、需求与生命状态；以下字段共占前 36 字节。 */
-    uint64_t random_state;                                                  ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
-    domino_human_id_t human_id;                                             ///< 与配对 DominoHuman.human_id 相同，必须非零。
-    domino_task_id_t active_task_id_list[DOMINO_HUMAN_TASK_CHANNEL_COUNT];  ///< 每槽最多一个活动任务，0 表示空槽；三个槽的任务类型须互异。
-    domino_runtime_ms_t needs_updated_at_ms;  ///< 自然需求已结算到的累计未冻结现实毫秒；按完整分钟推进，未满分钟保留，0 合法。
-    uint8_t energy;                           ///< 精力，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t food;                             ///< 饱食度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t water;                            ///< 水分充足度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t hygiene;                          ///< 清洁度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t recreation;                       ///< 娱乐满足度，0..100 整数分，自然变化按现实分钟结算。
-    uint8_t social;                           ///< 社交满足度，0..100 整数分，自然变化按现实分钟结算。
+    /* AI：结算游标、需求、外部信息、动机、任务清单、运行任务与待执行队列。 */
+    uint64_t random_state;            ///< 人物独立随机状态；规划使用副本，提交后保存后继状态。
+    domino_human_id_t human_id;       ///< 与配对 DominoHuman.human_id 相同，必须非零。
+    domino_task_id_t active_task_id;  ///< 唯一运行任务，0 表示没有；运行任务必有执行部分且不在待执行队列中。
+    /// 唯一共同结算游标：自然需求、各通道效果及该边界的判定和收尾都已处理到此时刻，0 合法。
+    /// 自然需求在业务时间整分钟边界变化，相位即本游标对一分钟取余，不另存。
+    domino_runtime_ms_t settled_at_ms;
+    uint32_t stimulus_source_id;  ///< 最近登记的外部信息来源（如来电人物 ID），仅 stimulus_kind 非 NONE 时有业务意义。
+    uint32_t stimulus_round;      ///< 外部信息轮次：类别由 NONE 变为非 NONE 时加一，回应工作以它作为工作轮次；0 表示从未登记。
+    uint8_t energy;               ///< 精力，0..100 整数分。
+    uint8_t food;
+    uint8_t water;
+    uint8_t hygiene;
+    uint8_t recreation;
+    uint8_t social;
     uint8_t health;
     uint8_t body_hp_value;
+    uint8_t ai_flags;          ///< DOMINO_HUMAN_AI_FLAG_*。
+    uint8_t stimulus_kind;     ///< 待处理外部信息类别，DOMINO_HUMAN_STIMULUS_KIND；NONE 表示没有或已被回应承接。
+    uint8_t motivation_count;  ///< 持有动机数，0..8。
+    uint8_t task_count;        ///< 持有任务记录数，0..32；包含运行任务、待执行、让位后排队及未回收终态。
+    uint8_t task_queue_count;  ///< 待执行队列长度。
+    domino_motivation_id_t motivation_id_list[DOMINO_HUMAN_MOTIVATION_COUNT_MAX];  ///< 前 motivation_count 项有效，按接受顺序。
+    domino_task_id_t task_id_list[DOMINO_HUMAN_TASK_COUNT_MAX];                    ///< 前 task_count 项有效，按接受顺序。
+    domino_task_id_t task_queue_list[DOMINO_HUMAN_TASK_COUNT_MAX];                 ///< 待执行 task_id 的逻辑顺序，队首最先运行。
+    char display_name[DOMINO_HUMAN_DISPLAY_NAME_SIZE];                             ///< 有界可选显示称呼。
 
     /* 高频位置、财富与待处理调度参数。 */
     domino_country_id_t current_country_id;
@@ -68,10 +87,6 @@ typedef struct DominoHumanData {
     domino_fork_road_id_t current_address;  // 当前最近的地点，寻路系统使用
     domino_fork_road_id_t sleep_address;    // 休息地址，可以是家庭地址，旅馆酒店地址，公司地址
     domino_wealth_value_t wealth;
-
-    /* 本人持有的全部任务；按提交顺序追加，删除时前移，状态和计划时间变化不重排。 */
-    domino_task_id_t task_id_list[DOMINO_HUMAN_TASK_COUNT_MAX];  ///< 前 task_count 项有效，包含活动、待执行及尚未回收的终态任务。
-    uint8_t task_count;                                          ///< 持有任务数量，0..32；数组位置不代表执行顺序。
 
     /* 其他身体状态、情绪与外观。 */
     uint8_t nutrition;
@@ -178,16 +193,16 @@ typedef struct DominoHumanData {
     uint8_t recent_visited_address_list_count;
     uint8_t recent_visited_address_id_list_head_index;
 
-    uint8_t other_info[2545];  ///< 预留补齐 4096 字节，不持久化。
+    uint8_t other_info[2342];  ///< 预留补齐 4096 字节，不持久化。
 } DominoHumanData;
 
 static_assert(sizeof(DominoHumanData) == 4096, "DominoHumanData must be exactly 4096 bytes");
 
-/** @brief 64 字节人物核心，集中保存身份、空间定位和运行调度标识；data 必须存在且独占。 */
+/** @brief 64 字节人物核心，集中保存身份、空间定位和调度状态；data 必须存在且独占。
+ * @note 规划请求资格、待规划标志、下次规划时刻、唤醒计时器等运行态保存在 human 模块内部的并行运行数组中，不进入核心或存档。
+ */
 typedef struct DominoHuman {
-    DominoHumanData* data;            ///< 借用同索引的 Data；数组布局改变后须重新绑定。
-    uint64_t active_plan_request_id;  ///< 运行态：已提交且仍有效的规划请求 ID，0 表示无有效请求，不持久化。
-    uint64_t wakeup_game_timer_id;    ///< 运行态：人物唯一有效唤醒计时器 ID，0 表示未登记，不持久化。
+    DominoHumanData* data;  ///< 借用同索引的 Data；数组布局改变后须重新绑定。
 
     /* movable_object_id 为 0 时保存静态坐标，否则保存绑定后的运动对象指针。 */
     union {
@@ -199,14 +214,13 @@ typedef struct DominoHuman {
         } position_info;
     };
 
-    domino_runtime_ms_t wakeup_due_ms;             ///< 运行态：有效唤醒的绝对截止点，仅 wakeup_game_timer_id 非零时有效，不持久化。
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。
     domino_movable_object_id_t movable_object_id;  ///< 运动对象 ID，0 表示无关联对象。
-    domino_status_t status;                        ///< 持久化业务状态，取 DOMINO_HUMAN_STATUS。
+    uint8_t state;                                 ///< 运行态 DOMINO_HUMAN_STATE，不持久化。
     uint8_t region_index;
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;
-    uint8_t other_info[8];  ///< 补齐 64 字节，不持久化。
+    uint8_t other_info[28];  ///< 补齐 64 字节，不持久化。
 } DominoHuman;
 
 static_assert(sizeof(DominoHuman) == 64, "DominoHuman must be exactly 64 bytes");

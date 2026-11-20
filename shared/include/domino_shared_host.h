@@ -27,10 +27,13 @@ typedef uint8_t domino_space_id_t;
 typedef uint8_t domino_space_area_id_t;
 
 typedef struct {
-    /* 计数器保存下一候选 ID，随根 meta 持久化；允许回绕，分配时跳过 0。独立对齐以减少伪共享。 */
+    /* 计数器随根 meta 持久化，独立对齐以减少伪共享。
+     * 动机、任务和行为计数器保存最后已分配 ID，只由 human 执行器或串行阶段递增，耗尽时致命退出、永不回绕；
+     * 其余计数器保存下一候选 ID，允许回绕，分配时跳过 0。 */
     alignas(128) _Atomic domino_human_id_t human_increment_id;
-    alignas(128) _Atomic domino_task_id_t task_increment_id;          // ID可回绕
-    alignas(128) _Atomic domino_behavior_id_t behavior_increment_id;  // ID可回绕
+    alignas(128) _Atomic domino_motivation_id_t motivation_increment_id;
+    alignas(128) _Atomic domino_task_id_t task_increment_id;
+    alignas(128) _Atomic domino_behavior_id_t behavior_increment_id;
     alignas(128) _Atomic domino_org_id_t org_increment_id;
     alignas(128) _Atomic domino_country_id_t country_increment_id;
     alignas(128) _Atomic domino_city_id_t city_increment_id;

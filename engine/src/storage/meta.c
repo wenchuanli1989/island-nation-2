@@ -83,6 +83,7 @@ static void writeOneModuleMetaFile(const char* save_path, const StorageModuleTyp
 static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
     /* ID 计数器独立持久化；road ID 由两端节点 ID 组合，无独立计数器。 */
     if (!yyjson_mut_obj_add_uint(doc, inc, "human", atomic_load(&g_domino_global_increment_id.human_increment_id)) ||
+        !yyjson_mut_obj_add_uint(doc, inc, "motivation", atomic_load(&g_domino_global_increment_id.motivation_increment_id)) ||
         !yyjson_mut_obj_add_uint(doc, inc, "task", atomic_load(&g_domino_global_increment_id.task_increment_id)) ||
         !yyjson_mut_obj_add_uint(doc, inc, "behavior", atomic_load(&g_domino_global_increment_id.behavior_increment_id)) ||
         !yyjson_mut_obj_add_uint(doc, inc, "org", atomic_load(&g_domino_global_increment_id.org_increment_id)) ||
@@ -101,9 +102,9 @@ static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
 }
 
 static void ingestIncrementIds(yyjson_val* inc) {
-    yyjson_val* task_val = yyjson_obj_get(inc, "task");
-    /* 游标为下一候选 ID；0 是初始化或回绕后的合法值，分配时跳过。 */
-    atomic_store(&g_domino_global_increment_id.task_increment_id, (domino_task_id_t)yyjson_get_uint(task_val));
+    /* 动机、任务和行为保存最后已分配 ID，0 表示尚未分配；后续递增分配，永不复用。 */
+    atomic_store(&g_domino_global_increment_id.motivation_increment_id, (domino_motivation_id_t)yyjson_get_uint(yyjson_obj_get(inc, "motivation")));
+    atomic_store(&g_domino_global_increment_id.task_increment_id, (domino_task_id_t)yyjson_get_uint(yyjson_obj_get(inc, "task")));
     atomic_store(&g_domino_global_increment_id.behavior_increment_id, (domino_behavior_id_t)yyjson_get_uint(yyjson_obj_get(inc, "behavior")));
     /* 其他实体仍按各模块原有计数器格式恢复。 */
     atomic_store(&g_domino_global_increment_id.human_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "human")));

@@ -1,33 +1,77 @@
 #include "rules.h"
 
+#include <string.h>
+
+#include "domino_shared_common.h"
 #include "domino_shared_human.h"
 
-static_assert(DOMINO_HUMAN_NEED_MINUTE_MS > 0U, "Natural need interval must be positive");
-static_assert(DOMINO_HUMAN_ENERGY_DECAY_PER_MINUTE > 0U, "Sleep trigger prediction requires positive natural decay");
-static_assert(DOMINO_HUMAN_SLEEP_TRIGGER_ENERGY < DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY, "Sleep trigger must be below its recovery target");
-static_assert(DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY <= DOMINO_HUMAN_NEED_MAX, "Sleep recovery target must fit the need range");
-static_assert(DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS > 0U, "Sleep recovery interval must be positive");
-static_assert(DOMINO_HUMAN_NEED_MINUTE_MS % DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS == 0U, "Sleep estimation requires whole points per minute");
+static_assert(DOMINO_HUMAN_NEED_MINUTE_MS > 0U, "natural need interval must be positive");
+static_assert(DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS > 0U, "sleep recovery interval must be positive");
 static_assert(DOMINO_HUMAN_NEED_MINUTE_MS / DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS > DOMINO_HUMAN_ENERGY_DECAY_PER_MINUTE,
-              "Sleep must restore energy faster than natural decay");
+              "sleep must restore energy faster than natural decay");
 
-enum {
-    SLEEP_ENERGY_NET_PER_MINUTE = DOMINO_HUMAN_NEED_MINUTE_MS / DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS - DOMINO_HUMAN_ENERGY_DECAY_PER_MINUTE,
-};
+DominoHumanAiConfig g_domino_human_ai_config;
 
-static_assert((DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY - 1U) / SLEEP_ENERGY_NET_PER_MINUTE + 1U <= UINT32_MAX / DOMINO_HUMAN_NEED_MINUTE_MS,
-              "Maximum sleep duration must fit runtime milliseconds");
+#ifdef DOMINO_PLAYGROUND_MODE
+static DominoHumanAiConfig g_next_config;
+static bool g_next_config_flag;
+#endif
 
-DOMINO_CODE dominoHumanPrepareSleep(uint8_t energy, domino_runtime_ms_t now_ms, domino_runtime_ms_t* end_ms_out_ptr) {
-    if (energy >= DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY) {
-        return ERR_GAME_STATE_INVALID;
+DominoHumanAiConfig dominoHumanDefaultAiConfig(void) {
+    DominoHumanAiConfig config = {
+        .retry_delay_ms = 3000U,
+        .result_quota = 8U,
+        .inbox_quota = 16U,
+        .todo_quota = 16U,
+        .sleep_trigger_energy = 30U,
+        .sleep_target_energy = 80U,
+        .urgent_energy = 10U,
+    };
+    for (uint32_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
+        config.planner_list[kind] = (DominoHumanPlannerConfig){.high_quota = 4U, .compute_budget = 512U};
     }
-    const uint32_t missing_energy = DOMINO_HUMAN_SLEEP_SATISFIED_ENERGY - energy;
-    const uint32_t minute_count = (missing_energy - 1U) / SLEEP_ENERGY_NET_PER_MINUTE + 1U;
-    const domino_runtime_ms_t duration_ms = minute_count * DOMINO_HUMAN_NEED_MINUTE_MS;
-    if (duration_ms > UINT32_MAX - now_ms) {
-        return ERR_OUT_OF_RANGE;
-    }
-    *end_ms_out_ptr = now_ms + duration_ms;
-    return CODE_OK;
+    return config;
 }
+
+void dominoHumanAiConfigInit(void) {
+    DominoHumanAiConfig config = dominoHumanDefaultAiConfig();
+#ifdef DOMINO_PLAYGROUND_MODE
+    if (g_next_config_flag) {
+        config = g_next_config;
+    }
+#endif
+    for (uint32_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
+        const DominoHumanPlannerConfig* planner_ptr = &config.planner_list[kind];
+        /* K + 1 必须可表示且受每批临时存储上限约束；巨大配额不能绕过每批工作有限的约束。 */
+        if (planner_ptr->high_quota == 0U || planner_ptr->high_quota > DOMINO_HUMAN_PLANNER_HIGH_QUOTA_MAX || planner_ptr->compute_budget == 0U) {
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid human planner config kind=%u", kind);
+        }
+    }
+    const uint64_t message_total =
+        ((uint64_t)config.result_quota * DOMINO_HUMAN_PLANNER_COUNT * DOMINO_HUMAN_PLAN_PRIORITY_COUNT) + config.inbox_quota;
+    if (config.retry_delay_ms == 0U || config.result_quota == 0U || config.inbox_quota == 0U || config.todo_quota == 0U ||
+        message_total > DOMINO_HUMAN_EXECUTOR_BATCH_MESSAGE_MAX) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid human executor quotas");
+    }
+    if (config.sleep_trigger_energy >= config.sleep_target_energy || config.sleep_target_energy > DOMINO_HUMAN_NEED_MAX ||
+        config.urgent_energy > config.sleep_trigger_energy) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid human sleep thresholds");
+    }
+    g_domino_human_ai_config = config;
+}
+
+void dominoHumanAiConfigDestroy(void) {
+    /* playground 覆盖值属于进程级测试设置，不随实例清空。 */
+    memset(&g_domino_human_ai_config, 0, sizeof(g_domino_human_ai_config));
+}
+
+#ifdef DOMINO_PLAYGROUND_MODE
+void dominoHumanSetNextAiConfig(const DominoHumanAiConfig* config_ptr) {
+    if (config_ptr == nullptr) {
+        g_next_config_flag = false;
+        return;
+    }
+    g_next_config = *config_ptr;
+    g_next_config_flag = true;
+}
+#endif

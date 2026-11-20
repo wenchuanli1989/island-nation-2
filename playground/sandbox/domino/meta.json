@@ -1,5 +1,5 @@
 {
-  "version": 25,
+  "version": 31,
   "integrity_verify": false,
   "info": {
     "account_id": "sandbox-account"
@@ -11,6 +11,7 @@
     "game_date_time_ns": 0,
     "global_increment_id": {
       "human": 2,
+      "motivation": 0,
       "task": 0,
       "behavior": 0,
       "org": 0,
@@ -56,6 +57,10 @@
       "size": 0
     },
     "human_behavior": {
+      "crc32c": 0,
+      "size": 0
+    },
+    "human_motivation": {
       "crc32c": 0,
       "size": 0
     },

@@ -49,19 +49,21 @@ logger -> main queues -> common -> time -> host -> nav(before) -> social -> huma
 
 - `launch_config.storage_path` 当前必须是非空存档目录；只有根 `meta.json` 不存在时才以新世界启动，其他查询、读取或解析失败均打印 stderr 并退出进程。
 - `launch_config.storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载使用存档自身声明的校验策略。
-- Init 准备日志文件、主循环双向队列、human 执行／规划队列与运行映射表、game_timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
+- Init 准备日志文件、主循环双向队列、human 执行器收件箱、三类规划器的十二条队列与运行映射表、game_timer 命令队列及同步对象，不创建任何线程；动态业务容量和保存临时缓冲仍按需分配。
 - 每次 `dominoEngineInit()` 使用静态初值或上一轮 Destroy 已恢复的空世界基线，再从当前 `storage_path` 加载；上一轮成功 Destroy 后可在同一进程 Init 并切换存档路径，不会继承上一世界的地域、全局 ID、account_id 或 run_mode。Init 成功后时间保持冻结。
 - `common` 保存名称/描述字符串表和 ID 映射；`host` 保存地域、岛屿、运动物体和全局自增 ID；`social`、`human` 保存实体数组和 data 扩展数组；`nav` 保存 fork road、road、road line，并在加载后按地域和路网类型重建路径矩阵缓存。
 
 客户端不得直接提交任务请求、规划请求或规划结果，也不通过客户端消息转发这些内容。任务由引擎内部自主决策、规划并提交；测试通过模块内部夹具、存档场景或自主调度验证，不为测试增加引擎对外任务提交接口。
 
-`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 创建执行／规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。executor 仅在首次启动时分批扫描人物，建立初始调度。Start 返回不表示全部人物已经登记 game_timer、完成规划或启动任务。
+引擎不提供通用的内部数据读写，客户端不能按实体类别、字段 ID 或内部结构布局读取或写入引擎数据。需要客户端交互时，每个业务场景单独定义消息类型，参数和返回数据结构针对该场景设计，定义在只依赖 C 标准库头文件的 `domino_engine_protocol.h`；`domino_engine.h` 包含它并声明生命周期及收发接口。当前尚未定义业务场景：`dominoEnginePushMsg()`／`dominoEnginePopMsg()`、主循环和接入层只保留通道骨架，`DominoEngineMessage` 只有 `id` 和 `type`，主循环把收到的消息按不支持的类型记录一次并丢弃，不回包。
+
+`dominoEngineStart()` 使用 Init 已准备的固定资源，在时钟保持冻结时先启动 logger，再调用 human Start 依次创建执行器和动机／任务／行为三个规划线程，随后启动 game_timer，最后创建消息消费主循环。成功后客户端进入 `RUNNING`，直接解冻时钟并唤醒主循环和业务线程；主循环不负责启动其他线程，也不发布启动回执。human InitAfter 已为每个人物准备首次本地待办，执行器启动后按有限批次推进人物、投递规划并登记唤醒。Start 返回不表示全部人物已经登记 game_timer、完成规划或启动任务。
 
 普通 Freeze 由客户端直接冻结时钟，不发送控制请求或通知业务线程；Thaw 由客户端直接解冻并通知主循环和业务线程，两者均不等待业务线程暂停或恢复回执。各业务线程在批次入口先检查退出、再检查冻结；观察到冻结后不开始新批次，未取出的消息留队。已通过入口检查的有限批次即使随后发生冻结，仍可完整出队、处理及投递消息。主循环、human 执行器和规划器按观察到的冻结代次进入 time 等待；正常无工作时仍使用队列版本等待。time Thaw 广播冻结等待者；Stop 保持时钟冻结并单独通知 time，原有队列及 GameTimer 通知保留。原本等待消息或计时的线程在普通冻结时保持等待。恢复直接续接留队消息和已有调度，不再全员扫描。队列自身不检查冻结，引擎内部当前批次的规划请求及结果仍可入队，消费线程观察到冻结后留待恢复处理；日志继续输出。冻结成功本身不保证世界已经停止写入或可立即保存。
 
 time 模块基于单调时钟累计未冻结的现实时间。业务时刻和时长固定使用 `domino_runtime_ms_t`（`uint32_t`）现实毫秒，毫秒入口校验范围，采样失败或越界时打印 stderr 并退出进程。内部采样及存档基准保留 64 位纳秒精度；UTC 时间戳和 ID 的位宽也不改变业务毫秒的 32 位约定。游戏日历倍率仅用于显示，完整规则见 [AGENTS.md 的时间语义](AGENTS.md#时间语义)。
 
-所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行／规划线程和 game_timer，再将正常人物结算到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 game_timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 game_timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
+所有已初始化的世界都由客户端显式按 `dominoEngineStop()` → `dominoEngineDestroy()` 调用。运行过的实例在 Stop 中先进入 `STOPPING`、冻结并校验退出时刻 T，再唤醒主循环和全部业务线程；已经暂停的世界无需解冻。各线程完成当前有限批次后退出，客户端依次 join 主循环、human 执行器、动机／任务／行为三个规划线程和 game_timer，再把全部人物的共同结算游标推进到 T，最后调用 logger Stop 排空日志、join writer 并刷新输出；所有投递者结束前保持目标队列和 game_timer 登记入口有效。Stop 完成后进入 `STOPPED`，保留世界、队列、同步对象、冻结时钟和日志文件，全部线程已退出，尚未保存，也不允许直接 Start 或 Thaw。随后外部调用 Destroy，进入 `DESTROYING`，释放 game_timer 和主循环队列，准备 nav 派生状态并事务式保存存档，再释放 human 的队列及同步对象、其余世界模块，最后关闭日志文件并释放日志队列。Destroy 只接受 `STOPPED`，不负责停止任何线程，未先 Stop 直接调用会报错退出；仅 Init、未 Start 时也必须 Stop → Destroy，此时尚无线程，引擎跳过 human／game_timer Stop、全部 join 和人物结算，仍调用 logger Stop 关闭入队并刷新输出，保留已加载及配置的事实。Destroy 成功后回到未初始化状态，允许同进程建立新世界。普通暂停不遍历人物结算。
 
 Init／Start／Stop／Destroy、Freeze／Thaw 等生命周期接口返回 `void`。无论处于初始化、开始、停止、冻结、解冻、销毁还是运行阶段，致命错误都通过 `DOMINO_EXIT_WITH_ERROR` 直接输出到 stderr，再由 `common.c` 中的公共方法执行 `exit(EXIT_FAILURE)`；标准退出处理仍可执行。不再维护实例首错、`FAILED` 生命周期状态或跨线程故障传播。正常启动就绪、生命周期状态、通知、join 和资源释放顺序继续保留；失败退出不进入正常保存或清理流程。保存失败由后续新进程按磁盘事务恢复。`lib/` 下第三方库代码保持原样，其原有终止行为保留，不纳入项目自有模块的退出实现改造。
 
@@ -74,14 +76,14 @@ Destroy 返回前，common、host、social 等模块的容器指针、数量、�
 ### 数据与存档
 
 - 全局实体以 `kvec` 扁平数组保存，`khashl` 维护 `id -> array index` 映射。ID 的 `0` 值保留为无效值，全局自增计数器随存档持久化。
-- `DominoHuman` 固定为 64 字节，保存唯一 `human_id`、必需的 data 指针、状态、位置或运动对象引用、地域／空间，以及当前规划请求 ID、唤醒计时器 ID 和唤醒截止点。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组同序，共用人物 ID 索引；需求、日程、随机状态及调度补充字段集中在 data 前部，身高体重、情绪、财富、组织关系、建筑与地址等相关属性分组保存。其他核心实体多为 128 字节。结构按自然对齐紧凑排列，`other_info` 补齐预留空间；这一布局尚无缓存性能实测结果。
+- `DominoHuman` 固定为 64 字节，保存唯一 `human_id`、必需的 data 指针、运行期调度状态（NORMAL／THINKING，不持久化）、位置或运动对象引用及地域／空间。规划请求资格、唤醒计时器和本地待办保存在 human 模块内部与人物同序的运行数组中，不进入核心或存档。每个人物独占一份 4096 字节的 `DominoHumanData`，人物与 data 数组同序，共用人物 ID 索引；AI 字段（结算游标、需求、待处理外部信息、动机与任务清单、运行任务和待执行队列、显示称呼）集中在 data 前部，身高体重、情绪、财富、组织关系、建筑与地址等相关属性分组保存。其他核心实体多为 128 字节。结构按自然对齐紧凑排列，`other_info` 补齐预留空间；这一布局尚无缓存性能实测结果。
 - storage 先把完整存档写入同父目录 staging 并刷盘，再按 `active -> .prev`、`staging -> active` 的顺序 rename；每次关键目录项变更后都会刷父目录，避免半成品覆盖正式存档。实体按注册表顺序写入 `regions.json` 或 `{type}_{shard_id}.json`，再写 `{type}.meta.json` 和根 `meta.json`。
 - 加载 `meta.json` 前会自动恢复未完成的存档事务：只有 `.prev` 时恢复旧存档，active 与 `.prev` 同时存在时保留已提交的 active 并清理旧备份。active、staging 或 `.prev` 为 symlink/普通文件时会拒绝加载或提交，递归清理也只删除 symlink 本身，不进入链接目标。
 - 存档事务按单写者设计，同一个 `storage_path` 不允许多个 Domino 进程并发加载或保存。事务提交与恢复实现见 [`engine/src/storage/transaction.c`](engine/src/storage/transaction.c)。
 - `nav` 运行期长期维护 canonical 基础段与追加式增量尾，增删不会触发全量排序；保存前才把逻辑删除的数据排到末尾，并按 `(region_index, road_network_type)` 压实 data segment。路径矩阵和 fork road 指针缓存只存在内存中，不参与序列化。
-- 人物日程与需求直接属于 `DominoHumanData`，没有独立 AI 状态／运行态数组或 ID 索引。`task_id_list[32]` 与 `uint8_t task_count` 保存全部持有任务，配合固定三个活动槽位（主通道、次通道 1、次通道 2）；睡眠固定使用主通道，其他任务按业务规则选择通道，每个任务通过持久字段 `channel_index` 记录所属通道，后续规划与执行按主通道优先、两个次通道同级处理。全局任务池和行为池分别保存 `DominoTask` 与 `DominoBehavior`，各由 ID map 定位。任务用 `behavior_id_list` 保存步骤顺序，以 `current_behavior_id` 定位当前步骤，成功结束后置 0。保存时分别写任务事实和全局行为数组，加载时重建两个池的索引。任务与行为 ID 分别由 `DominoGlobalIncrementID.task_increment_id/behavior_increment_id` 原子分配，保持 32 位，回绕时跳过 0 和各自池中仍占用的 ID。规划草案只保存必要规划字段与独立行为块，不携带正式任务的 ID 数组或运行状态；store 构造正式任务并按值复制行为，草案仍由消息或调用方释放。当前不维护尚无消费者的日程版本或任务执行版本。人物任务数组按提交顺序追加，删除后稳定前移，计划时间或状态改变不重排；选择任务时按通道、计划时间和业务条件筛选，同时间以数组位置决定先后，不以 ID 大小排序。任务为独立的扁平记录，待启动、运行及未回收终态均保留在数组中；不支持任务暂停、恢复或父子层级。任务失败或取消立即将所属人物置为 `DOMINO_HUMAN_STATUS_EXCEPTION`，执行器跳过该人物，退出时也不再结算；正常成功不会改变人物正常状态。
-- 当前存档版本为 25，人物模型及存档已删除未使用的最后活跃与死亡秒时间字段，data 仍保持 4096 字节。人物及嵌套 data 使用相同的非零 `human_id`。人物属性、任务 ID 数组、三个活动槽、需求结算时刻及随机状态保存在 `human.entities[].data`；六项需求 `energy/food/water/hygiene/recreation/social` 复用原字段，使用 `uint8_t` 保存 0～100 整数分；自然变化约定按完整未冻结现实分钟结算，未满分钟的时间留待下次，需求结算及单行为睡眠执行器已经接入。JSON `task_id_list` 仅保存有效前缀并保留原顺序，加载由长度恢复 `task_count`。必需的 `human_task` 和 `human_behavior` 模块分别按 `domino_all_task_list`、`domino_all_behavior_list` 的数组顺序直接保存扁平 `entities`，每片最多 4096 个任务、100000 个行为，元数据分别统计任务数和行为数；空池仍写模块 meta，分片数为 0。任务保存 `owner_human_id`、行为 ID 数组及当前行为 ID。加载按分片和数组顺序导入可信记录并重建各自 ID 索引；人物清单保留自己的提交顺序，不从全局任务池顺序推导。根 meta 的 `global_increment_id.task/behavior` 分别保存下一候选任务／行为 ID，允许为 0，不表示最后已分配 ID。所有人物调度运行态、裸指针及预留字段均不写入存档，不兼容旧版本。已定义的任务／行为类型均可保存和加载；睡眠目标有效时长由行为的 `planned_end_ms - planned_begin_ms` 推导，执行期间保持计划区间长度不变，行为记录保存类型、状态、启动标志、计划／实际时间和有效进度；目标建筑、等待检查时刻及一次性效果提交标志按实际业务实现需要再增加。正常人物支持自主睡眠和加载后从保存进度继续执行，异常状态持久保存且不会自动恢复；详细实施边界见 [`human-ai.md`](human-ai.md#2-当前代码与实际改造入口)。
-- `playground/sandbox/domino` 已同步版本 25，人物及其 data 的 `human_id=1`，`data.energy=20` 表示 20 分精力，`data.wealth=100`，`task_id_list` 为空数组，三个活动槽全为 0 且任务为空。`data.current_building_id=1` 引用名称为“样例住宅”的建筑，其类型、产权及睡眠资格规则尚未定义；样例不证明该建筑已具备睡眠服务。`data.sleep_address` 保持为 0，它是导航路口 ID，不能填写建筑 ID。
+- NPC AI 按 [`npc_ai.md`](npc_ai.md) 的 动机 → 任务 → 行为 → 动画 架构实现第一阶段（恢复精力动机与自主睡眠）。全局动机池、任务池和行为记录池分别保存 `DominoMotivation`、`DominoTask`、`DominoBehavior`，各由 ID map 定位；动机、任务和行为 ID 以存档世界内最后已分配值递增，耗尽致命退出，永不复用。任务在计划接受时取得 `task_id`（尚无执行部分），首次启动才建立执行部分；未来行为计划是任务独占的值序列，行为只在启动时分配 ID 并建立执行记录。每人物持有最多 8 个动机、32 个任务；同一时间只有一个运行任务，其余排在一条待执行队列中，统一保存 `task_id`，任务之间没有依赖。运行任务有主通道（主行为）和两个辅助通道（辅助行为），每通道至多一个当前行为；同一任务内的行为可以独立，也可以有启动／伴随／完成依赖。外部信息登记后由运行任务的应激规则选择完全让位或接受插入辅助行为。人物只保存一个共同结算游标 `settled_at_ms`；自然需求在业务时间整分钟边界变化，行为周期效果在有效进度的整周期边界发放，两类相位分别由游标和有效进度取余得到，不另存；运行期与 Stop 共用分段结算、行为终态及行为依赖即时归并和统一任务决策。不保留人物异常停调度、PLANNED／RUNNING 混合状态或行为 PENDING／SKIPPED。
+- 当前存档版本为 31，拒绝旧格式。`human.entities[].data` 保存结算游标、睡眠条件、显示称呼、待处理外部信息（类别、来源、轮次）、动机／任务清单、运行任务和待执行队列；`human_motivation` 保存动机身份、类型、生命周期（终态在 `status` 中，回收后的动机不再保存）、需求轮次与承接任务、累计实施次数、最近失败原因和按时间顺序的最近 10 条成功明细；`human_task` 保存工作身份、动机引用、回应的外部信息类别、完成指标、截止点、最后已分配的步骤序号、未来行为计划值（步骤序号、通道、插入标志、行为依赖）、行为规划重试依据、让位请求和完成条件已成立标志，以及可选执行部分（实际时刻、各通道当前行为、最近行为、主行为成功／失败／取消计数、归并进度和结束原因）；`human_behavior` 保存执行记录的步骤序号、通道、插入标志、行为依赖、类型、状态、实际时刻、目标有效时长、有效进度和结束原因。根 meta 的 `global_increment_id.motivation/task/behavior` 为最后已分配 ID。规划请求、候选、计划运行期版本、动机待评估和任务待规划标志、动机和任务的下次规划时刻、计时器和本地待办只属于本次运行，加载后由正式事实重建（InitAfter 为每个人物置动机待评估标志、为有有效动机的人物置任务待规划标志）。
+- `playground/sandbox/domino` 已同步版本 31，人物及其 data 的 `human_id=1`，`data.energy=20` 表示 20 分精力，`data.wealth=100`，动机、任务清单及待执行队列为空，运行任务为 0，没有待处理外部信息，显示称呼为空。`data.current_building_id=1` 引用名称为“样例住宅”的建筑，其类型、产权及睡眠资格规则尚未定义；样例不证明该建筑已具备睡眠服务。`data.sleep_address` 保持为 0，它是导航路口 ID，不能填写建筑 ID。
 
 ### 第三方库维护策略
 
@@ -170,17 +172,13 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug
 ./scripts/build.sh playground-build playground/算法/路径规划/弗洛伊德/main.c debug
 ```
 
-**human 相关回归**：
-
-以下脚本均支持 `debug` 和 `release`，通过 `scripts/build.sh` 构建；涉及存档的测试使用独立临时目录：
+**NPC AI 验证**：
 
 ```bash
-bash playground/验证/人物执行器/run.sh debug
-bash playground/验证/冻结等待/run.sh debug
-bash playground/验证/读写锁/run.sh debug
+./scripts/build.sh playground-run playground/npc_ai/main.c debug      # 也支持 release、sanitize、tsan
 ```
 
-人物执行器回归覆盖规划请求身份、三通道调度、过期结果、并发读取与自主规划、冻结后的内部结果留队、保存重载及任务／行为分片边界。详细覆盖和历史验证结果见 [`engine/validation-review.md`](engine/validation-review.md)。
+验证入口先运行模块内部夹具（`engine/src/human/playground.c`，仅 `DOMINO_PLAYGROUND_MODE` 编译）：自主睡眠闭环、分段与迟到结算一致、预测与真实结算共用算术、外部补足精力、睡眠条件失效与修复、实施历史滚动、请求身份与请求不设期限、候选必要／可选提交与容量、规划判断的信息差与轮次锚点、行为依赖同边界传播与失效、行为候选的依赖审核与启动、截止点边界、终态明细回收、同一任务主辅行为同边界共同作用、通知晚到、触发路径共用决策、应激接受插入（任务等插入行为结束再成功）、应激完全让位（回应任务就绪才让位、结束后原任务恢复）、外部信息轮次，测试验收专用人物输入（睡眠条件、精力、外部信息）的入口校验与先结算后写入，以及动机规划与任务规划的置位事件、动机终结与回收、下次规划时刻与整份拒绝的兜底时刻、行为结果的锚点复核与重试，以及行为规划只询问运行任务和队首（让位请求优先、队首之后不提前规划）。随后在真实线程下以样例存档副本运行端到端场景（测试线程持 human 读锁直接观察，不经客户端通道）：自主睡眠、客户端收发通道骨架（消息可入队、主循环拒绝未定义类型且不回包）、冻结、停止后读档延续（读档后每人动机、任务各规划一次，存档不含动机规划重试字段）、第二轮需求、条件失效与恢复、仅 Init 生命周期，以及受控规划器下睡眠遇到外部信息完全让位、回应通话与伴随的消息记录并行，停止保存后读档继续，通话结束后睡眠恢复。端到端存档写在构建目录的 `runtime/` 下（如 `build-debug/runtime/`）。
 
 **其他构建模式**：
 

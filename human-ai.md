@@ -1,3 +1,5 @@
+> 本文保留早期设计讨论；当前 NPC AI 实现及验收以 [npc_ai.md](npc_ai.md)、[README.md](README.md) 和 [AGENTS.md](AGENTS.md) 为准，旧草案路径、人物异常停调度和旧存档结构已替换。
+
 # Human 自主日常行为：规划与执行技术实施方案
 
 本文面向 Domino 当前 C23 代码，目标是支持同一宿主世界约 10,000 个 human 的自主日常活动，并保留按实际瓶颈扩展的空间。
@@ -37,7 +39,7 @@
 | `shared/include/domino_shared_human_task.h` | 已分离十二类任务与十五类行为枚举，删除旧五字段和 `REST`；定义计划／实际时间、进度及扁平任务状态，`DominoTask` 包含行为 ID 序列、当前行为 ID，`DominoBehavior` 包含独立行为 ID | 随具体业务增加专有参数与执行回调 |
 | `shared/include/domino_shared_human.h` | 64 字节人物核心保存身份、状态、位置、data 引用及调度身份；4096 字节 data 前部整合需求、日程、随机状态和调度补充字段，其余人物属性按语义分组 | 执行器先跳过 EXCEPTION，再按 data 中的三个槽推进；当前睡眠不依赖位置字段 |
 | `engine/src/entry.c`、`engine/include/domino_engine.h` | Init 准备基础资源、加载世界并保持冻结，不创建线程；Start 由客户端依次启动 logger、human、game_timer 和主循环，成功后直接解冻并通知；客户端 Freeze 直接冻结时钟且不通知，Thaw 直接解冻并通知主循环和业务线程；业务线程在批次边界暂停；Stop 由客户端进入停止状态、固定时钟并唤醒，等主循环和业务线程结束后统一结算；外部随后调用 Destroy 保存并释放世界；致命错误直接打印 stderr 并 exit | 随新增写入者扩展退出顺序和保存结算；在线保存及会话到限退出仍待实现 |
-| `engine/src/dispatch/entry.c` | 仅处理 `DOMINO_ENGINE_MSG_NONE` | 仅路由允许的外部业务事件；不得接收或转发客户端任务请求、规划请求或规划结果 |
+| `engine/src/dispatch/entry.c` | 尚未定义业务消息类型，收到的消息（含 `DOMINO_ENGINE_MSG_NONE`）记录一次后拒绝；不提供通用的内部数据读写 | 按业务场景单独定义消息类型及参数／返回结构；不得接收或转发客户端任务请求、规划请求或规划结果 |
 | `shared/src/queue.c`、`shared/include/domino_shared_queue.h` | 带锁、可扩容 FIFO，单条／批量消费均已存在；首 8 字节由队列写入消息 ID；`BeginFlush` 禁止生产并允许排空 | 复用值复制、批量消费和条件变量；human 以 `WakeAll` 通知控制状态，join 后清理留队载荷；logger 以 `BeginFlush` 排空退出 |
 | `engine/src/time/entry.c`、`entry.h` | 纳秒采样及 sequence 一致快照；毫秒入口校验 32 位范围；Init 只准备冻结等待同步资源并保持冻结，内部 Freeze 固定累计时钟，普通冻结由客户端直接执行且不通知，解冻也由客户端直接执行并通知主循环和业务线程；退出停钟同样由客户端直接执行 | 继续使用累计未冻结现实毫秒；显示倍率不参与业务计时 |
 | `engine/src/game_timer/` | 已接入引擎启停和 human；保留 32 字节记录、共享堆及精确 `ScheduleAt`，批次入口检查停止和冻结；后台致命失败直接打印 stderr 并 exit | 复用通用计时与取消合同；业务身份、进度和恢复归 human |

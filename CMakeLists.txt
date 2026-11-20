@@ -34,11 +34,11 @@ option(DOMINO_PLAYGROUND_MODE "Playground 模式运行，用于测试模块内�
 # 云端/在线部署构建：定义项目级 DOMINO_CLOUD_BUILD（见 shared/include/domino_shared_build.h）
 option(DOMINO_CLOUD_BUILD "云端/在线部署构建（定义 DOMINO_CLOUD_BUILD）" OFF)
 
-# 当 DOMINO_PLAYGROUND_MODE=OFF 时，从源码列表中排除 src/playground.c
+# 当 DOMINO_PLAYGROUND_MODE=OFF 时，从源码列表中排除各级 playground.c（模块内部验证夹具）
 # 各模块在 GLOB 后调用：domino_exclude_playground_sources(SOURCES_VAR)
 macro(domino_exclude_playground_sources var_name)
     if(NOT DOMINO_PLAYGROUND_MODE)
-        list(REMOVE_ITEM ${var_name} "${CMAKE_CURRENT_SOURCE_DIR}/src/playground.c")
+        list(FILTER ${var_name} EXCLUDE REGEX "/playground\\.c$")
     else()
         message(STATUS "注意：Playground 模式运行，模块内部实现逻辑可能与实际运行逻辑不一致")
     endif()

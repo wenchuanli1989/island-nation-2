@@ -1,14 +1,126 @@
 #include "entry.h"
 
+#include "../entry.h"
 #include "sleep.h"
 
-static const DominoTaskOps* const g_task_ops[DOMINO_TASK_TYPE_COUNT] = {
-    [DOMINO_TASK_TYPE_SLEEP] = &domino_sleep_task_ops,
+bool dominoHumanTaskWithinDeadline(const DominoTask* task_ptr, domino_runtime_ms_t now_ms) {
+    if ((task_ptr->flags & DOMINO_TASK_FLAG_DEADLINE_VALID) == 0U) {
+        return true;
+    }
+    return (task_ptr->flags & DOMINO_TASK_FLAG_DEADLINE_INCLUSIVE) != 0U ? now_ms <= task_ptr->deadline_ms : now_ms < task_ptr->deadline_ms;
+}
+
+bool dominoHumanTaskHasOwnWork(const DominoTaskDecisionInput* input_ptr, uint8_t channel_mask) {
+    for (uint8_t channel = 0U; channel < DOMINO_BEHAVIOR_CHANNEL_COUNT; channel++) {
+        const DominoBehavior* behavior_ptr = input_ptr->behavior_list[channel];
+        if ((channel_mask & (1U << channel)) != 0U && behavior_ptr != nullptr && (behavior_ptr->flags & DOMINO_BEHAVIOR_FLAG_INSERTED) == 0U) {
+            return true;
+        }
+    }
+    const DominoTask* task_ptr = input_ptr->task_ptr;
+    for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+        const DominoBehaviorPlanItem* item_ptr = &task_ptr->plan_item_list[index];
+        if ((channel_mask & (1U << item_ptr->channel_index)) != 0U && (item_ptr->flags & DOMINO_BEHAVIOR_FLAG_INSERTED) == 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool dominoHumanTaskHasInsertedWork(const DominoTaskDecisionInput* input_ptr) {
+    for (uint8_t channel = 0U; channel < DOMINO_BEHAVIOR_CHANNEL_COUNT; channel++) {
+        const DominoBehavior* behavior_ptr = input_ptr->behavior_list[channel];
+        if (behavior_ptr != nullptr && (behavior_ptr->flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U) {
+            return true;
+        }
+    }
+    const DominoTask* task_ptr = input_ptr->task_ptr;
+    for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+        if ((task_ptr->plan_item_list[index].flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool dominoHumanTaskHasBrokenStep(const DominoTask* task_ptr) {
+    for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+        const DominoBehaviorPlanItem* item_ptr = &task_ptr->plan_item_list[index];
+        for (uint8_t dep = 0U; dep < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dep++) {
+            if (item_ptr->dependency_list[dep].kind != DOMINO_BEHAVIOR_DEPENDENCY_NONE &&
+                item_ptr->dependency_list[dep].state == DOMINO_BEHAVIOR_DEPENDENCY_BROKEN) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/** @brief 通用计时任务：至少一个主行为成功、自身行为和步骤都已完成即成功；截止点前未完成按不可修复规则终结。
+ * @note 行为之间的依赖已在本边界的行为判定中处理完；依赖失效的步骤作为计划缺口交给行为规划器修复。
+ */
+static DominoTaskDecision decideTimedTask(const DominoTaskDecisionInput* input_ptr) {
+    const DominoTask* task_ptr = input_ptr->task_ptr;
+    const bool deadline_reached = (task_ptr->flags & DOMINO_TASK_FLAG_DEADLINE_VALID) != 0U && input_ptr->now_ms >= task_ptr->deadline_ms;
+    if (task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE) {
+        if (deadline_reached) {
+            /* 到截止时刻仍未启动，已不可能按时取得成功行为。 */
+            return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_REVOKE, .reason = DOMINO_END_REASON_DEADLINE_MISSED};
+        }
+        return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_CONTINUE};
+    }
+    const bool ready = task_ptr->main_succeeded_count > 0U && !dominoHumanTaskHasOwnWork(input_ptr, DOMINO_BEHAVIOR_CHANNEL_MASK_ALL);
+    if (ready && dominoHumanTaskWithinDeadline(task_ptr, input_ptr->now_ms)) {
+        return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_SUCCEED, .reason = DOMINO_END_REASON_COMPLETED};
+    }
+    if (deadline_reached) {
+        /* 本边界的行为结果已先确认；仍未完成就不能再等待未来结果。 */
+        return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_FAIL, .reason = DOMINO_END_REASON_DEADLINE_MISSED};
+    }
+    return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_CONTINUE};
+}
+
+/** @brief 没有主行为成功且自身工作已经耗尽，或有依赖失效的步骤，就缺少安排。 */
+static bool hasTimedPlanGap(const DominoTaskDecisionInput* input_ptr) {
+    const DominoTask* task_ptr = input_ptr->task_ptr;
+    return dominoHumanTaskHasBrokenStep(task_ptr) ||
+           (task_ptr->main_succeeded_count == 0U && !dominoHumanTaskHasOwnWork(input_ptr, DOMINO_BEHAVIOR_CHANNEL_MASK_ALL));
+}
+
+static bool canPlanTimedBehavior(const DominoTaskDecisionInput* input_ptr) {
+    (void)input_ptr;
+    return true;
+}
+
+/** @brief 通用计时工作可以一边进行一边回应联系，接受插入。 */
+static uint8_t reactTimed(const DominoTaskDecisionInput* input_ptr, uint8_t stimulus_kind) {
+    (void)input_ptr;
+    (void)stimulus_kind;
+    return DOMINO_TASK_REACTION_INSERT;
+}
+
+static void onTimedEnergyInput(DominoTask* task_ptr, uint8_t energy) {
+    (void)task_ptr;
+    (void)energy;
+}
+
+static const DominoTaskRules g_timed_task_rules = {
+    .decide = decideTimedTask,
+    .has_plan_gap = hasTimedPlanGap,
+    .can_plan_behavior = canPlanTimedBehavior,
+    .react = reactTimed,
+    .on_energy_input = onTimedEnergyInput,
 };
 
-const DominoTaskOps* dominoHumanGetTaskOps(DOMINO_TASK_TYPE type) {
-    if (type <= DOMINO_TASK_TYPE_NONE || type >= DOMINO_TASK_TYPE_COUNT) {
+static const DominoTaskRules* const g_task_rules[DOMINO_TASK_TYPE_COUNT] = {
+    [DOMINO_TASK_TYPE_SLEEP] = &domino_sleep_task_rules,
+    [DOMINO_TASK_TYPE_PHONE_CALL] = &g_timed_task_rules,
+    [DOMINO_TASK_TYPE_MESSAGE] = &g_timed_task_rules,
+};
+
+const DominoTaskRules* dominoHumanGetTaskRules(uint8_t type) {
+    if (type == DOMINO_TASK_TYPE_NONE || type >= DOMINO_TASK_TYPE_COUNT) {
         return nullptr;
     }
-    return g_task_ops[type];
+    return g_task_rules[type];
 }

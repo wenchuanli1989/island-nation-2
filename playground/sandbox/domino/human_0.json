@@ -4,7 +4,6 @@
   "entities": [
     {
       "human_id": 1,
-      "status": 0,
       "movable_object_id": 0,
       "position_x": 0,
       "position_y": 0,
@@ -64,13 +63,16 @@
         "name": "",
         "description": "",
         "random_state": 1,
+        "settled_at_ms": 0,
+        "sleep_forbidden": false,
+        "display_name": "",
+        "stimulus_kind": 0,
+        "stimulus_source_id": 0,
+        "stimulus_round": 0,
+        "active_task_id": 0,
+        "motivation_id_list": [],
         "task_id_list": [],
-        "active_task_id_list": [
-          0,
-          0,
-          0
-        ],
-        "needs_updated_at_ms": 0
+        "task_queue_list": []
       }
     }
   ]

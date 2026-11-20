@@ -7,38 +7,50 @@
 #include "serde.h"
 #include "serde_registry.h"
 
-/** @brief 保存人物扩展数据、任务清单和活动槽；任务实体由 human_task 模块保存，调度运行字段不落盘。 */
-static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
-    if (human_data->task_count > DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%u", human_data->human_id,
-                               human_data->task_count);
+/** @brief 写入 uint32 数组的有效前缀；分配失败致命退出。 */
+static void addU32Prefix(yyjson_mut_doc* doc, yyjson_mut_val* obj, const char* key, const uint32_t* value_list, size_t count) {
+    yyjson_mut_val* array = yyjson_mut_obj_add_arr(doc, obj, key);
+    if (!array) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
+    for (size_t index = 0; index < count; index++) {
+        if (!yyjson_mut_arr_add_uint(doc, array, value_list[index])) {
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
+        }
+    }
+}
 
+/** @brief 读取 uint32 数组前缀，返回实际项数；可信存档保证不超过 capacity。 */
+static uint8_t readU32Prefix(yyjson_val* array, uint32_t* value_list, size_t capacity) {
+    const size_t count = yyjson_arr_size(array);
+    if (count > capacity) {
+        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human list exceeds capacity: count=%zu capacity=%zu", count, capacity);
+    }
+    for (size_t index = 0; index < count; index++) {
+        value_list[index] = (uint32_t)yyjson_get_uint(yyjson_arr_get(array, index));
+    }
+    return (uint8_t)count;
+}
+
+/** @brief 保存人物 AI 事实：共同结算游标、条件、待处理外部信息及轮次、显示称呼、动机与任务清单、运行任务和待执行队列。
+ * @note 规划请求资格、待规划标志、下次规划时刻、唤醒登记、待办和调度状态只属于本次运行，不落盘。
+ */
+static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHumanData* human_data) {
+    yyjson_mut_val* obj = yyjson_mut_obj(doc);
     if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human_data->human_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "random_state", human_data->random_state) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "needs_updated_at_ms", human_data->needs_updated_at_ms)) {
+        !yyjson_mut_obj_add_uint(doc, obj, "settled_at_ms", human_data->settled_at_ms) ||
+        !yyjson_mut_obj_add_bool(doc, obj, "sleep_forbidden", (human_data->ai_flags & DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN) != 0U) ||
+        !yyjson_mut_obj_add_strcpy(doc, obj, "display_name", human_data->display_name) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "stimulus_kind", human_data->stimulus_kind) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "stimulus_source_id", human_data->stimulus_source_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "stimulus_round", human_data->stimulus_round) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "active_task_id", human_data->active_task_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
-    /* 只保存有效 ID，保持提交顺序；数组长度即 task_count。 */
-    yyjson_mut_val* task_ids = yyjson_mut_obj_add_arr(doc, obj, "task_id_list");
-    if (!task_ids) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
-    }
-    for (size_t index = 0; index < human_data->task_count; index++) {
-        if (!yyjson_mut_arr_add_uint(doc, task_ids, human_data->task_id_list[index])) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
-        }
-    }
-    yyjson_mut_val* slots = yyjson_mut_obj_add_arr(doc, obj, "active_task_id_list");
-    if (!slots) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
-    }
-    for (size_t index = 0; index < DOMINO_HUMAN_TASK_CHANNEL_COUNT; index++) {
-        if (!yyjson_mut_arr_add_uint(doc, slots, human_data->active_task_id_list[index])) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
-        }
-    }
+    addU32Prefix(doc, obj, "motivation_id_list", human_data->motivation_id_list, human_data->motivation_count);
+    addU32Prefix(doc, obj, "task_id_list", human_data->task_id_list, human_data->task_count);
+    addU32Prefix(doc, obj, "task_queue_list", human_data->task_queue_list, human_data->task_queue_count);
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "family_org_id", human_data->family_org_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "company_org_id", human_data->company_org_id) ||
@@ -177,22 +189,18 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
 static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_data) {
     out_human_data->human_id = (typeof(out_human_data->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
     out_human_data->random_state = (typeof(out_human_data->random_state))yyjson_get_uint(yyjson_obj_get(obj, "random_state"));
-    out_human_data->needs_updated_at_ms = (typeof(out_human_data->needs_updated_at_ms))yyjson_get_uint(yyjson_obj_get(obj, "needs_updated_at_ms"));
-    yyjson_val* task_ids = yyjson_obj_get(obj, "task_id_list");
-    if (yyjson_arr_size(task_ids) > DOMINO_HUMAN_TASK_COUNT_MAX) {
-        DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds capacity: human_id=%u count=%zu", out_human_data->human_id,
-                               yyjson_arr_size(task_ids));
-    }
-    out_human_data->task_count = (uint8_t)yyjson_arr_size(task_ids);
-    for (size_t index = 0; index < out_human_data->task_count; index++) {
-        yyjson_val* task_id = yyjson_arr_get(task_ids, index);
-        out_human_data->task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
-    }
-    yyjson_val* slots = yyjson_obj_get(obj, "active_task_id_list");
-    for (size_t index = 0; index < DOMINO_HUMAN_TASK_CHANNEL_COUNT; index++) {
-        yyjson_val* task_id = yyjson_arr_get(slots, index);
-        out_human_data->active_task_id_list[index] = (domino_task_id_t)yyjson_get_uint(task_id);
-    }
+    out_human_data->settled_at_ms = (domino_runtime_ms_t)yyjson_get_uint(yyjson_obj_get(obj, "settled_at_ms"));
+    out_human_data->ai_flags = (uint8_t)(yyjson_get_bool(yyjson_obj_get(obj, "sleep_forbidden")) ? DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN : 0U);
+    serdeReadStr(obj, "display_name", out_human_data->display_name, sizeof(out_human_data->display_name));
+    out_human_data->stimulus_kind = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "stimulus_kind"));
+    out_human_data->stimulus_source_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "stimulus_source_id"));
+    out_human_data->stimulus_round = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "stimulus_round"));
+    out_human_data->active_task_id = (domino_task_id_t)yyjson_get_uint(yyjson_obj_get(obj, "active_task_id"));
+    out_human_data->motivation_count =
+        readU32Prefix(yyjson_obj_get(obj, "motivation_id_list"), out_human_data->motivation_id_list, DOMINO_HUMAN_MOTIVATION_COUNT_MAX);
+    out_human_data->task_count = readU32Prefix(yyjson_obj_get(obj, "task_id_list"), out_human_data->task_id_list, DOMINO_HUMAN_TASK_COUNT_MAX);
+    out_human_data->task_queue_count =
+        readU32Prefix(yyjson_obj_get(obj, "task_queue_list"), out_human_data->task_queue_list, DOMINO_HUMAN_TASK_COUNT_MAX);
     out_human_data->family_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "family_org_id"));
     out_human_data->company_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "company_org_id"));
     out_human_data->country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "country_id"));
@@ -313,11 +321,11 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->bag = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "bag"));
 }
 
-/** @brief 序列化同索引 Human/Data；可信加载及业务边界保证配对与引用，调用期间实体主表保持不变。 */
+/** @brief 序列化同索引 Human/Data；调度状态由任务事实重建，不保存。 */
 static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* human, const DominoHumanData* human_data) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
 
-    if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human->human_id) || !yyjson_mut_obj_add_uint(doc, obj, "status", human->status)) {
+    if (!obj || !yyjson_mut_obj_add_uint(doc, obj, "human_id", human->human_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
@@ -353,7 +361,6 @@ static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* hu
 /** @brief 仅解析局部值，成功后由加载循环同步提交 Human 与 Data。 */
 static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHumanData* out_human_data) {
     out_human->human_id = (typeof(out_human->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
-    out_human->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_human->movable_object_id = (typeof(out_human->movable_object_id))yyjson_get_uint(yyjson_obj_get(obj, "movable_object_id"));
     if (out_human->movable_object_id == 0) {
         out_human->position_info.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));

@@ -2,22 +2,39 @@
 
 #include "../rules.h"
 
-void dominoHumanApplySleep(DominoHumanData* data_ptr, DominoBehavior* behavior_ptr, domino_runtime_ms_t now_ms) {
-    const domino_runtime_ms_t old_accounted_ms = behavior_ptr->accounted_at_ms;
-    if (now_ms < old_accounted_ms) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "sleep settlement time precedes progress for behavior=%u", behavior_ptr->behavior_id);
-    }
-    const domino_runtime_ms_t remaining_ms = dominoHumanGetRemainingSleepMs(behavior_ptr);
-    const domino_runtime_ms_t elapsed_ms = now_ms - old_accounted_ms;
-    const domino_runtime_ms_t span_ms = elapsed_ms < remaining_ms ? elapsed_ms : remaining_ms;
-    const uint32_t old_points = behavior_ptr->active_elapsed_ms / DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS;
-    behavior_ptr->active_elapsed_ms += span_ms;
-    const uint32_t gained_points = behavior_ptr->active_elapsed_ms / DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS - old_points;
-    const uint32_t missing_points = DOMINO_HUMAN_NEED_MAX - data_ptr->energy;
-    data_ptr->energy += (uint8_t)(gained_points < missing_points ? gained_points : missing_points);
-    behavior_ptr->accounted_at_ms = now_ms;
-    if (span_ms == remaining_ms) {
-        behavior_ptr->status = DOMINO_BEHAVIOR_STATUS_DONE;
-        behavior_ptr->ended_at_ms = now_ms;
-    }
+static bool validateSleepStep(const DominoBehaviorPlanItem* item_ptr) {
+    return item_ptr->target_effective_ms > 0U;
 }
+
+static bool canRunSleep(const DominoHumanConditionView* view_ptr) {
+    return !view_ptr->sleep_forbidden_flag;
+}
+
+/** @brief 有效进度每跨过一个 DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS 整周期恢复 1 点；进度上限只在此实现一份，真实结算与预测共用。 */
+static void calcSleep(const DominoBehaviorCalcInput* input_ptr, DominoBehaviorCalcOutput* output_ptr) {
+    *output_ptr = (DominoBehaviorCalcOutput){.progress_ms = input_ptr->progress_ms};
+    if (input_ptr->status != DOMINO_BEHAVIOR_STATUS_ACTIVE || !input_ptr->condition_ok || input_ptr->progress_ms >= input_ptr->target_ms) {
+        return;
+    }
+    const domino_runtime_ms_t remaining_ms = input_ptr->target_ms - input_ptr->progress_ms;
+    const domino_runtime_ms_t effective_ms = input_ptr->span_ms < remaining_ms ? input_ptr->span_ms : remaining_ms;
+    output_ptr->progress_ms = input_ptr->progress_ms + effective_ms;
+    const uint32_t point_count = dominoBehaviorCountPeriods(input_ptr->progress_ms, output_ptr->progress_ms, DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS);
+    output_ptr->energy_delta = (int32_t)(point_count > 100U ? 100U : point_count);
+    const domino_runtime_ms_t left_ms = remaining_ms - effective_ms;
+    const domino_runtime_ms_t point_ms = dominoBehaviorCalcPeriodGapMs(output_ptr->progress_ms, DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS);
+    output_ptr->next_boundary_ms = point_ms < left_ms ? point_ms : left_ms;
+    output_ptr->has_boundary = left_ms > 0U;
+}
+
+static uint8_t judgeSleep(const DominoBehavior* behavior_ptr) {
+    return behavior_ptr->effective_progress_ms >= behavior_ptr->target_effective_ms ? DOMINO_BEHAVIOR_STATUS_SUCCEEDED
+                                                                                    : DOMINO_BEHAVIOR_STATUS_ACTIVE;
+}
+
+const DominoBehaviorRules domino_sleep_behavior_rules = {
+    .validate_step = validateSleepStep,
+    .can_run = canRunSleep,
+    .calc = calcSleep,
+    .judge = judgeSleep,
+};

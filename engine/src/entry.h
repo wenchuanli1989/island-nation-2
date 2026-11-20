@@ -28,7 +28,7 @@ extern bool dominoEngineIsClientThread(void);
 extern bool dominoEngineIsStopping(void);
 
 /**
- * @brief 引擎工作线程向客户端发送消息。
+ * @brief 引擎工作线程向客户端发送消息；当前尚未定义会产生回包的业务场景，没有调用方。
  * @pre 引擎已准备客户端收件队列，并在全部投递线程 join 前保持队列有效；本接口不重复校验生命周期。
  * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
  * @note 队列满等传输故障直接打印致命错误并退出进程，不等待空位。

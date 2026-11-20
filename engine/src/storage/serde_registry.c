@@ -18,6 +18,10 @@ static size_t countHumanBehavior(void) {
     return kv_size(domino_all_behavior_list);
 }
 
+static size_t countHumanMotivation(void) {
+    return kv_size(domino_all_motivation_list);
+}
+
 static size_t countRegion(void) {
     return g_domino_region_count;
 }
@@ -131,6 +135,14 @@ const StorageModuleType g_storage_module_types[] = {
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveHumanBehavior,
         .load_fn = serdeLoadHumanBehavior,
+    },
+    {
+        .type_name = "human_motivation",
+        .max_per_shard = DOMINO_STORAGE_SHARD_HUMAN_TASK,
+        .count_fn = countHumanMotivation,
+        .shard_count_fn = storageEntityShardCount,
+        .save_fn = serdeSaveHumanMotivation,
+        .load_fn = serdeLoadHumanMotivation,
     },
     {
         .type_name = "human_task",

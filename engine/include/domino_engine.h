@@ -3,31 +3,16 @@
 
 #include <assert.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 
+#include "domino_engine_protocol.h"
 #include "domino_shared_error_codes.h"
 
 /** @file domino_engine.h
- * @brief 引擎对外接口；客户端不得直接提交任务请求、规划请求或规划结果。
- * @note 任务由引擎内部自主决策和规划，不为测试增加对外任务提交接口。
+ * @brief 引擎对外接口；客户端不得直接提交任务请求、规划请求或规划结果，引擎也不提供通用的内部数据读写。
+ * @note 任务由引擎内部自主决策和规划，不为测试增加对外任务提交接口。客户端与引擎的交互按业务场景单独定义消息类型，
+ * 参数和返回数据结构针对该场景设计；收发消息结构及消息类型定义在 domino_engine_protocol.h，本文件声明生命周期、冻结及消息收发接口。
  */
-
-/** @brief 客户端收发队列当前只支持 NONE；不提供客户端任务、规划请求或规划结果类型。 */
-typedef enum DominoEngineMsgType {
-    DOMINO_ENGINE_MSG_NONE = 0,
-} DominoEngineMsgType;
-
-/** @brief 客户端与主循环之间的对外队列消息；当前单一消息类型直接复用此结构。 */
-typedef struct DominoEngineMessage {
-    uint64_t id;  ///< 入队成功时由所属队列生成并回写的消息 ID。
-    uint64_t u64[4];
-    uint32_t u32[5];
-    uint32_t type;
-} DominoEngineMessage;
-
-static_assert(offsetof(DominoEngineMessage, id) == 0, "DominoEngineMessage id must be first for queue ID writeback");
-static_assert(sizeof(DominoEngineMessage) == 64U, "engine message must be 64 bytes");
 
 typedef struct DominoEngineLaunchConfig {
     /**
@@ -68,7 +53,7 @@ typedef struct DominoEngineClientData {
 static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096 bytes");
 
 /**
- * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行／规划线程、game_timer 和主循环。
+ * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行器、动机／任务／行为三个规划线程、game_timer 和主循环。
  * @note 所有线程创建完成后进入 RUNNING，解冻并唤醒业务线程；本阶段不再创建固定队列、映射表或同步对象。
  * @param client_data_out_ptr 可为 nullptr；非空时仅写入 game_date_time_ns。
  * @note 调度已由 Init 准备；返回只表示线程启动完成，不表示业务规划或任务已执行；启动失败直接打印致命错误并退出进程。
@@ -78,9 +63,9 @@ extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 /**
  * @brief 客户端进入 STOPPING，停止已启动的线程并排空日志，保留资源供 Destroy 保存和释放。
  * @pre 引擎处于 INITIALIZED 或 RUNNING，且由 Init 登记的客户端线程串行调用；已冻结的运行实例同样可以停止。
- * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、执行／规划线程及 game_timer，通过 human 模块入口统一结算全部人物，
- * 包含异常人物遗留的活动通道和自然需求，再排空日志并 join writer。仅 Init、未 Start 时跳过业务线程 join 和模块结算，logger 关闭入队并刷新输出；
- * 保持已加载及配置的事实。
+ * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、human 执行器、动机／任务／行为三个规划线程及 game_timer，
+ * 通过 human 模块入口把全部人物的共同结算游标推进到停钟时刻，完成行为终态归并、任务决策及动机计次，再排空日志并 join writer。仅 Init、未 Start
+ * 时跳过业务线程 join 和模块结算，logger 关闭入队并刷新输出； 保持已加载及配置的事实。
  * 任务业务失败记录终态并继续其他结算；停止或结算中的基础设施及不可恢复错误直接终止进程，不保存。
  * 成功后进入 STOPPED，世界、队列、同步对象和日志文件均保留，全部线程已退出，尚未保存；随后显式调用 Destroy，不支持直接 Start 或 Thaw。
  */
@@ -116,7 +101,8 @@ extern void dominoEngineThawTime(void);
 
 /**
  * @brief 客户端向引擎主循环发送消息。
- * @note 不提供客户端任务请求、规划请求或规划结果消息，不能通过本入口提交这些内容。
+ * @note 消息类型按业务场景单独定义；当前尚未定义业务场景，主循环把出队的消息按不支持的类型记录一次并丢弃，不回包。
+ * 不提供客户端任务请求、规划请求、规划结果或通用实体字段读写消息。
  * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
  * @note 只允许登记的客户端线程在 RUNNING 期间发送，冻结不影响入队；主循环观察冻结后保留消息，解冻后继续处理。
  * 若冻结发生在主循环的批次检查之后，该批仍可继续出队和处理。
@@ -127,6 +113,7 @@ extern DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr);
 
 /**
  * @brief 客户端接收引擎消息。
+ * @note 当前尚未定义会产生回包的业务场景，客户端收件队列保持为空。
  * @pre 只允许登记的客户端线程在 RUNNING 期间接收。
  * @param blocking 正常状态下无消息时，true 等待消息，false 返回 `ERR_QUEUE_EMPTY`；两种模式均需获取队列 mutex。
  * @note 冻结不影响取出已有消息；暂停时空队列的阻塞调用仍等待生产者，需继续控制游戏时使用非阻塞模式。

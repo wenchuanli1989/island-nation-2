@@ -8,8 +8,8 @@
 
 #include "domino_shared_error_codes.h"
 
-#define DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY 100U
-#define DOMINO_THREAD_QUEUE_MAX_CAPACITY 10000U
+#define DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY 20000U
+#define DOMINO_THREAD_QUEUE_MAX_CAPACITY 100000U
 
 /** @brief 可扩容的多生产者、多消费者 FIFO；消息前 8 字节固定为队列 ID，字段由队列内部维护。
  * @note 调用方提供零初始化存储，不得改写队列控制字段；Init/Destroy 期间须排除其他队列操作。

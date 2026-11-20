@@ -1,3 +1,7 @@
+#include "human/playground.h"
+
+#include <string.h>
+
 #include "domino_engine.h"
 #include "domino_shared_common.h"
 #include "domino_shared_nav.h"
@@ -5,9 +9,8 @@
 #include "nav/path.h"
 #include "nav/state.h"
 
-int dominoEnginePlayground(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+/** @brief 导航演示：建立小路网并输出最短路径。 */
+static int runNavPlayground(void) {
     dominoNavModuleInit();
     dominoNavModuleInitAfter();
     DOMINO_CODE result = CODE_OK;
@@ -123,4 +126,12 @@ cleanup:
     dominoNavModuleDestroyBefore();
     dominoNavModuleDestroy();
     return result == CODE_OK ? 0 : 1;
+}
+
+/** @brief Playground 入口：`npc_ai <sandbox_dir> <work_dir>` 运行 NPC AI 验证，其余参数运行导航演示。 */
+int dominoEnginePlayground(int argc, char* argv[]) {
+    if (argc >= 4 && strcmp(argv[1], "npc_ai") == 0) {
+        return dominoHumanPlayground(argv[2], argv[3]) == 0 ? 0 : 1;
+    }
+    return runNavPlayground();
 }
