@@ -1,0 +1,1466 @@
+<title>Claude Code 分级手册</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: sticky level-grouped index on the left, one reading column on the right; stacks to a single column on phones */
+:root{
+  --bg:#f4f6f9; --surface:#ffffff; --fg:#17202b; --muted:#5b6778; --line:#dce2ea;
+  --accent:#1a6a8e; --accent-soft:#e4eff5;
+  --code-bg:#131b24; --code-fg:#dbe4ec; --code-dim:#8597a8; --code-hl:#8fd1f0;
+  --lv1:#2c7a52; --lv2:#a5651a; --lv3:#6a48b8;
+  --mine-bg:#e9f2ee; --warn-bg:#fbf0e1; --warn-fg:#7a4a0e;
+  --kbd-bg:#ffffff; --kbd-line:#c7d0da;
+  --font-body:"Inter","Noto Sans SC",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  --font-head:"Space Grotesk","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Noto Sans SC",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f141a; --surface:#161d25; --fg:#e3e9ef; --muted:#98a5b4; --line:#27313c;
+    --accent:#62b6d9; --accent-soft:#17303c;
+    --code-bg:#0a0f14; --code-fg:#d6e0e9; --code-dim:#7a8b9b; --code-hl:#8fd1f0;
+    --lv1:#5ec48f; --lv2:#e2a852; --lv3:#a88ff0;
+    --mine-bg:#13251c; --warn-bg:#2b2113; --warn-fg:#f0c27a;
+    --kbd-bg:#1d2630; --kbd-line:#3a4652;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --surface:#161d25; --fg:#e3e9ef; --muted:#98a5b4; --line:#27313c;
+  --accent:#62b6d9; --accent-soft:#17303c;
+  --code-bg:#0a0f14; --code-fg:#d6e0e9; --code-dim:#7a8b9b; --code-hl:#8fd1f0;
+  --lv1:#5ec48f; --lv2:#e2a852; --lv3:#a88ff0;
+  --mine-bg:#13251c; --warn-bg:#2b2113; --warn-fg:#f0c27a;
+  --kbd-bg:#1d2630; --kbd-line:#3a4652;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:16px}
+@media (prefers-reduced-motion: no-preference){html{scroll-behavior:smooth}}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15.5px;line-height:1.75}
+a{color:var(--accent);text-underline-offset:3px}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+.shell{display:grid;grid-template-columns:250px minmax(0,1fr);gap:56px;max-width:1200px;margin:0 auto;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:40px 80px}
+main{min-width:0;max-width:800px}
+
+/* index */
+nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto;font-size:14px}
+nav.toc summary{font:600 12px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);cursor:pointer;list-style:none;padding:4px 0}
+nav.toc summary::-webkit-details-marker{display:none}
+nav.toc .grp{margin-top:18px}
+nav.toc .grp-title{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:6px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+nav.toc a{display:grid;grid-template-columns:2.6em 1fr;gap:4px;padding:5px 8px;border-radius:6px;color:var(--fg);text-decoration:none;line-height:1.45}
+nav.toc a span:first-child{font-family:var(--font-mono);font-size:12px;color:var(--muted);padding-top:1px}
+nav.toc a:hover{background:var(--accent-soft)}
+nav.toc a[aria-current="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+nav.toc a[aria-current="true"] span:first-child{color:var(--accent)}
+
+/* masthead */
+.mast h1{font-family:var(--font-head);font-weight:700;font-size:clamp(30px,5vw,44px);line-height:1.15;margin:0 0 12px;text-wrap:balance;letter-spacing:-.01em}
+.mast .sub{font-size:17px;color:var(--muted);margin:0 0 18px;max-width:60ch}
+.mast .meta{font:13px/1.6 var(--font-mono);color:var(--muted);margin:0 0 28px}
+.facts{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:0 0 20px}
+.facts h2{font:600 12px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.facts dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 18px;margin:0;font-size:14.5px}
+.facts dt{color:var(--muted)}
+.facts dd{margin:0;min-width:0}
+.howto{font-size:14.5px;color:var(--muted);margin:0 0 8px}
+
+/* level band */
+.level-band{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:72px 0 8px;padding-bottom:12px;border-bottom:2px solid var(--line)}
+.level-band h2{font-family:var(--font-head);font-size:26px;margin:0}
+.level-band p{margin:0;color:var(--muted)}
+.lv{display:inline-block;font:600 12px/1.6 var(--font-mono);letter-spacing:.04em;padding:1px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.lv1{color:var(--lv1)} .lv2{color:var(--lv2)} .lv3{color:var(--lv3)}
+
+/* topic */
+.topic{padding-top:44px}
+.topic + .topic{border-top:1px solid var(--line);margin-top:44px}
+.topic-head h2{font-family:var(--font-head);font-size:28px;line-height:1.25;margin:10px 0 8px;text-wrap:balance}
+.entry{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+.lede{font-size:16.5px;margin:0 0 8px;max-width:66ch}
+.topic h3{font-family:var(--font-head);font-size:19px;margin:34px 0 10px;text-wrap:balance}
+.topic h4{font-size:15.5px;margin:22px 0 6px}
+.topic p,.topic li{max-width:68ch}
+.topic ul,.topic ol{padding-left:1.4em}
+.topic li{margin:4px 0}
+.topic ol.steps{counter-reset:s;list-style:none;padding-left:0}
+.topic ol.steps>li{counter-increment:s;position:relative;padding-left:2.4em;margin:12px 0}
+.topic ol.steps>li::before{content:counter(s);position:absolute;left:0;top:.15em;width:1.65em;height:1.65em;border-radius:50%;
+  background:var(--accent-soft);color:var(--accent);font:600 12.5px/1.65em var(--font-mono);text-align:center}
+
+code{font-family:var(--font-mono);font-size:.86em;background:var(--accent-soft);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+kbd{font-family:var(--font-mono);font-size:.8em;padding:1px 6px;border:1px solid var(--kbd-line);border-bottom-width:2px;border-radius:4px;background:var(--kbd-bg);color:var(--fg);white-space:nowrap}
+
+.code{position:relative;margin:12px 0 16px}
+.code pre{margin:0;background:var(--code-bg);color:var(--code-fg);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.65 var(--font-mono);tab-size:2}
+.code pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal;color:inherit}
+.code .c{color:var(--code-dim)}
+.code .p{color:var(--code-hl)}
+.code .lang{position:absolute;left:12px;top:-9px;font:600 10.5px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;background:var(--bg);color:var(--muted);padding:2px 6px;border-radius:4px}
+.copy{position:absolute;top:8px;right:8px;font:500 12px var(--font-mono);color:var(--code-fg);background:transparent;border:1px solid var(--code-dim);border-radius:5px;padding:2px 8px;cursor:pointer;opacity:.75}
+.copy:hover{opacity:1}
+
+.tbl{overflow-x:auto;margin:12px 0 18px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.6}
+th,td{text-align:left;vertical-align:top;padding:8px 12px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:none}
+th{font-weight:600;color:var(--muted);font-size:12.5px;letter-spacing:.02em;background:var(--bg)}
+td code{white-space:nowrap;overflow-wrap:normal}
+td.wrap code{white-space:normal;overflow-wrap:anywhere}
+
+.note{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;align-items:baseline;border-radius:8px;padding:12px 14px;margin:14px 0;font-size:14.5px}
+.note p{margin:0}
+.note p+p{grid-column:2}
+.note .tag{font:600 11px/1.8 var(--font-mono);letter-spacing:.06em;padding:0 7px;border-radius:4px;white-space:nowrap}
+.mine{background:var(--mine-bg)} .mine .tag{background:var(--lv1);color:var(--surface)}
+.warn{background:var(--warn-bg)} .warn .tag{background:var(--warn-fg);color:var(--surface)}
+
+.term-mock{background:var(--code-bg);color:var(--code-fg);font:13px/1.7 var(--font-mono);border-radius:8px;padding:10px 14px;margin:12px 0;overflow-x:auto;white-space:pre}
+.term-mock .dim{color:var(--code-dim)}
+
+.sources{margin-top:80px;padding-top:20px;border-top:2px solid var(--line);font-size:14px;color:var(--muted)}
+.sources h2{font-family:var(--font-head);font-size:18px;color:var(--fg);margin:0 0 8px}
+.sources ul{columns:2 260px;column-gap:28px;padding-left:1.1em}
+.sources li{break-inside:avoid;margin:3px 0}
+
+@media (max-width:900px){
+  .shell{grid-template-columns:minmax(0,1fr);gap:24px;padding-block:24px 64px}
+  nav.toc{position:static;max-height:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+  .level-band{margin-top:56px}
+}
+@media (max-width:480px){
+  body{font-size:15px}
+  .facts dl{grid-template-columns:minmax(0,1fr)}
+  .facts dd{margin-bottom:6px}
+  .topic-head h2{font-size:24px}
+}
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="目录">
+  <details id="toc-details" open>
+    <summary>目录 · 14 个话题</summary>
+    <div class="grp">
+      <div class="grp-title"><span class="lv lv1">入门</span></div>
+      <ol>
+        <li><a href="#a1"><span>A1</span><span>安装、登录与升级</span></a></li>
+        <li><a href="#a3"><span>A3</span><span>常用斜杠命令</span></a></li>
+        <li><a href="#a5"><span>A5</span><span>会话管理与撤销</span></a></li>
+        <li><a href="#a7"><span>A7</span><span>模型、推理力度与快速模式</span></a></li>
+        <li><a href="#a8"><span>A8</span><span>快捷键与中断</span></a></li>
+      </ol>
+    </div>
+    <div class="grp">
+      <div class="grp-title"><span class="lv lv2">晋级</span></div>
+      <ol>
+        <li><a href="#b2"><span>B2</span><span>settings.json 与权限规则</span></a></li>
+        <li><a href="#b3"><span>B3</span><span>上下文与记忆管理</span></a></li>
+        <li><a href="#b10"><span>B10</span><span>界面个性化</span></a></li>
+      </ol>
+    </div>
+    <div class="grp">
+      <div class="grp-title"><span class="lv lv3">高级</span></div>
+      <ol>
+        <li><a href="#c3"><span>C3</span><span>后台会话与并行开发</span></a></li>
+        <li><a href="#c4"><span>C4</span><span>云端与跨设备</span></a></li>
+        <li><a href="#c5"><span>C5</span><span>定时与循环任务</span></a></li>
+        <li><a href="#c8"><span>C8</span><span>安全与沙箱</span></a></li>
+        <li><a href="#c10"><span>C10</span><span>成本与性能调优</span></a></li>
+        <li><a href="#c11"><span>C11</span><span>排障与调试</span></a></li>
+      </ol>
+    </div>
+  </details>
+</nav>
+
+<main>
+<header class="mast">
+  <h1>Claude Code 分级手册</h1>
+  <p class="sub">按入门、晋级、高级三个级别整理的 14 个话题。每个话题依次讲是什么、怎么用、示例，最后列注意事项，命令和配置都可以直接复制。</p>
+  <p class="meta">依据：本机 Claude Code 2.1.329 的 claude --help 与 code.claude.com 官方文档 · 2026-11-20 整理<br>版本迭代很快，遇到出入以 claude --help 和会话内 /help 为准</p>
+  <section class="facts" aria-labelledby="facts-h">
+    <h2 id="facts-h">本机现状（下文标“本机”的提示据此给出）</h2>
+    <dl>
+      <dt>安装</dt><dd>原生安装，<code>~/.local/bin/claude</code> 指向 <code>~/.local/share/claude/versions/2.1.329</code></dd>
+      <dt>登录</dt><dd>订阅账号 OAuth，凭据在 <code>~/.claude/.credentials.json</code></dd>
+      <dt>默认模型</dt><dd><code>opus</code>（Opus 5.5），Opus 的推理力度设为 <code>xhigh</code></dd>
+      <dt>权限模式</dt><dd>用户设置里 <code>permissions.defaultMode</code> 为 <code>auto</code></dd>
+      <dt>远程</dt><dd><code>remoteControlAtStartup: true</code>，每个会话启动就开启 Remote Control</dd>
+      <dt>项目说明</dt><dd>仓库只有 <code>AGENTS.md</code>，没有 <code>CLAUDE.md</code> 和 <code>.claude/</code> 目录</dd>
+      <dt>机器</dt><dd>1 vCPU、约 1GB 内存；未安装 <code>jq</code>、<code>bubblewrap</code>、<code>socat</code></dd>
+    </dl>
+  </section>
+  <p class="howto">阅读顺序：入门五篇按顺序读；晋级和高级按需跳读。每篇末尾的“注意”是最容易踩的坑。</p>
+</header>
+
+<!-- ================= 入门 ================= -->
+<div class="level-band" id="lv1"><h2>入门</h2><p>装好、登录、会话里用得顺手</p></div>
+
+<section class="topic" id="a1">
+  <header class="topic-head">
+    <span class="lv lv1">入门 · A1</span>
+    <h2>安装、登录与升级</h2>
+    <div class="entry"><code>claude install</code><code>claude auth</code><code>claude update</code><code>claude doctor</code></div>
+    <p class="lede">推荐用原生安装器，它会在后台自动更新。登录方式决定计费：订阅账号走套餐额度，API Key 按 token 计费。</p>
+  </header>
+
+  <h3>系统要求</h3>
+  <ul>
+    <li>macOS 13+；Ubuntu 20.04+、Debian 10+、Alpine 3.19+；Windows 10 1809+（推荐装 Git for Windows，或直接在 WSL 里用）</li>
+    <li>内存 4GB 以上（安装本身约需 512MB），x64 或 ARM64</li>
+    <li>Git 可选；<code>claude plugin eval</code> 和从本地仓库发起云端会话需要 Git 2.31+</li>
+  </ul>
+
+  <h3>安装方式</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>方式</th><th>命令</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>原生（推荐）</td><td class="wrap"><code>curl -fsSL https://claude.ai/install.sh | bash</code></td><td>macOS、Linux、WSL；自动更新</td></tr>
+      <tr><td>Windows</td><td class="wrap"><code>irm https://claude.ai/install.ps1 | iex</code></td><td>PowerShell</td></tr>
+      <tr><td>Homebrew</td><td class="wrap"><code>brew install --cask claude-code</code></td><td>stable 渠道，约晚一周；<code>claude-code@latest</code> 跟随 latest</td></tr>
+      <tr><td>WinGet</td><td class="wrap"><code>winget install Anthropic.ClaudeCode</code></td><td>默认不自动更新</td></tr>
+      <tr><td>npm</td><td class="wrap"><code>npm install -g @anthropic-ai/claude-code@latest</code></td><td>需 Node.js 22+；不要加 <code>sudo</code></td></tr>
+      <tr><td>apt / dnf / apk</td><td>官方软件源</td><td>需手动升级</td></tr>
+    </tbody>
+  </table></div>
+  <p>指定渠道或版本：</p>
+  <div class="code"><pre><code>curl -fsSL https://claude.ai/install.sh | bash -s stable    <span class="c"># 稳定渠道</span>
+curl -fsSL https://claude.ai/install.sh | bash -s 2.1.89    <span class="c"># 指定版本</span>
+claude install stable                                       <span class="c"># 已安装时切换，也可写 latest 或版本号；--force 强制重装</span>
+
+claude --version     <span class="c"># 例如 2.1.329 (Claude Code)</span>
+claude doctor        <span class="c"># 只读体检：安装状态、设置文件校验、自动更新状态</span></code></pre></div>
+
+  <h3>教程：第一次登录</h3>
+  <ol class="steps">
+    <li>进入项目目录运行 <code>claude</code>。首次进入会先弹工作区信任对话框，确认后进入登录流程。</li>
+    <li>浏览器会自动打开。没打开就按 <kbd>c</kbd> 复制登录链接。在 SSH 远程机器上，把链接粘到本地浏览器登录，再把页面给出的 code 粘回终端的 <code>Paste code here if prompted</code>。</li>
+    <li>看到 <code>Login successful</code> 即完成。如果终端里粘贴不进去，退出后改用 <code>claude auth login</code>，它从标准输入读 code。</li>
+    <li>会话里运行 <code>/status</code>，确认登录方式是订阅账号还是 API Key。</li>
+  </ol>
+
+  <h3>登录方式与凭据优先级</h3>
+  <p>同时存在多种凭据时，按下面的顺序取第一个：</p>
+  <div class="tbl"><table>
+    <thead><tr><th>顺序</th><th>凭据</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>CLAUDE_CODE_USE_BEDROCK</code> / <code>_VERTEX</code> / <code>_FOUNDRY</code></td><td>走云厂商</td></tr>
+      <tr><td>2</td><td><code>ANTHROPIC_AUTH_TOKEN</code></td><td>网关的 Bearer token</td></tr>
+      <tr><td>3</td><td><code>ANTHROPIC_API_KEY</code></td><td>Console API Key；交互模式首次需确认</td></tr>
+      <tr><td>4</td><td><code>apiKeyHelper</code>（设置项）</td><td>脚本动态输出 Key</td></tr>
+      <tr><td>5</td><td><code>CLAUDE_CODE_OAUTH_TOKEN</code></td><td><code>claude setup-token</code> 生成的长期 token，给 CI 用</td></tr>
+      <tr><td>6</td><td>Anthropic profile / federation</td><td>企业身份联合</td></tr>
+      <tr><td>7</td><td><code>/login</code> 的订阅 OAuth</td><td>Pro、Max、Ultra、Team、Enterprise 的默认方式</td></tr>
+    </tbody>
+  </table></div>
+  <div class="code"><pre><code>claude auth login            <span class="c"># 在 shell 里登录</span>
+claude auth status --text    <span class="c"># 查看登录状态；2.1.318+ 会显示 Sign-in ends: 过期时间</span>
+claude auth logout
+
+claude setup-token           <span class="c"># 无浏览器的服务器或 CI：生成长期 token（只打印、不保存）</span>
+export CLAUDE_CODE_OAUTH_TOKEN=你的token
+
+<span class="c"># 两个账号互不干扰：各用一个配置目录</span>
+alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'</code></pre></div>
+  <p>会话内可用 <code>/login</code> 切换账号，<code>/logout</code> 退出并清除凭据。凭据位置：Linux 在 <code>~/.claude/.credentials.json</code>（权限 0600），macOS 在钥匙串。</p>
+
+  <h3>升级与卸载</h3>
+  <ul>
+    <li>原生安装会在启动时和运行中检查更新，下次启动生效。手动升级用 <code>claude update</code>。</li>
+    <li>已装好新版、想在当前会话立即生效：<code>/restart</code>（别名 <code>/update</code>），会重启并恢复会话。仅限订阅账号、原生 macOS/Linux。</li>
+    <li>渠道设置 <code>autoUpdatesChannel</code>：<code>"latest"</code>（默认）或 <code>"stable"</code>（约晚一周，跳过有严重回归的版本）。从 latest 切到 stable 可能降级，可同时设 <code>minimumVersion</code>。</li>
+  </ul>
+  <div class="code"><span class="lang">~/.claude/settings.json</span><pre><code>{
+  "autoUpdatesChannel": "stable",
+  "minimumVersion": "2.1.323",
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}</code></pre></div>
+  <p><code>DISABLE_AUTOUPDATER</code> 只停后台自动更新，<code>claude update</code> 仍可用；<code>DISABLE_UPDATES=1</code> 会连手动升级一起禁用。</p>
+  <div class="code"><pre><code><span class="c"># 卸载原生安装</span>
+rm -f ~/.local/bin/claude
+rm -rf ~/.local/share/claude
+<span class="c"># 连配置一起删（会删除设置、MCP 配置和全部会话历史）</span>
+rm -rf ~/.claude ~/.claude.json</code></pre></div>
+
+  <h3>注意</h3>
+  <ul>
+    <li><code>command not found: claude</code>：<code>~/.local/bin</code> 不在 PATH。执行 <code>echo 'export PATH="$HOME/.local/bin:$PATH"' &gt;&gt; ~/.bashrc &amp;&amp; source ~/.bashrc</code>。</li>
+    <li>有订阅但环境里残留 <code>ANTHROPIC_API_KEY</code> 时，确认后会改走 API 计费。<code>unset ANTHROPIC_API_KEY</code> 并从 <code>~/.bashrc</code> 删掉 export，再看 <code>/status</code>。</li>
+    <li><code>--bare</code> 模式不读 <code>CLAUDE_CODE_OAUTH_TOKEN</code>，只认 <code>ANTHROPIC_API_KEY</code> 或 <code>apiKeyHelper</code>。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>本机约 1GB 内存，低于官方建议的 4GB。如果安装或长会话出现 <code>Killed</code>（退出码 137），官方给的办法是加 2GB swap：<code>sudo fallocate -l 2G /swapfile &amp;&amp; sudo chmod 600 /swapfile &amp;&amp; sudo mkswap /swapfile &amp;&amp; sudo swapon /swapfile</code>。</p></aside>
+</section>
+
+<section class="topic" id="a3">
+  <header class="topic-head">
+    <span class="lv lv1">入门 · A3</span>
+    <h2>常用斜杠命令</h2>
+    <div class="entry"><code>/help</code><code>/config</code><code>/compact</code><code>/usage</code></div>
+    <p class="lede">在输入框敲 <code>/</code> 会列出全部内置命令和 skill。命令只在消息开头识别；Claude 正在回复时发出的命令会排队，<code>/status</code>、<code>/tasks</code>、<code>/usage</code>、<code>/model</code>、<code>/effort</code>、<code>/fast</code> 例外，立即执行。</p>
+  </header>
+
+  <h3>按用途分组的常用命令</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>分组</th><th>命令（括号内为别名）</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="8">会话</td><td><code>/clear [名称]</code>（<code>/new</code> <code>/reset</code>）</td><td>开新对话，旧对话可用 <code>/resume</code> 找回；带名称会给旧对话命名</td></tr>
+      <tr><td><code>/compact [指令]</code></td><td>把历史压缩成摘要，释放上下文</td></tr>
+      <tr><td><code>/resume [会话]</code>（<code>/continue</code>）</td><td>切换到其他会话</td></tr>
+      <tr><td><code>/rename [名称]</code></td><td>给当前会话命名，方便以后恢复</td></tr>
+      <tr><td><code>/branch [名称]</code></td><td>从当前位置分叉出新对话</td></tr>
+      <tr><td><code>/rewind</code>（<code>/undo</code> <code>/checkpoint</code>）</td><td>回退代码和／或对话到检查点</td></tr>
+      <tr><td><code>/copy [N]</code>、<code>/export [文件]</code></td><td>复制最近第 N 条回复；导出对话为文本</td></tr>
+      <tr><td><code>/btw 问题</code></td><td>旁问一句，不进入对话历史、不用工具</td></tr>
+      <tr><td rowspan="5">模型与用量</td><td><code>/model [模型]</code></td><td>切换模型并保存为默认（选择器里按 <kbd>s</kbd> 只对本会话生效）</td></tr>
+      <tr><td><code>/effort [级别]</code></td><td>设置推理力度 low～max 或 auto</td></tr>
+      <tr><td><code>/fast [on|off]</code></td><td>快速模式开关</td></tr>
+      <tr><td><code>/usage</code>（<code>/cost</code> <code>/stats</code>）</td><td>本会话花费、套餐额度、活动统计</td></tr>
+      <tr><td><code>/context [all]</code></td><td>上下文占用网格图和优化建议</td></tr>
+      <tr><td rowspan="8">配置</td><td><code>/config [key=value]</code>（<code>/settings</code>）</td><td>打开设置；<code>/config theme=dark</code> 直接改；<code>/config --help</code> 列出可用键</td></tr>
+      <tr><td><code>/permissions</code>（<code>/allowed-tools</code>）</td><td>管理 allow／ask／deny 规则</td></tr>
+      <tr><td><code>/status</code></td><td>版本、模型、账号、已加载的设置来源</td></tr>
+      <tr><td><code>/init</code>、<code>/memory</code></td><td>生成 CLAUDE.md；编辑说明文件、开关自动记忆</td></tr>
+      <tr><td><code>/hooks</code>、<code>/mcp</code>、<code>/plugin</code>、<code>/skills</code></td><td>查看钩子、MCP 服务器、插件、skill</td></tr>
+      <tr><td><code>/statusline</code>、<code>/output-style</code>、<code>/theme</code>、<code>/keybindings</code></td><td>界面个性化（见 B10）</td></tr>
+      <tr><td><code>/terminal-setup</code></td><td>为 VS Code、Cursor、Zed、Alacritty 安装 Shift+Enter 换行</td></tr>
+      <tr><td><code>/sandbox</code></td><td>Bash 沙箱开关（见 C8）</td></tr>
+      <tr><td rowspan="7">工作流</td><td><code>/plan [描述]</code></td><td>进入 plan 模式，只读探索、先出方案</td></tr>
+      <tr><td><code>/code-review [级别]</code>（<code>/review</code>）</td><td>审查当前 diff、PR、分支或路径中的正确性问题；<code>--fix</code> 直接修</td></tr>
+      <tr><td><code>/simplify</code>、<code>/security-review</code></td><td>清理冗余代码；审查分支的安全问题</td></tr>
+      <tr><td><code>/diff</code></td><td>查看工作区改动</td></tr>
+      <tr><td><code>/goal</code>、<code>/loop</code>、<code>/schedule</code></td><td>目标驱动、循环、云端定时（见 C5）</td></tr>
+      <tr><td><code>/tasks</code>（<code>/bashes</code>）</td><td>查看和管理后台任务、子代理</td></tr>
+      <tr><td><code>/bg</code>、<code>/fork</code>、<code>/subtask</code></td><td>转后台；复制成新的后台会话；派生子代理（见 C3）</td></tr>
+      <tr><td rowspan="2">目录</td><td><code>/add-dir 路径</code></td><td>额外授权一个目录</td></tr>
+      <tr><td><code>/cd 路径</code></td><td>把会话移到另一个工作目录，保留对话</td></tr>
+      <tr><td rowspan="2">远程</td><td><code>/remote-control</code>（<code>/rc</code>）、<code>/teleport</code>（<code>/tp</code>）</td><td>手机／网页远程操控；把云端会话拉回终端（见 C4）</td></tr>
+      <tr><td><code>/desktop</code>、<code>/mobile</code></td><td>转到桌面 app；显示手机 app 下载二维码</td></tr>
+      <tr><td rowspan="4">诊断</td><td><code>/doctor</code>（<code>/checkup</code>）</td><td>体检并提出修复，确认后执行</td></tr>
+      <tr><td><code>/debug [描述]</code></td><td>为本会话开调试日志并让 Claude 据此排查</td></tr>
+      <tr><td><code>/feedback</code>（<code>/bug</code>）</td><td>向 Anthropic 反馈问题</td></tr>
+      <tr><td><code>/release-notes</code>、<code>/powerup</code></td><td>版本更新说明；带动画演示的互动功能课程</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>教程：一次典型任务的命令流</h3>
+  <div class="code"><pre><code><span class="p">/rename</span> human-executor-batch          <span class="c"># 先命名，日后 claude -r human-executor-batch 直接回来</span>
+<span class="p">/plan</span> 梳理 executor.c 每批处理的上限逻辑，给出拆分方案
+                                      <span class="c"># 审阅方案，Shift+Tab 批准后开始改</span>
+<span class="p">/context</span>                              <span class="c"># 改到一半看看上下文还剩多少</span>
+<span class="p">/compact</span> 只保留方案、已改文件清单和未完成项
+<span class="p">/code-review</span> high                     <span class="c"># 改完自查</span>
+<span class="p">/clear</span> executor-done                  <span class="c"># 换下一个不相关的任务前清空并给旧会话命名</span></code></pre></div>
+
+  <h3>注意</h3>
+  <ul>
+    <li>菜单匹配忽略 <code>:</code>、<code>_</code>、<code>-</code>，敲 <code>/adddir</code> 也能找到 <code>/add-dir</code>。拼错后直接回车会把原文当普通消息发出并提示 Unknown command。</li>
+    <li>一条消息可以串联多个 skill：<code>/skill-a /skill-b 做某事</code>，最多六个。</li>
+    <li>句中也能补全命令：在空格后敲 <code>/</code>，例如 <code>先跑测试，然后 /com</code>，按 <kbd>Tab</kbd> 补全。</li>
+    <li><code>/heapdump</code>、<code>/setup-bedrock</code> 等隐藏命令不在菜单里，需要完整输入。</li>
+  </ul>
+</section>
+
+<section class="topic" id="a5">
+  <header class="topic-head">
+    <span class="lv lv1">入门 · A5</span>
+    <h2>会话管理与撤销</h2>
+    <div class="entry"><code>claude -c</code><code>claude -r</code><code>claude -n</code><code>/rewind</code></div>
+    <p class="lede">每个会话都自动保存在本地，可以随时继续、按名字恢复或分叉。Claude 每次改文件前会打检查点，改坏了可以回退。</p>
+  </header>
+
+  <h3>会话存在哪</h3>
+  <p>转录文件是 JSONL，位于 <code>~/.claude/projects/&lt;项目路径转义&gt;/&lt;session-id&gt;.jsonl</code>，默认保留 30 天，由 <code>cleanupPeriodDays</code> 控制。</p>
+
+  <h3>继续与恢复</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>命令</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>claude -c</code>（<code>--continue</code>）</td><td>继续当前目录最近一次会话</td></tr>
+      <tr><td><code>claude -r</code>（<code>--resume</code>）</td><td>打开会话选择器</td></tr>
+      <tr><td><code>claude -r 名称或ID</code></td><td>直接恢复指定会话；按 ID 恢复可在任意目录执行</td></tr>
+      <tr><td><code>claude -n auth-refactor</code></td><td>启动时命名；会话内用 <code>/rename</code></td></tr>
+      <tr><td><code>claude --from-pr 123</code></td><td>恢复与某个 PR 关联的会话</td></tr>
+      <tr><td><code>claude -c --fork-session</code></td><td>基于旧会话开一个新 ID，原会话不动</td></tr>
+      <tr><td><code>claude -p --resume ID --output-format json "继续"</code></td><td>脚本里接着某个会话追问</td></tr>
+    </tbody>
+  </table></div>
+  <p>选择器快捷键：<kbd>↑</kbd><kbd>↓</kbd> 或 <kbd>j</kbd><kbd>k</kbd> 移动，<kbd>Enter</kbd> 恢复，<kbd>Space</kbd> 预览，<kbd>Ctrl</kbd>+<kbd>R</kbd> 重命名，<kbd>/</kbd> 搜索（可直接粘贴 PR 链接），<kbd>Ctrl</kbd>+<kbd>A</kbd> 显示所有项目，<kbd>Ctrl</kbd>+<kbd>W</kbd> 显示同仓库所有 worktree，<kbd>Ctrl</kbd>+<kbd>B</kbd> 只看当前分支。</p>
+
+  <h3>检查点与回退</h3>
+  <p>每次你发出一条开启新回合的提示前，Claude Code 会记录 Claude 用文件工具改过的文件状态。打开回退菜单有两种方式：空输入框连按两次 <kbd>Esc</kbd>，或输入 <code>/rewind</code>。选中某条历史提示后有这些选项：</p>
+  <div class="tbl"><table>
+    <thead><tr><th>选项</th><th>效果</th></tr></thead>
+    <tbody>
+      <tr><td>Restore code and conversation</td><td>代码和对话都回到那一刻</td></tr>
+      <tr><td>Restore conversation</td><td>只回退对话，保留当前代码</td></tr>
+      <tr><td>Restore code</td><td>只回退文件，保留对话</td></tr>
+      <tr><td>Summarize from here</td><td>把这条之后的对话压缩成摘要（不动文件）</td></tr>
+      <tr><td>Summarize up to here</td><td>把这条之前的对话压缩，保留之后的消息</td></tr>
+      <tr><td>Never mind</td><td>取消</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>教程：试错后干净地回退</h3>
+  <ol class="steps">
+    <li>让 Claude 按方案 A 修改，跑完发现方向不对。</li>
+    <li>在空输入框按 <kbd>Esc</kbd> <kbd>Esc</kbd>，选中发出方案 A 的那条提示。</li>
+    <li>选 Restore code and conversation。文件和对话回到方案 A 之前，那条提示的原文回到输入框。</li>
+    <li>改写提示，改用方案 B 重新发送。想同时保留两条路线，就先 <code>/branch plan-b</code> 再试。</li>
+  </ol>
+
+  <h3>注意</h3>
+  <ul>
+    <li>检查点只跟踪 Claude 文件工具（Edit、Write 等）的修改。只被 Bash 改过的文件（如 <code>sed -i</code>、构建产物、代码生成）不会恢复。</li>
+    <li>大部分子代理的改动不在检查点里，包括后台 fork 和 <code>/code-review --fix</code>。你手动改的、其他会话改的也不跟踪。</li>
+    <li>每个会话保留最近 100 个检查点，约 30 天后清理。官方原话：检查点不能替代版本控制，重要节点仍要 git commit。</li>
+    <li>恢复会话不会还原这些启动参数，需要重新传：<code>--mcp-config</code>、<code>--plugin-dir</code>、<code>--add-dir</code>、<code>--settings</code>、<code>--fallback-model</code>、<code>--tools</code>、<code>--allowedTools</code>、<code>--disallowedTools</code>。</li>
+    <li><code>claude -p</code> 和 Agent SDK 产生的会话不出现在选择器和 <code>-c</code> 中；<code>claude -p -c</code> 能找到它们。</li>
+  </ul>
+</section>
+
+<section class="topic" id="a7">
+  <header class="topic-head">
+    <span class="lv lv1">入门 · A7</span>
+    <h2>模型、推理力度与快速模式</h2>
+    <div class="entry"><code>/model</code><code>/effort</code><code>/fast</code><code>--fallback-model</code></div>
+    <p class="lede">三个旋钮各管一件事：模型决定能力上限，推理力度决定每次想多深，快速模式用更高单价换更快的输出。</p>
+  </header>
+
+  <h3>模型别名</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>别名</th><th>含义（Anthropic API）</th></tr></thead>
+    <tbody>
+      <tr><td><code>opus</code> / <code>best</code></td><td>最新 Opus，当前为 Opus 5.5，适合复杂推理</td></tr>
+      <tr><td><code>sonnet</code></td><td>最新 Sonnet，当前为 Sonnet 5.5，日常编码</td></tr>
+      <tr><td><code>haiku</code></td><td>Haiku 5.5，简单任务、快</td></tr>
+      <tr><td><code>fable</code></td><td>Fable 5.2</td></tr>
+      <tr><td><code>opusplan</code></td><td>plan 模式用 Opus，执行阶段用 Sonnet</td></tr>
+      <tr><td><code>opus[1m]</code> / <code>sonnet[1m]</code></td><td>1M 上下文窗口；Fable、Sonnet 5+、Haiku 5.5、Opus 4.7+ 默认已是 1M</td></tr>
+      <tr><td><code>default</code></td><td>清除覆盖，回到账号默认</td></tr>
+    </tbody>
+  </table></div>
+  <p>需要锁定版本时写完整名称，例如 <code>claude-opus-5-5</code>。设置模型的方式按优先级从高到低：</p>
+  <ol>
+    <li>会话内 <code>/model 别名</code>，或 <code>/model</code> 打开选择器（<kbd>Enter</kbd> 保存为默认，<kbd>s</kbd> 只用于本会话）；<kbd>Alt</kbd>+<kbd>P</kbd>（macOS 为 <kbd>Option</kbd>+<kbd>P</kbd>）不清空输入就能切换</li>
+    <li>启动参数 <code>claude --model sonnet</code></li>
+    <li>环境变量 <code>ANTHROPIC_MODEL</code></li>
+    <li>设置文件里的 <code>model</code></li>
+    <li>环境变量 <code>ANTHROPIC_DEFAULT_MODEL</code>（新会话的起始模型）</li>
+  </ol>
+
+  <h3>推理力度 effort</h3>
+  <p>级别为 <code>low</code>、<code>medium</code>、<code>high</code>、<code>xhigh</code>、<code>max</code>。Opus 5.5、Sonnet 5.5、Haiku 5.5、Fable 5.2 默认 <code>medium</code>。力度越高，回答越深入，耗时和 token 也越多。</p>
+  <div class="code"><pre><code>/effort high          <span class="c"># 本会话设为 high</span>
+/effort               <span class="c"># 打开滑块</span>
+/effort auto          <span class="c"># 交给模型默认</span>
+/effort status        <span class="c"># 查看当前值</span>
+claude --effort xhigh <span class="c"># 启动时指定</span>
+export CLAUDE_CODE_EFFORT_LEVEL=high   <span class="c"># 优先级最高</span></code></pre></div>
+  <div class="code"><span class="lang">~/.claude/settings.json</span><pre><code>{
+  "model": "opus",
+  "modelSettings": {
+    "claude-opus-5-5": { "effortLevel": "xhigh" }
+  }
+}</code></pre></div>
+  <ul>
+    <li>设置项 <code>effortLevel</code> 接受 low～xhigh，不接受 <code>max</code>；<code>max</code> 只对当前会话有效，除非用环境变量设置。</li>
+    <li>在提示里写 <code>ultrathink</code>，只对这一轮要求更深的思考。</li>
+    <li>参考用法：机械性批量修改用 low／medium；多线程、跨模块设计用 high／xhigh；疑难并发问题临时开 max。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>你的用户设置正是上面的写法，Opus 默认 xhigh。日常小改动可以 <code>/effort medium</code> 省额度；在 Opus 5.5 上切换力度不会让提示缓存失效。</p></aside>
+
+  <h3>备用模型与子代理模型</h3>
+  <div class="code"><pre><code>claude --fallback-model sonnet,haiku    <span class="c"># 主模型繁忙或不可用时按顺序回退，每回合开始重试主模型</span>
+export CLAUDE_CODE_SUBAGENT_MODEL=sonnet <span class="c"># 子代理默认模型</span></code></pre></div>
+
+  <h3>快速模式</h3>
+  <p>同一个模型换成侧重速度的 API 配置，输出最多快约 2.5 倍，质量不变，单价更高。支持 Fable 5.2、Opus 5.5、Opus 5；Opus 4.8 的快速模式已弃用，2026-11-30 移除。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>模型</th><th>输入（每百万 token）</th><th>输出（每百万 token）</th></tr></thead>
+    <tbody>
+      <tr><td>Fable 5.2</td><td>$16</td><td>$80</td></tr>
+      <tr><td>Opus 5.5</td><td>$8</td><td>$40</td></tr>
+      <tr><td>Opus 5</td><td>$10</td><td>$50</td></tr>
+    </tbody>
+  </table></div>
+  <div class="code"><pre><code>/fast            <span class="c"># 空格切换、回车确认；开启后提示符旁出现 ↯</span>
+/fast on | off
+claude -p --settings '{"fastMode": true}' "..."   <span class="c"># 非交互模式开启</span></code></pre></div>
+  <ul>
+    <li>订阅账号的快速模式从 usage credits 扣费，不计入套餐额度，需先开启 usage credits；Team／Enterprise 需 Owner 先启用。</li>
+    <li>在会话开头就开启。中途第一次开启时，整段上下文按未缓存价格重算；快速和标准模式的缓存互相独立。</li>
+    <li>快捷键 <kbd>Alt</kbd>+<kbd>O</kbd>；设置 <code>"fastMode": true</code> 默认开启；<code>"fastModePerSessionOptIn": true</code> 让每个会话从关闭开始；<code>CLAUDE_CODE_DISABLE_FAST_MODE=1</code> 彻底禁用。</li>
+    <li>Bedrock、Foundry 不支持。触发快速模式的独立限流时会自动回落到标准速度，<code>↯</code> 变灰。</li>
+  </ul>
+</section>
+
+<section class="topic" id="a8">
+  <header class="topic-head">
+    <span class="lv lv1">入门 · A8</span>
+    <h2>快捷键与中断</h2>
+    <div class="entry"><kbd>Esc</kbd><kbd>Shift+Tab</kbd><kbd>Ctrl+O</kbd><kbd>Ctrl+B</kbd></div>
+    <p class="lede">最常用的是三件事：随时打断、切换权限模式、在输入框里高效编辑。空输入框按 <kbd>?</kbd> 可以随时调出快捷键帮助。</p>
+  </header>
+
+  <h3>中断与退出</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>按键</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Esc</kbd></td><td>打断 Claude 当前回合（已排队的消息会保留并发送）；关闭对话框；在权限弹窗上表示拒绝</td></tr>
+      <tr><td><kbd>Esc</kbd> <kbd>Esc</kbd></td><td>输入框有字时清空草稿并存入历史；空输入框时打开回退菜单</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>打断运行中的操作；空闲时第一次清空输入，第二次退出</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>800ms 内按两次退出</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>挂起到 shell，<code>fg</code> 回来</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>3 秒内按两次，停止本会话所有后台子代理</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>模式与视图</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>按键</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>循环权限模式：Manual → acceptEdits → plan，再到可用的 bypassPermissions、auto；在方案审批时表示批准</td></tr>
+      <tr><td><kbd>Alt</kbd>+<kbd>P</kbd> / <kbd>Alt</kbd>+<kbd>O</kbd></td><td>切换模型 / 快速模式（macOS 用 <kbd>Option</kbd>）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>转录视图：完整工具调用、时间戳、每条消息用的模型</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td>显示／隐藏 Claude 的任务清单</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>把正在运行的 Bash 命令或代理转到后台（tmux 里按两次）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>反向搜索历史输入（跨项目）</td></tr>
+      <tr><td><kbd>←</kbd>（空输入框）</td><td>把当前会话转后台并打开 agent view（见 C3）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>重绘屏幕</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>输入与编辑</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>按键或前缀</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>\</kbd> <kbd>Enter</kbd> 或 <kbd>Ctrl</kbd>+<kbd>J</kbd></td><td>换行，所有终端都可用</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>iTerm2、WezTerm、Ghostty、Kitty、Warp、Windows Terminal 1.25+ 原生支持；VS Code、Cursor、Zed 先运行 <code>/terminal-setup</code>；gnome-terminal 和 JetBrains 终端不支持</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>在外部编辑器（<code>$EDITOR</code>）里写长提示</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>暂存当前输入，空输入时再按恢复</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴图片（Windows／WSL 用 <kbd>Alt</kbd>+<kbd>V</kbd>）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>_</kbd></td><td>撤销输入框的上一次编辑</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd>/<kbd>E</kbd>/<kbd>K</kbd>/<kbd>U</kbd>/<kbd>W</kbd>/<kbd>Y</kbd></td><td>行首／行尾／删到行尾／删到行首／删一个词／粘贴刚删的内容</td></tr>
+      <tr><td><code>/</code></td><td>命令或 skill</td></tr>
+      <tr><td><code>!</code></td><td>shell 模式：直接执行命令，输出进入上下文，Claude 会接着回应</td></tr>
+      <tr><td><code>@</code></td><td>引用文件路径并自动补全</td></tr>
+      <tr><td><code>?</code>（空输入框）</td><td>快捷键帮助面板</td></tr>
+    </tbody>
+  </table></div>
+  <div class="code"><pre><code><span class="p">!</span> git status
+<span class="p">!</span> ./scripts/build.sh debug engine
+<span class="c"># 输出进入对话，Claude 会据此回应；不想让它回应时在设置里加 "respondToBashCommands": false</span>
+
+看看 <span class="p">@</span>engine/src/human/executor.c 里每批处理上限是怎么定的</code></pre></div>
+
+  <h3>边工作边排队</h3>
+  <ul>
+    <li>Claude 工作时按 <kbd>Enter</kbd> 是把消息排队，不会打断它；排队的消息在它下一个间隙送达。</li>
+    <li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 或 <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>S</kbd> 立即发送；在输入框首行按 <kbd>↑</kbd> 取回排队的消息。</li>
+    <li>想问个题外话又不想污染上下文：<code>/btw 刚才那个配置文件叫什么？</code>，回答显示在浮层里，不写入历史。</li>
+  </ul>
+
+  <h3>Vim 模式</h3>
+  <p><code>/config</code> → Editor mode，或在用户设置里写：</p>
+  <div class="code"><span class="lang">~/.claude/settings.json</span><pre><code>{
+  "editorMode": "vim",
+  "vimInsertModeRemaps": { "jj": "&lt;Esc&gt;" }
+}</code></pre></div>
+  <p>支持常用移动（<code>w</code> <code>b</code> <code>e</code> <code>f{char}</code> <code>gg</code> <code>G</code>）、编辑（<code>dd</code> <code>cw</code> <code>yy</code> <code>p</code> <code>.</code> <code>u</code>）和文本对象（<code>iw</code> <code>i"</code> <code>i(</code>）。INSERT 模式下 Enter 仍是发送。</p>
+
+  <h3>注意</h3>
+  <ul>
+    <li><kbd>Ctrl</kbd>+<kbd>B</kbd> 与 tmux 前缀冲突，tmux 内要按两次；<kbd>Ctrl</kbd>+<kbd>A</kbd> 与 GNU screen 前缀冲突。</li>
+    <li>macOS 上 <kbd>Alt</kbd> 组合键需要在终端里开启“Option 作为 Meta 键”。</li>
+    <li>通过 SSH 使用时，通知渠道 <code>preferredNotifChannel</code> 保持 <code>"auto"</code>。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>本机是 SSH 远程环境，换行最稳的是 <kbd>Ctrl</kbd>+<kbd>J</kbd>，<kbd>Shift</kbd>+<kbd>Enter</kbd> 能否用取决于你本地的终端软件。</p></aside>
+</section>
+
+<!-- ================= 晋级 ================= -->
+<div class="level-band" id="lv2"><h2>晋级</h2><p>把配置、上下文和界面调成自己的</p></div>
+
+<section class="topic" id="b2">
+  <header class="topic-head">
+    <span class="lv lv2">晋级 · B2</span>
+    <h2>settings.json 与权限规则</h2>
+    <div class="entry"><code>/config</code><code>/permissions</code><code>--settings</code><code>--permission-mode</code></div>
+    <p class="lede">所有行为开关集中在几层 settings.json 里。权限规则决定哪些工具调用直接放行、哪些要问、哪些直接拒绝；权限模式决定没有规则命中时怎么处理。</p>
+  </header>
+
+  <h3>配置文件层级</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>优先级</th><th>位置</th><th>影响范围</th></tr></thead>
+    <tbody>
+      <tr><td>1（最高）</td><td>托管设置 <code>managed-settings.json</code> 等</td><td>组织统一下发</td></tr>
+      <tr><td>2</td><td>命令行 <code>--settings 文件或JSON</code></td><td>仅本次会话</td></tr>
+      <tr><td>3</td><td><code>.claude/settings.local.json</code></td><td>你自己、本项目；首次写入时自动加入全局 git excludes</td></tr>
+      <tr><td>4</td><td><code>.claude/settings.json</code></td><td>项目所有人，提交到仓库</td></tr>
+      <tr><td>5</td><td><code>~/.claude/settings.json</code></td><td>你自己、所有项目</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>同名的普通键高层覆盖低层；<code>permissions.allow</code> 这类数组会跨文件合并。</li>
+    <li><code>~/.claude.json</code> 保存账号、MCP 配置、项目信任状态和 <code>/config</code> 写入的全局开关，不要把权限或钩子写进去。</li>
+    <li>修改会热加载。JSON 不支持注释和尾逗号；写错时 <code>claude doctor</code> 会列出被拒绝的条目，<code>/status</code> 的 Setting sources 显示加载了哪些文件。</li>
+    <li>项目文件里的 allow 规则、<code>additionalDirectories</code> 和大部分 <code>env</code> 要等你信任该目录后才生效；deny 和 ask 立即生效。<code>defaultMode</code> 的 <code>auto</code> 和 <code>bypassPermissions</code> 写在项目文件里会被忽略。</li>
+    <li><code>env</code> 里的值原样使用，<code>~</code> 和 <code>$HOME</code> 不会展开，要写绝对路径。</li>
+  </ul>
+  <p>改配置的四种途径：直接编辑文件；<code>/config key=value</code>；<code>/permissions</code> 界面；或者让 Claude 用 <code>/update-config</code> 帮你改。权限弹窗里选“Yes, and don't ask again”会写入仓库根目录的 <code>.claude/settings.local.json</code>。</p>
+
+  <h3>权限规则语法</h3>
+  <p>评估顺序固定为 <strong>deny → ask → allow</strong>，按这个顺序第一个命中的决定结果，规则写得多具体都不改变顺序。所以宽泛的 deny 无法被更具体的 allow 打开例外。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>写法</th><th>匹配什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>Bash</code></td><td>所有 Bash 命令（写在 deny 里会把工具整个移除）</td></tr>
+      <tr><td><code>Bash(npm run build)</code></td><td>完全相同的命令</td></tr>
+      <tr><td><code>Bash(git log *)</code></td><td><code>git log</code> 及带参数的形式；<code>Bash(ls *)</code> 不匹配 <code>lsof</code>，<code>Bash(ls*)</code> 会匹配</td></tr>
+      <tr><td><code>Bash(ls:*)</code></td><td>等价于 <code>Bash(ls *)</code></td></tr>
+      <tr><td><code>Read(./.env)</code></td><td>当前目录下的 .env</td></tr>
+      <tr><td><code>Read(~/Documents/*.pdf)</code></td><td>从家目录开始的路径</td></tr>
+      <tr><td><code>Read(//etc/**)</code></td><td>绝对路径要写两个斜杠；单斜杠 <code>/src/**</code> 表示相对设置文件所在的项目根</td></tr>
+      <tr><td><code>Edit(src/**/*.ts)</code></td><td>覆盖所有写文件的工具；不存在 <code>Write(...)</code>、<code>Grep(...)</code> 规则</td></tr>
+      <tr><td><code>WebFetch(domain:example.com)</code></td><td>该域名；子域名另写 <code>domain:*.example.com</code></td></tr>
+      <tr><td><code>mcp__github__*</code></td><td>某个 MCP 服务器的全部工具</td></tr>
+      <tr><td><code>Agent(Explore)</code></td><td>某个子代理</td></tr>
+      <tr><td><code>Bash(run_in_background:true)</code></td><td>按工具参数匹配</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>复合命令（<code>&amp;&amp;</code>、<code>||</code>、<code>;</code>、<code>|</code>、换行）要求每一段都被允许；deny 和 ask 对任意一段生效，包括 <code>$(...)</code> 里的。</li>
+    <li><code>timeout</code>、<code>time</code>、<code>nice</code>、<code>nohup</code>、<code>xargs</code> 等包装会先剥离再匹配。</li>
+  </ul>
+
+  <h3>示例：本仓库可用的权限基线</h3>
+  <div class="code"><span class="lang">.claude/settings.json</span><pre><code>{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/build.sh debug *)",
+      "Bash(./scripts/build.sh format *)",
+      "Bash(./scripts/build.sh playground-run *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(./scripts/build.sh sanitize *)",
+      "Bash(./scripts/build.sh tsan *)",
+      "Bash(./scripts/build.sh clang-tidy *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}</code></pre></div>
+  <p>ask 里的三条对应 AGENTS.md 中“暂不执行 sanitize、TSan、clang-tidy”的约定：即使在 auto 模式下，命中 ask 规则也一定会弹窗。</p>
+
+  <h3>权限模式</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>模式</th><th>状态栏</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td><code>default</code>（Manual）</td><td>⏸ manual mode on</td><td>工作目录内的读取直接放行，编辑、命令、联网逐个询问</td></tr>
+      <tr><td><code>acceptEdits</code></td><td>⏵⏵ accept edits on</td><td>自动接受工作目录内的文件编辑和 <code>mkdir</code>、<code>mv</code>、<code>cp</code> 等文件命令</td></tr>
+      <tr><td><code>plan</code></td><td>⏸ plan mode on</td><td>只读探索并出方案，批准前不改源码</td></tr>
+      <tr><td><code>auto</code></td><td>⏵⏵ auto mode on</td><td>后台分类器逐个审查动作，拦截越权、破坏性或受外部内容诱导的操作（见 C8）</td></tr>
+      <tr><td><code>dontAsk</code></td><td>⏵⏵ don't ask on</td><td>凡是需要询问的一律拒绝，只执行规则明确允许的操作；适合脚本</td></tr>
+      <tr><td><code>bypassPermissions</code></td><td>⏵⏵ bypass permissions on</td><td>跳过所有询问（deny 仍生效），只应在容器或虚拟机里用</td></tr>
+    </tbody>
+  </table></div>
+  <p>切换方式：<kbd>Shift</kbd>+<kbd>Tab</kbd> 循环；<code>claude --permission-mode plan</code>；设置 <code>permissions.defaultMode</code>。从 2.1.283 起，终端和 VS Code 的新会话默认就是 <code>auto</code>，<code>claude -p</code> 默认 <code>default</code>。</p>
+
+  <h3>教程：给仓库建立权限基线</h3>
+  <ol class="steps">
+    <li><code>/permissions</code> 查看当前全部规则及每条来自哪个文件。</li>
+    <li>运行 <code>/fewer-permission-prompts</code>，它扫描你的历史转录，把常用的只读命令整理成白名单写进项目的 <code>.claude/settings.json</code>。</li>
+    <li>按上面的示例补充 ask 和 deny。</li>
+    <li>在 shell 里运行 <code>claude doctor</code> 校验文件没有写错。</li>
+    <li>再开 <code>/permissions</code> 确认规则都已加载。</li>
+  </ol>
+
+  <h3>注意</h3>
+  <ul>
+    <li>Bash 规则匹配的是命令文本，不是程序本身。<code>Bash(git push *)</code> 拦不住 <code>git -C . push</code>，<code>Bash(rm *)</code> 拦不住 <code>/bin/rm</code> 或 <code>find -delete</code>。要硬性保证，用 PreToolUse 钩子或沙箱（C8）。</li>
+    <li><code>.claudeignore</code> 不起作用，敏感文件要写成 <code>Read(...)</code> 的 deny 规则。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>你在用户设置里把 <code>defaultMode</code> 设成了 <code>auto</code>，这本身也是当前版本的默认值。仓库还没有 <code>.claude/</code> 目录，上面的项目级文件需要新建。</p></aside>
+</section>
+
+<section class="topic" id="b3">
+  <header class="topic-head">
+    <span class="lv lv2">晋级 · B3</span>
+    <h2>上下文与记忆管理</h2>
+    <div class="entry"><code>/context</code><code>/compact</code><code>/memory</code><code>CLAUDE.md</code></div>
+    <p class="lede">上下文窗口是 Claude 每次请求能看到的全部内容，它决定回答质量和花费。记忆分两类：你写给它的说明文件（CLAUDE.md、AGENTS.md），和它自己记下的自动记忆。</p>
+  </header>
+
+  <h3>上下文里装了什么</h3>
+  <p>系统提示、工具定义、MCP 工具名、skill 描述、用户级和项目级说明文件、自动记忆索引，然后才是你的提示、读过的文件、命令输出和 Claude 的回复。<code>/context</code> 按类别画出占用和优化建议，<code>/context all</code> 列出加载了哪些说明文件。</p>
+
+  <h3>压缩与清空</h3>
+  <ul>
+    <li>接近上限时会自动压缩。<code>/autocompact 500k</code> 或启动参数 <code>--autocompact &lt;auto|tokens&gt;</code>（不低于 100k）设置窗口填到多满时触发。</li>
+    <li>压缩后会保留根目录 CLAUDE.md、自动记忆和无路径限定的规则，重新载入最多 5 个最近读写的文件，已调用 skill 的正文也会补回（每个最多 5000 token，合计 25000）。</li>
+    <li>手动压缩时写明重点，效果好很多：</li>
+  </ul>
+  <div class="code"><pre><code>/compact 只保留方案、已改文件清单和失败的测试输出
+/clear                         <span class="c"># 换到不相关的任务时直接清空；旧对话可用 /resume 找回</span></code></pre></div>
+  <p>也可以在 CLAUDE.md 里放一段压缩指引：</p>
+  <div class="code"><span class="lang">CLAUDE.md</span><pre><code># Compact instructions
+
+压缩时保留：当前方案、已修改的文件、构建和测试的最后一次结果。</code></pre></div>
+  <p>省上下文的另外几招：大范围搜索交给子代理，只拿回摘要；长流程写成 skill，用到才加载；MCP 工具定义默认延迟加载，<code>/mcp</code> 里停用不用的服务器。</p>
+
+  <h3>说明文件：CLAUDE.md 与 AGENTS.md</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>范围</th><th>位置</th></tr></thead>
+    <tbody>
+      <tr><td>托管</td><td>Linux <code>/etc/claude-code/CLAUDE.md</code>，macOS <code>/Library/Application Support/ClaudeCode/CLAUDE.md</code></td></tr>
+      <tr><td>用户</td><td><code>~/.claude/CLAUDE.md</code></td></tr>
+      <tr><td>项目</td><td><code>./CLAUDE.md</code> 或 <code>./.claude/CLAUDE.md</code></td></tr>
+      <tr><td>本地</td><td><code>./CLAUDE.local.md</code>（自己加进 .gitignore）</td></tr>
+      <tr><td>规则</td><td><code>.claude/rules/*.md</code>，可用 <code>paths</code> 限定只在碰到匹配文件时加载</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>从仓库根到当前目录的各层文件是拼接关系，不互相覆盖。子目录里的 CLAUDE.md 在 Claude 读写该目录文件时才加载。</li>
+    <li><strong>AGENTS.md 只在没有 CLAUDE.md 和 CLAUDE.local.md 时才会被读取</strong>（2.1.277+）。想两者都读，在 <code>/config</code> 把 Project instructions 设为 <code>claude-md-and-agents-md</code>，或在 CLAUDE.md 里写 <code>@AGENTS.md</code> 导入。</li>
+    <li><code>@路径</code> 导入其他文件，相对路径以导入者为基准，最多嵌套 4 层，路径里的空格要转义。导入不省上下文。</li>
+    <li>建议每个文件控制在 200 行以内；超过 4MiB 的文件整份跳过。</li>
+    <li><code>/init</code> 生成初版 CLAUDE.md；已有文件时它只提建议。<code>/doctor prompt-audit</code> 审查说明文件并给出修改建议。</li>
+  </ul>
+  <aside class="note warn"><span class="tag">注意</span><p>本仓库目前只靠 AGENTS.md 提供项目说明。如果新建 CLAUDE.md 又忘了导入，AGENTS.md 会立刻停止加载，项目宪法相关的约束也随之失效。</p></aside>
+
+  <h3>教程：在不破坏 AGENTS.md 的前提下补充说明</h3>
+  <ol class="steps">
+    <li>新建 <code>CLAUDE.md</code>，第一行导入 AGENTS.md，下面只写 Claude 专用的补充：
+      <div class="code"><span class="lang">CLAUDE.md</span><pre><code>@AGENTS.md
+
+## Claude Code 补充
+- 修改 engine/src/human/ 下的文件前先进入 plan 模式。
+- 构建验证用 ./scripts/build.sh debug，不要运行 sanitize、tsan、clang-tidy。</code></pre></div>
+    </li>
+    <li>按目录拆分细则，例如只在动到 human 模块时加载的规则：
+      <div class="code"><span class="lang">.claude/rules/human.md</span><pre><code>---
+paths:
+  - "engine/src/human/**"
+---
+
+human 运行期数据只能由执行器线程写入，其他线程持读锁读取。</code></pre></div>
+    </li>
+    <li>开新会话运行 <code>/context all</code>，确认 CLAUDE.md 和 AGENTS.md 都出现在 Memory files 里。</li>
+    <li>AGENTS.md 要求每次读项目宪法全文。可以在 CLAUDE.md 里加 <code>@doc/项目宪法.md</code> 让它自动加载，代价是每个会话多占约 270 行上下文，按需取舍。</li>
+  </ol>
+
+  <h3>自动记忆</h3>
+  <ul>
+    <li>位置：<code>~/.claude/projects/&lt;项目&gt;/memory/</code>，同一仓库的所有 worktree 共用。<code>MEMORY.md</code> 是索引，每个会话加载前 200 行或前 25KB；具体条目按需读取。</li>
+    <li>直接对 Claude 说“记住：……”即可写入，也可以手动编辑这些文件。</li>
+    <li>开关：<code>/memory</code> 里切换（写入 <code>autoMemoryEnabled</code>），或环境变量 <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>；<code>autoMemoryDirectory</code> 改存放位置。</li>
+    <li>子代理拿不到主会话的自动记忆，fork 出来的除外。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>本项目的自动记忆已有 4 条（构建环境、云服务器地区、价格接口、服务器规模），<code>/memory</code> 可以打开目录查看和修改。</p></aside>
+</section>
+
+<section class="topic" id="b10">
+  <header class="topic-head">
+    <span class="lv lv2">晋级 · B10</span>
+    <h2>界面个性化</h2>
+    <div class="entry"><code>/statusline</code><code>/output-style</code><code>/keybindings</code><code>/tui</code></div>
+    <p class="lede">状态栏、回复风格、主题、快捷键和渲染器都可以按自己的习惯调整。</p>
+  </header>
+
+  <h3>状态栏</h3>
+  <p>最快的办法是用自然语言描述，Claude Code 会在 <code>~/.claude/</code> 下生成脚本并改好设置：</p>
+  <div class="code"><pre><code>/statusline 显示模型名、推理力度、当前目录、git 分支，第二行显示上下文进度条和本会话花费
+/statusline delete       <span class="c"># 删除状态栏</span></code></pre></div>
+  <p>手动配置时，状态栏是一个从 stdin 读 JSON、往 stdout 打印文字的命令。每个 <code>print</code> 是一行，支持 ANSI 颜色和 OSC 8 链接。下面这个 Python 版本不依赖 jq：</p>
+  <div class="code"><span class="lang">~/.claude/statusline.py</span><pre><code>#!/usr/bin/env python3
+import json, os, subprocess, sys
+
+d = json.load(sys.stdin)
+model = (d.get("model") or {}).get("display_name", "?")
+cwd = (d.get("workspace") or {}).get("current_dir", "")
+pct = int((d.get("context_window") or {}).get("used_percentage") or 0)
+cost = (d.get("cost") or {}).get("total_cost_usd") or 0
+effort = (d.get("effort") or {}).get("level", "")
+
+bar = "▓" * (pct // 10) + "░" * (10 - pct // 10)
+try:
+    branch = subprocess.run(["git", "-C", cwd, "branch", "--show-current"],
+                            capture_output=True, text=True, timeout=1).stdout.strip()
+except Exception:
+    branch = ""
+
+tag = f"{model} · {effort}" if effort else model
+line1 = f"[{tag}] {os.path.basename(cwd)}"
+if branch:
+    line1 += f" ⎇ {branch}"
+print(line1)
+print(f"{bar} {pct}% · ${cost:.2f}")</code></pre></div>
+  <div class="code"><span class="lang">~/.claude/settings.json</span><pre><code>{
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.claude/statusline.py",
+    "padding": 1
+  }
+}</code></pre></div>
+  <p>在本仓库里的实际效果：</p>
+  <div class="term-mock" role="img" aria-label="状态栏效果示例">[Opus · xhigh] island-nation-2 ⎇ claude/npc-ai
+▓▓▓▓░░░░░░ 42% · $1.87</div>
+  <p>先用假数据测试脚本：</p>
+  <div class="code"><pre><code>echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"'"$PWD"'"},"context_window":{"used_percentage":42},"cost":{"total_cost_usd":1.87},"effort":{"level":"xhigh"}}' \
+  | python3 ~/.claude/statusline.py</code></pre></div>
+  <h4>常用的输入字段</h4>
+  <div class="tbl"><table>
+    <thead><tr><th>字段</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>model.display_name</code> / <code>model.id</code></td><td>模型显示名 / ID</td></tr>
+      <tr><td><code>workspace.current_dir</code> / <code>project_dir</code></td><td>当前目录 / 启动目录</td></tr>
+      <tr><td><code>context_window.used_percentage</code></td><td>上下文已用百分比，会话初期可能为 null</td></tr>
+      <tr><td><code>cost.total_cost_usd</code></td><td>按标价估算的本会话花费，<code>/clear</code> 后清零</td></tr>
+      <tr><td><code>effort.level</code>、<code>fast_mode</code></td><td>推理力度、是否快速模式</td></tr>
+      <tr><td><code>rate_limits.five_hour.used_percentage</code></td><td>订阅账号 5 小时窗口用量（周额度在 <code>seven_day</code>）</td></tr>
+      <tr><td><code>prompt_cache.hit_ratio</code></td><td>提示缓存命中率</td></tr>
+      <tr><td><code>worktree.*</code>、<code>pr.*</code>、<code>vim.mode</code></td><td>worktree 信息、关联 PR、Vim 模式（有时才出现）</td></tr>
+    </tbody>
+  </table></div>
+  <p>脚本在会话开始、每条新回复、<code>/compact</code> 完成、权限模式切换等时机重跑，300ms 防抖，不消耗 API token。设置 <code>refreshInterval</code>（秒）可定时刷新。脚本必须以 0 退出，否则状态栏空白。</p>
+
+  <h3>回复风格 output style</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>风格</th><th>特点</th></tr></thead>
+    <tbody>
+      <tr><td>Default</td><td>标准的软件工程提示</td></tr>
+      <tr><td>Proactive</td><td>收到任务直接动手，常规决定自行假设；删除数据或改共享系统前仍会确认</td></tr>
+      <tr><td>Concise</td><td>第一句就给结论，省掉铺垫和复述</td></tr>
+      <tr><td>Explanatory</td><td>完成任务的同时附带 <code>★ Insight</code> 讲解块</td></tr>
+      <tr><td>Learning</td><td>在代码里留 <code>TODO(human)</code> 让你亲手写一部分</td></tr>
+    </tbody>
+  </table></div>
+  <div class="code"><pre><code>/output-style concise      <span class="c"># 保存在 .claude/settings.local.json；不带参数列出全部风格</span></code></pre></div>
+  <p>自定义风格放在 <code>~/.claude/output-styles/</code>（用户）或 <code>.claude/output-styles/</code>（项目），改完需重启：</p>
+  <div class="code"><span class="lang">~/.claude/output-styles/review-brief.md</span><pre><code>---
+name: 审查简报
+description: 先给结论和风险等级，再给证据
+keep-coding-instructions: true
+---
+
+每次回复先用一句话给出结论，再按“高／中／低”列出风险，每条附文件和行号。
+不要复述我的问题。</code></pre></div>
+  <p><code>keep-coding-instructions: true</code> 保留内置的软件工程指令；不写时自定义风格会替换掉这部分。设置里的 <code>outputStyle</code> 区分大小写，写错会回到 Default。</p>
+
+  <h3>主题与快捷键</h3>
+  <ul>
+    <li><code>/theme</code> 选主题（含 auto、色弱友好、ANSI 和自定义主题）；<code>/color blue</code> 改输入框颜色。</li>
+    <li><code>/keybindings</code> 打开（或创建）<code>~/.claude/keybindings.json</code>，保存后立即生效。</li>
+  </ul>
+  <div class="code"><span class="lang">~/.claude/keybindings.json</span><pre><code>{
+  "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+  "bindings": [
+    {
+      "context": "Chat",
+      "bindings": {
+        "ctrl+e": "chat:externalEditor",
+        "meta+g": "command:compact",
+        "ctrl+x ctrl+u": "command:usage",
+        "ctrl+s": null
+      }
+    }
+  ]
+}</code></pre></div>
+  <p>每个绑定块指定一个上下文（<code>Global</code>、<code>Chat</code>、<code>Transcript</code>、<code>Select</code> 等），动作名格式为 <code>命名空间:动作</code>，<code>command:名称</code> 可以绑定任意斜杠命令。空格分隔的是组合键序列（每键间隔 3 秒内），值写 <code>null</code> 表示解绑。<kbd>Ctrl</kbd>+<kbd>C</kbd>、<kbd>Ctrl</kbd>+<kbd>D</kbd>、<kbd>Ctrl</kbd>+<kbd>M</kbd> 等保留键不能改。写错的绑定会记录在 <code>--debug</code> 日志里。</p>
+
+  <h3>全屏渲染器</h3>
+  <p>全屏渲染器画在终端的备用屏幕上，消除闪烁、长对话内存保持平稳，并支持鼠标。目前是研究预览。</p>
+  <div class="code"><pre><code>/tui fullscreen      <span class="c"># 切换并重启进入全屏渲染</span>
+/tui default         <span class="c"># 回到经典渲染</span>
+CLAUDE_CODE_NO_FLICKER=1 claude</code></pre></div>
+  <ul>
+    <li>对话不在终端原生滚动缓冲里，终端自带的搜索看不到。用 <kbd>Ctrl</kbd>+<kbd>O</kbd> 进入转录视图后按 <kbd>/</kbd> 搜索，或按 <kbd>[</kbd> 把全文写入原生滚动缓冲。</li>
+    <li><kbd>PgUp</kbd>/<kbd>PgDn</kbd> 半屏滚动，<kbd>Ctrl</kbd>+<kbd>End</kbd> 回到底部；<code>/focus</code> 只显示最后的提示、工具摘要和最终回复。</li>
+    <li>SSH 或 tmux 下鼠标捕获会干扰原生选择，可设 <code>CLAUDE_CODE_DISABLE_MOUSE=1</code>。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>本机没装 jq，官方文档里的 bash 状态栏示例都依赖它；用上面的 Python 版本，或先 <code>sudo apt install jq</code>。你的主题当前是 <code>dark</code>。</p></aside>
+</section>
+
+<!-- ================= 高级 ================= -->
+<div class="level-band" id="lv3"><h2>高级</h2><p>并行、远程、定时、安全与成本</p></div>
+
+<section class="topic" id="c3">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C3</span>
+    <h2>后台会话与并行开发</h2>
+    <div class="entry"><code>claude --bg</code><code>claude agents</code><code>claude -w</code><code>/fork</code></div>
+    <p class="lede">后台会话由一个独立的监管进程托管，关掉终端也继续跑。配合 git worktree，多个会话可以同时改同一个仓库而互不踩踏。</p>
+  </header>
+
+  <h3>几种并行方式怎么选</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>方式</th><th>是什么</th><th>适合</th></tr></thead>
+    <tbody>
+      <tr><td>子代理</td><td>当前会话内派出的助手，独立上下文，只交回摘要</td><td>会产生大量你不需要细看的输出的旁支任务</td></tr>
+      <tr><td>后台会话 + agent view</td><td>一屏派发、监控多个后台会话（研究预览）</td><td>几件互不相关的事，交出去，需要时再介入</td></tr>
+      <tr><td>Agent teams</td><td>由主会话分派、带共享任务列表和消息的会话组（实验性，默认关闭）</td><td>让 Claude 自己拆分项目并协调多个工作者</td></tr>
+      <tr><td>动态 workflows</td><td>用脚本编排大量子代理并交叉核对</td><td>全仓审计、几百个文件的迁移</td></tr>
+      <tr><td>Worktree</td><td>给每个会话独立的 git 检出（隔离工具，不是代理）</td><td>多个会话会改到同一批文件时</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>后台会话</h3>
+  <div class="code"><pre><code>claude --bg "排查 game_timer 偶发晚投递的原因，给出复现步骤"
+claude --bg -n timer-race "同上"                 <span class="c"># 起个名字，之后可以用名字操作</span>
+claude --resume &lt;session-id&gt; --bg "接着完成迁移"   <span class="c"># 把已有会话放到后台继续</span></code></pre></div>
+  <p>启动后会打印：</p>
+  <div class="code"><pre><code>backgrounded · 7c5dcf5d · timer-race
+  claude agents             list sessions
+  claude attach 7c5dcf5d    open in this terminal
+  claude logs 7c5dcf5d      show recent output
+  claude stop 7c5dcf5d      stop this session</code></pre></div>
+  <p>正在进行的会话也能转后台：输入 <code>/bg</code>，或在空输入框按 <kbd>←</kbd>（同时打开 agent view）。<code>/fork</code> 把整段对话复制成一个新的后台会话，你在当前会话继续。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>命令</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>claude agents</code></td><td>打开 agent view；<code>--json</code> 输出会话列表供脚本用，<code>--cwd 路径</code> 只看某目录</td></tr>
+      <tr><td><code>claude attach ID或名称</code></td><td>在当前终端接入；<kbd>←</kbd> 回到 agent view，<kbd>Ctrl</kbd>+<kbd>Z</kbd> 回 shell，会话照常运行</td></tr>
+      <tr><td><code>claude logs ID或名称</code></td><td>打印最近输出</td></tr>
+      <tr><td><code>claude stop ID</code>（<code>kill</code>）</td><td>停止，对话保留，之后 <code>attach</code> 可恢复</td></tr>
+      <tr><td><code>claude rm ID</code></td><td>从列表移除，安全时删除其 worktree；对话仍可用 <code>claude --resume</code> 找回</td></tr>
+      <tr><td><code>claude respawn ID</code> / <code>--all</code></td><td>重启会话以使用当前版本的 Claude Code</td></tr>
+      <tr><td><code>claude daemon status</code> / <code>logs</code> / <code>stop</code></td><td>查看或停止监管进程（日志在 <code>~/.claude/daemon.log</code>）</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>agent view 操作</h3>
+  <ul>
+    <li>会话按状态分组：Pinned、Ready for review、Needs input、Working、Completed。</li>
+    <li><kbd>Enter</kbd> 或 <kbd>→</kbd> 接入；<kbd>Space</kbd> 打开预览面板，可以直接回复，回复前加 <code>!</code> 发 Bash 命令，只写 <code>/stop</code> 则停止该会话。</li>
+    <li><kbd>Ctrl</kbd>+<kbd>X</kbd> 停止，两秒内再按一次删除；<kbd>Ctrl</kbd>+<kbd>T</kbd> 置顶（空闲时也保持进程）；<kbd>Ctrl</kbd>+<kbd>R</kbd> 重命名；<kbd>?</kbd> 查看全部快捷键。</li>
+    <li>底部输入框输入提示后回车会派发一个新会话。前缀 <code>@代理名</code> 指定自定义子代理，<code>! 命令</code> 跑后台 shell 任务；<code>s:working</code>、<code>n:名称</code> 等可以过滤列表。</li>
+    <li>后台会话需要输入、完成或失败时会发终端通知。</li>
+  </ul>
+
+  <h3>Worktree</h3>
+  <div class="code"><pre><code>claude -w feature-auth          <span class="c"># 在 .claude/worktrees/feature-auth 建 worktree，分支 worktree-feature-auth</span>
+claude -w "#1234"               <span class="c"># 基于 PR 建 worktree（.claude/worktrees/pr-1234）</span>
+claude -w feature-auth --tmux   <span class="c"># 同时为它开一个 tmux 会话</span>
+claude -w feature-auth --resume <span class="c"># 回到保留下来的 worktree 会话</span></code></pre></div>
+  <ul>
+    <li>派发到后台的会话在第一次改文件前会自动进入 <code>.claude/worktrees/</code> 下的 worktree；设置 <code>"worktree": {"bgIsolation": "none"}</code> 可关闭。</li>
+    <li>新 worktree 默认从远端默认分支切出；设置 <code>"worktree": {"baseRef": "head"}</code> 改为从本地 HEAD 切出。</li>
+    <li>被 gitignore 的文件（如 <code>.env</code>）不会出现在新 worktree 里，在仓库根写 <code>.worktreeinclude</code>（gitignore 语法）列出要复制的文件。</li>
+    <li>退出时，干净的无名 worktree 自动删除；有改动的会询问保留还是删除。<code>-p</code> 模式不会清理，要自己 <code>git worktree remove</code>。</li>
+    <li>建议把 <code>.claude/worktrees/</code> 加进 <code>.gitignore</code>。</li>
+  </ul>
+
+  <h3>会话之间互发消息</h3>
+  <p><code>/list-agents</code>（<code>/peers</code>）列出可以联系的子代理和其他会话。直接对 Claude 说“告诉 @timer-race 我已经把 queue 的修复合进来了”，它会用 SendMessage 工具投递；输入 <code>@</code> 加名字前几个字母可以补全。别的会话发来的消息不能批准权限弹窗，里面的斜杠命令也只当文本。<code>/config</code> 里的 Messages from your other sessions 可设为 accept、hold 或 refuse。</p>
+
+  <h3>教程：三个任务并行</h3>
+  <ol class="steps">
+    <li>提交或暂存当前改动，确保主检出是干净的。</li>
+    <li>派发两个后台任务：
+      <div class="code"><pre><code>claude --bg -n readme-sync "核对 README 和 AGENTS.md 中的构建命令是否与 scripts/build.sh 一致，列出差异"
+claude --bg -n review "对当前分支相对 main 的改动执行 /code-review high，只报告不修改"</code></pre></div>
+    </li>
+    <li>在前台继续自己的主任务。需要时运行 <code>claude agents</code>，<kbd>Space</kbd> 查看进度并直接回复。</li>
+    <li>任务完成后 <code>claude attach review</code> 查看结果。有文件改动的会话先在它的 worktree 里提交并合并分支，再 <code>claude rm</code>。</li>
+  </ol>
+
+  <h3>注意</h3>
+  <ul>
+    <li>后台会话和交互会话一样消耗订阅额度，十个并行约等于十倍速度消耗。</li>
+    <li>在 agent view 里删除会话会一并删除 Claude 为它创建的 worktree，删除前先提交改动。</li>
+    <li>后台会话跑在本机：机器休眠时保留，关机或重启后停止。完成或等待中的会话无人接入约一小时后进程会停，对话保存在磁盘，接入或回复时恢复。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>这台机器只有 1 vCPU、约 1GB 内存、磁盘剩余约 11GB。每个 worktree 都会有自己的 <code>build-*</code> 目录，同时跑两个以上需要编译的会话会互相拖慢并占满磁盘，建议同一时间只让一个后台会话做构建。</p></aside>
+</section>
+
+<section class="topic" id="c4">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C4</span>
+    <h2>云端与跨设备</h2>
+    <div class="entry"><code>claude --cloud</code><code>claude --teleport</code><code>/remote-control</code><code>/desktop</code></div>
+    <p class="lede">两条路线：把任务交给云端虚拟机跑（电脑可以关），或者让代码留在本机、用手机和网页远程操控。两者都需要 claude.ai 订阅账号，API Key 和 Bedrock 等云厂商登录不可用。</p>
+  </header>
+
+  <div class="tbl"><table>
+    <thead><tr><th>功能</th><th>代码在哪执行</th><th>本机需开机</th><th>适合</th></tr></thead>
+    <tbody>
+      <tr><td>云端会话</td><td>Anthropic 托管的 Ubuntu 24.04 虚拟机</td><td>否</td><td>长任务、多个任务并行、离开电脑</td></tr>
+      <tr><td>Remote Control</td><td>本机</td><td>是</td><td>在手机或网页上继续盯本机会话</td></tr>
+      <tr><td>Teleport</td><td>云端 → 本地终端</td><td>是</td><td>把云端做了一半的工作拉回本地</td></tr>
+      <tr><td><code>/desktop</code></td><td>本机桌面 app</td><td>是</td><td>从终端切到图形界面（macOS、Windows x64）</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>云端会话</h3>
+  <div class="code"><pre><code>claude --cloud "修复 engine/src/queue 中扩容时 FIFO 顺序错乱的问题并补测试"
+claude -p "顺便更新 README 的说明" --cloud &lt;session-id或claude.ai/code链接&gt;   <span class="c"># 给已有云端会话追加消息</span>
+CCR_FORCE_BUNDLE=1 claude --cloud "跑全部测试并修复失败项"   <span class="c"># 打包上传本地仓库（不含未跟踪文件）</span></code></pre></div>
+  <ul>
+    <li>虚拟机克隆的是当前目录 GitHub 远端上的当前分支，不是你的本地检出，有本地提交要先 push。</li>
+    <li>访问私有仓库需要安装 Claude GitHub App，或在终端运行 <code>/web-setup</code> 把本地 <code>gh</code> 的令牌交给 Claude 账号（先 <code>gh auth login</code>）。</li>
+    <li>云端环境在 claude.ai/code 的环境选择器里配置：网络访问分 None、Limited（默认，含包管理器白名单）、Full；可以加 setup 脚本（以 root 运行）、环境变量和网络密钥。终端里用 <code>/remote-env</code> 选默认环境。</li>
+    <li>结果以分支形式回来，在网页的 Changes 卡片里看 diff、点 Create PR。<code>/autofix-pr</code> 让云端会话修复当前分支 PR 的 CI 失败和评审意见。</li>
+  </ul>
+  <h4>把云端会话拉回本地</h4>
+  <div class="code"><pre><code>claude --teleport            <span class="c"># 打开云端会话选择器</span>
+claude --teleport &lt;session-id&gt;
+/teleport                    <span class="c"># 会话内，别名 /tp</span></code></pre></div>
+  <p>要求：本地工作区干净（有改动会提示 stash）、在同一仓库的检出里执行、云端分支已推送、同一个 claude.ai 账号。</p>
+
+  <h3>Remote Control</h3>
+  <div class="code"><pre><code>claude --remote-control "engine 调试"   <span class="c"># 启动一个开启远程控制的交互会话</span>
+/remote-control                        <span class="c"># 在已有会话里开启，别名 /rc；再次运行显示链接和二维码</span>
+claude remote-control --spawn worktree <span class="c"># 服务模式：一个进程承载多个远程会话，每个新会话一个 worktree</span>
+claude remote-control --continue       <span class="c"># Ctrl+C 退出服务模式后约 4 小时内可重新接回</span></code></pre></div>
+  <ul>
+    <li>连接方式：打开终端里显示的链接；扫二维码（服务模式按空格显示）；或在 claude.ai/code、手机 app 的 Code 标签里按名字找到会话。</li>
+    <li>安全模型：本机只发出站 HTTPS 请求，不开放入站端口；连接期间对话记录会同步存储在 Anthropic 服务器上。</li>
+    <li>手机推送：<code>/config</code> 里开启 Push when Claude decides 或 Push when actions required。</li>
+    <li>终端里执行 <code>/teleport</code> 或 <code>/resume</code> 会断开旧对话的远程连接，需要重新 <code>/remote-control</code>。</li>
+  </ul>
+
+  <h3>桌面与手机</h3>
+  <ul>
+    <li><code>/desktop</code>（<code>/app</code>）保存会话并在桌面 app 中打开；<code>claude --desktop --resume &lt;session-id&gt;</code> 打开指定会话（用 <code>/status</code> 里的 ID）。Linux 桌面版仍是 beta。</li>
+    <li><code>/mobile</code> 显示手机 app 下载二维码。手机上可以启动和指挥云端会话、远程控制本机会话；<code>/plugin</code>、<code>/resume</code> 这类本地命令在手机上不可用。</li>
+  </ul>
+
+  <h3>教程：本地出方案，云端执行</h3>
+  <ol class="steps">
+    <li>本地 <code>claude --permission-mode plan</code>，让 Claude 把迁移方案写进 <code>doc/</code> 下的文件。</li>
+    <li>提交并 push 方案文件。</li>
+    <li><code>claude --cloud "按 doc/xxx-plan.md 执行迁移，每完成一步提交一次"</code>。</li>
+    <li>出门后用手机 app 的 Code 标签查看进度、回答提问。</li>
+    <li>回来后 <code>claude --teleport</code> 把会话拉回本地终端，验证构建再合并。</li>
+  </ol>
+
+  <h3>注意</h3>
+  <ul>
+    <li>设置了 <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> 或自定义 <code>ANTHROPIC_BASE_URL</code> 时 Remote Control 不可用。</li>
+    <li>云端虚拟机约 4 vCPU、16GB 内存、30GB 磁盘（官方标注为近似值），空闲一段时间后停止，重新打开会换一台新虚拟机并恢复对话，但后台命令和子代理不会恢复。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>你已经设置 <code>remoteControlAtStartup: true</code>，每个本地会话启动时就能在手机上看到。本仓库依赖 CMake 4.2+、Clang 22 和独立 glibc，仓库里的 <code>setup-codex-cloud.sh</code> 面向 Debian 13，而云端虚拟机是 Ubuntu 24.04，能否直接复用需要先在云端环境的 setup 脚本里实测。</p></aside>
+</section>
+
+<section class="topic" id="c5">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C5</span>
+    <h2>定时与循环任务</h2>
+    <div class="entry"><code>/loop</code><code>/goal</code><code>/schedule</code></div>
+    <p class="lede"><code>/loop</code> 按时间间隔重复执行，<code>/goal</code> 一直干到条件满足为止，<code>/schedule</code> 在云端按计划运行、不需要本机开着。</p>
+  </header>
+
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>云端定时任务</th><th>桌面定时任务</th><th><code>/loop</code></th></tr></thead>
+    <tbody>
+      <tr><td>运行位置</td><td>云端</td><td>本机</td><td>本机</td></tr>
+      <tr><td>需要本机开机</td><td>否</td><td>是</td><td>是</td></tr>
+      <tr><td>需要会话开着</td><td>否</td><td>否</td><td>是</td></tr>
+      <tr><td>重启后保留</td><td>是</td><td>是</td><td><code>--resume</code> 时恢复（有例外）</td></tr>
+      <tr><td>能访问本地文件</td><td>否（全新克隆）</td><td>是</td><td>是</td></tr>
+      <tr><td>权限</td><td>默认 auto 模式</td><td>每个任务单独设置</td><td>继承会话</td></tr>
+      <tr><td>最小间隔</td><td>1 小时</td><td>表单 1 小时</td><td>1 分钟</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>/loop：会话内循环</h3>
+  <div class="code"><pre><code>/loop 5m 检查 CI 是否跑完，告诉我结果           <span class="c"># 固定间隔，单位 s m h d</span>
+/loop 检查 PR 的新评审意见并逐条处理             <span class="c"># 不给间隔，Claude 每轮自己决定等 1 分钟到 1 小时</span>
+/loop 20m /code-review high                     <span class="c"># 循环执行一个 skill</span>
+/loop                                           <span class="c"># 执行 .claude/loop.md（或 ~/.claude/loop.md）里的维护提示</span></code></pre></div>
+  <p>一次性提醒不需要 <code>/loop</code>，直接说：“下午 3 点提醒我推 release 分支”“45 分钟后检查集成测试是否通过”。想看或取消任务：“我有哪些定时任务？”“取消 CI 检查那个循环”。</p>
+  <ul>
+    <li>停止：自定节奏的循环在等待时于空输入框按 <kbd>Esc</kbd>；固定间隔的循环 <kbd>Esc</kbd> 停不了，要让 Claude 取消。</li>
+    <li>只在会话运行且空闲时触发；关掉终端就不再触发。<code>/bg</code> 转后台后可以继续跑。错过的不补跑。</li>
+    <li>循环任务 7 天后自动过期，每会话最多 50 个；不是 <code>*/5</code> 这类整齐步长的间隔会被就近取整。</li>
+    <li>会有随机延迟：每小时一次的任务可能晚到 30 分钟。时间敏感时避开整点，写 <code>3 9 * * *</code> 而不是 <code>0 9 * * *</code>。</li>
+    <li><code>CLAUDE_CODE_DISABLE_CRON=1</code> 禁用全部定时功能。</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>cron 表达式</th><th>含义（本地时间）</th></tr></thead>
+    <tbody>
+      <tr><td><code>*/5 * * * *</code></td><td>每 5 分钟</td></tr>
+      <tr><td><code>7 * * * *</code></td><td>每小时第 7 分钟</td></tr>
+      <tr><td><code>3 9 * * 1-5</code></td><td>工作日 9:03</td></tr>
+      <tr><td><code>30 14 15 3 *</code></td><td>3 月 15 日 14:30</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>/goal：干到条件满足</h3>
+  <div class="code"><pre><code>/goal ./scripts/build.sh debug 退出码为 0，且 playground/npc_ai 用例全部通过，或者 20 轮后停止
+/goal              <span class="c"># 查看状态：条件、轮数、token 花费、评估器最近的理由</span>
+/goal clear        <span class="c"># 清除（也可写 stop、off、cancel）</span>
+claude -p "/goal CHANGELOG.md 收录了本周合并的每个 PR" --output-format stream-json --verbose</code></pre></div>
+  <ul>
+    <li>每轮结束后由一个小模型判断条件是否满足，没满足就自动开始下一轮。评估器不执行命令、不读文件，只看对话里 Claude 展示出的证据，所以条件要写成能在对话里证明的形式，例如“命令退出码为 0”“git status 干净”。</li>
+    <li>每个会话同时只有一个目标；条件最长 4000 字符；加一句“或者 N 轮后停止”给它设上限。</li>
+    <li><code>/goal</code> 不改变权限模式，要无人值守就在 auto 模式下运行。</li>
+  </ul>
+
+  <h3>/schedule：云端定时任务</h3>
+  <p>原名 routines，现称 scheduled tasks，处于研究预览。它是保存好的一份配置（提示、仓库、连接器），按计划、API 调用或 GitHub 事件触发，在云端运行。需要 claude.ai 订阅登录。</p>
+  <div class="code"><pre><code>/schedule 每个工作日 9:07 汇总昨天合并的 PR
+/schedule 两周后开一个移除 feature flag 的清理 PR
+/schedule list
+/schedule run
+/schedule 为什么今天早上的夜间审查什么都没做？    <span class="c"># 查看运行记录</span></code></pre></div>
+  <ul>
+    <li>网页端在 <code>claude.ai/code/routines</code> 管理，可以 Run now、暂停、编辑、删除。</li>
+    <li>触发器：计划（最短每小时一次；网页里自定义 cron 按 UTC，可加 <code>CRON_TZ=</code> 前缀）、API（每个任务有自己的 <code>/fire</code> 端点和令牌，只能在网页端创建）、GitHub 事件（PR、Release、Issue，需要安装 Claude GitHub App）。</li>
+    <li>每次运行都是全新克隆，在 <code>claude/</code> 前缀的分支上工作，用的是你账号下的连接器；本地 <code>claude mcp add</code> 的服务器不会出现在那里。</li>
+    <li>有每小时的触发次数上限，运行消耗订阅额度。</li>
+  </ul>
+
+  <h3>注意</h3>
+  <ul>
+    <li><code>/loop</code> 和 <code>/goal</code> 每次触发都会带完整上下文发请求，长时间挂着会持续消耗额度。</li>
+    <li>如果设置了 <code>ANTHROPIC_API_KEY</code>、<code>ANTHROPIC_AUTH_TOKEN</code> 或 <code>apiKeyHelper</code>，<code>/schedule</code> 会不可用，需要先移除。</li>
+  </ul>
+</section>
+
+<section class="topic" id="c8">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C8</span>
+    <h2>安全与沙箱</h2>
+    <div class="entry"><code>/sandbox</code><code>autoMode</code><code>--restricted</code><code>--safe-mode</code></div>
+    <p class="lede">安全是分层的：权限规则（B2）管单个调用，权限模式管默认态度，auto 模式的分类器替你审批，Bash 沙箱在操作系统层面限制命令，容器或虚拟机隔离整个进程。</p>
+  </header>
+
+  <h3>Bash 沙箱</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>维度</th><th>沙箱内的默认行为</th></tr></thead>
+    <tbody>
+      <tr><td>覆盖范围</td><td>只管 Bash、PowerShell、Monitor 命令及其子进程。Read、Edit、WebFetch、MCP 服务器、钩子不在沙箱内</td></tr>
+      <tr><td>写文件</td><td>工作目录、临时目录、<code>--add-dir</code> 加入的目录</td></tr>
+      <tr><td>读文件</td><td>机器上大部分位置，包括 <code>~/.ssh</code>，除非另行 deny</td></tr>
+      <tr><td>网络</td><td>只能经本机代理出站，按域名白名单放行，白名单初始为空</td></tr>
+      <tr><td>平台</td><td>macOS 用 Seatbelt；Linux 和 WSL2 需要 <code>bubblewrap</code> 和 <code>socat</code>；原生 Windows 不支持</td></tr>
+    </tbody>
+  </table></div>
+  <h4>教程：在 Linux 上启用</h4>
+  <ol class="steps">
+    <li>安装依赖并重启 Claude Code：<code>sudo apt-get install bubblewrap socat</code>。</li>
+    <li>会话里运行 <code>/sandbox</code>。Mode 标签选择 auto-allow（沙箱内命令免询问）或 regular permissions（照常询问）；选择保存在 <code>.claude/settings.local.json</code>。</li>
+    <li>让 Claude 执行两条验证命令（不要在 <code>!</code> 模式下自己跑）：<code>touch ~/sandbox-probe</code> 应报 <code>Read-only file system</code>；<code>curl --noproxy '*' https://example.com</code> 应报 <code>Could not resolve host</code>。</li>
+    <li>按需在设置里放开域名、写路径，并把凭据挡在外面：</li>
+  </ol>
+  <div class="code"><span class="lang">.claude/settings.local.json</span><pre><code>{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": ["docker compose *"],
+    "filesystem": {
+      "allowWrite": ["/tmp/build"]
+    },
+    "network": {
+      "allowedDomains": ["github.com", "*.github.com"]
+    },
+    "credentials": {
+      "files": [{ "path": "~/.ssh", "mode": "deny" }],
+      "envVars": [{ "name": "GITHUB_TOKEN", "mode": "deny" }]
+    }
+  }
+}</code></pre></div>
+  <ul>
+    <li><code>failIfUnavailable: true</code>：沙箱不可用时直接退出，而不是悄悄无沙箱运行。</li>
+    <li><code>allowUnsandboxedCommands: false</code>（严格模式）：忽略 Claude 用 <code>dangerouslyDisableSandbox</code> 绕出沙箱重试的请求。</li>
+    <li><code>excludedCommands</code> 里的命令在沙箱外运行，模式以 <code> *</code> 结尾。</li>
+    <li>只想临时试一次：<code>claude --settings '{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false}}'</code>。</li>
+  </ul>
+
+  <h3>auto 模式的规则</h3>
+  <p>auto 模式下，分类器会拦下它判断为不可逆、破坏性或指向你环境之外的操作，默认只信任工作目录和当前仓库已配置的远端。deny 和显式的 ask 规则先于分类器生效。想让它认识你的基础设施，就在 <code>autoMode</code> 里用自然语言描述：</p>
+  <div class="code"><span class="lang">~/.claude/settings.json</span><pre><code>{
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Source control: github.com/your-org and all repos under it"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Never run ./scripts/build.sh sanitize, tsan or clang-tidy unless explicitly asked"
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Never send repository contents to third-party code-review APIs"
+    ]
+  }
+}</code></pre></div>
+  <ul>
+    <li>四个列表：<code>environment</code>（可信环境）、<code>allow</code>（对 soft_deny 的例外）、<code>soft_deny</code>（默认拦截，用户明确要求时可放行）、<code>hard_deny</code>（无条件拦截）。每个列表都要包含 <code>"$defaults"</code>，否则会丢掉内置规则。</li>
+    <li>只从用户设置、托管设置和 <code>--settings</code> 读取，项目里的 <code>.claude/settings.json</code> 不生效，防止仓库给自己开后门。</li>
+    <li>泛泛的请求不算明确授权：“清理一下仓库”不会授权 force push，“force push 这个分支”才算。</li>
+  </ul>
+  <div class="code"><pre><code>claude auto-mode defaults     <span class="c"># 打印内置规则；--label 'Git Destructive' 过滤</span>
+claude auto-mode config       <span class="c"># 打印合并后实际生效的规则</span>
+claude auto-mode critique     <span class="c"># 让 AI 点评你的自定义规则</span>
+claude auto-mode reset        <span class="c"># 删除用户设置里的 autoMode 段</span>
+/auto-mode-setup              <span class="c"># 会话内起草 environment 条目</span></code></pre></div>
+
+  <h3>bypassPermissions 与整进程隔离</h3>
+  <ul>
+    <li><code>--dangerously-skip-permissions</code> 等同 <code>--permission-mode bypassPermissions</code>，跳过所有询问，连 <code>.git</code>、<code>.claude</code> 这些受保护路径的写入也不问。只在容器、虚拟机或 sandbox runtime 里用；在 Linux 和 macOS 上以 root 运行时它会拒绝启动。</li>
+    <li><code>--allow-dangerously-skip-permissions</code> 只把 bypass 加进 <kbd>Shift</kbd>+<kbd>Tab</kbd> 循环，不直接进入。</li>
+    <li>组织可以在托管设置里写 <code>"disableBypassPermissionsMode": "disable"</code> 禁用。</li>
+    <li>整进程隔离（连文件工具、MCP、钩子一起关进去）：<code>npm install -g @anthropic-ai/sandbox-runtime</code> 后运行 <code>srt claude</code>；或用官方 dev container、自建容器、虚拟机、云端会话。</li>
+  </ul>
+
+  <h3>启动开关速查</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>参数</th><th>效果</th></tr></thead>
+    <tbody>
+      <tr><td><code>--restricted</code></td><td>移除执行命令和代码的内置工具及 WebFetch，文件工具限定在工作目录，只加载托管设置和 <code>--settings</code>，拒绝 bypass；给共享机器上的评测脚本用</td></tr>
+      <tr><td><code>--safe-mode</code></td><td>禁用全部自定义（CLAUDE.md、skill、插件、钩子、MCP、自定义命令和代理等），登录、模型和内置工具照常；排查坏配置用</td></tr>
+      <tr><td><code>--bare</code></td><td>最小模式：跳过钩子、插件、MCP、自动记忆和 CLAUDE.md 的自动发现，启动更快；给脚本调用用</td></tr>
+      <tr><td><code>--tools "Bash,Edit,Read"</code></td><td>只开放指定的内置工具；<code>""</code> 全部关闭</td></tr>
+      <tr><td><code>--allowedTools</code> / <code>--disallowedTools</code></td><td>临时追加 allow / deny 规则</td></tr>
+      <tr><td><code>--strict-mcp-config --mcp-config x.json</code></td><td>只加载指定的 MCP 配置</td></tr>
+      <tr><td><code>--setting-sources user,project</code></td><td>只加载指定来源的设置</td></tr>
+      <tr><td><code>--permission-prompts none</code></td><td><code>-p</code> 模式下凡是需要询问的一律自动拒绝</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>注意</h3>
+  <ul>
+    <li>沙箱只管 shell 命令。<code>denyRead</code> 挡不住 Read 工具，<code>allowedDomains</code> 不限制 WebFetch，这两者要靠权限规则。</li>
+    <li>放开宽泛的域名可能成为数据外泄通道；把 <code>/var/run/docker.sock</code> 加进可写路径基本等于交出宿主机。</li>
+    <li>MCP 服务器只用自己写的或可信来源的；审查 <code>.mcp.json</code> 看不到其他作用域、连接器和插件带进来的服务器。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>本机没装 <code>bubblewrap</code> 和 <code>socat</code>，现在开 <code>/sandbox</code> 会因依赖检查失败而退回无沙箱运行；先安装依赖，并建议同时设 <code>failIfUnavailable: true</code>。</p></aside>
+</section>
+
+<section class="topic" id="c10">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C10</span>
+    <h2>成本与性能调优</h2>
+    <div class="entry"><code>/usage</code><code>/context</code><code>/skill-doctor</code><code>--max-budget-usd</code></div>
+    <p class="lede">花费主要由三件事决定：每次请求带多少上下文、提示缓存命中多少、用什么模型和力度。先测量，再调整。</p>
+  </header>
+
+  <h3>怎么看花费</h3>
+  <ul>
+    <li><code>/usage</code>（别名 <code>/cost</code>、<code>/stats</code>）：本会话花费、按模型的 token 明细、套餐额度、活动统计，以及 <code>Prompt cache (main)</code> 一行的缓存命中情况。订阅用户看到的是额度进度条。</li>
+    <li><code>/context</code>：哪类内容占了上下文。<code>/skill-doctor</code>：每个 skill 占多少上下文、用得多不多。<code>/insights</code>：最近会话的使用模式报告。</li>
+    <li>参考数字（官方企业平均，按 API 价格）：每位开发者每个活跃日约 13 美元，每月 150～250 美元，90% 的用户每日低于 30 美元。</li>
+  </ul>
+  <div class="code"><pre><code>Prompt cache (main):   14 requests · 91% of input tokens from cache · 2 misses (last 6m 10s ago, 310.2k tokens re-cached) · 1 expected rebuild (compaction or tool-result clearing) · warm (1h TTL, last activity 40s ago)</code></pre></div>
+
+  <h3>提示缓存</h3>
+  <p>每次请求都会发送完整上下文，API 复用与上次相同的前缀。前缀一变，后面全部重算，这一轮就又慢又贵。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>会让缓存失效</th><th>不会让缓存失效</th></tr></thead>
+    <tbody>
+      <tr><td class="wrap">用 <code>/model</code> 换模型；开启快速模式；增删预加载的 MCP 服务器或带 MCP 的插件；压缩；累积大量图片；升级 Claude Code；在多数模型上改推理力度</td><td class="wrap">编辑仓库文件；会话中改 CLAUDE.md（要 <code>/clear</code>、<code>/compact</code> 或重启才生效）；切换权限模式或输出风格；调用 skill 和命令；<code>/rewind</code>；派子代理；在 Opus 5.5、Sonnet 5.5、Haiku 5.5 上改力度</td></tr>
+    </tbody>
+  </table></div>
+  <p>缓存有效期：订阅账号套餐内的主对话是 1 小时，API Key、usage credits 或云厂商是 5 分钟，子代理等辅助请求默认 5 分钟。<code>promptCacheTtl</code> 或 <code>CLAUDE_CODE_PROMPT_CACHE_TTL</code>（<code>5m</code>／<code>1h</code>）可以调整。</p>
+
+  <h3>省钱手段</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>手段</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>会话开头定好模型和力度</td><td>中途切换会让缓存失效；日常用 sonnet 或较低力度，难题再上 opus 高力度</td></tr>
+      <tr><td>任务之间 <code>/clear</code></td><td>旧对话每条消息都在计费</td></tr>
+      <tr><td>在自然的断点 <code>/compact</code></td><td>带重点说明；不要在任务进行到一半时压缩</td></tr>
+      <tr><td>放弃一条路线时用 <code>/rewind</code></td><td>回到已缓存的前缀，比继续纠正便宜</td></tr>
+      <tr><td>精简说明文件</td><td>CLAUDE.md 控制在 200 行内，长流程移到 skill</td></tr>
+      <tr><td>减少 MCP 开销</td><td>优先用 <code>gh</code> 等命令行工具；<code>/mcp disable 名称</code> 停用闲置服务器</td></tr>
+      <tr><td>用钩子预处理输出</td><td>例如 PreToolUse 钩子只保留测试输出的最后 100 行</td></tr>
+      <tr><td>大量输出交给子代理</td><td>只有摘要回到主上下文；简单子任务给子代理用 <code>model: haiku</code></td></tr>
+      <tr><td>留意后台消耗</td><td>空闲时的自动压缩、会话回顾、提示建议、<code>/goal</code> 和 <code>/loop</code> 的触发都会发请求</td></tr>
+      <tr><td>脚本设预算</td><td><code>claude -p --max-budget-usd 2 "..."</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>教程：一次成本体检</h3>
+  <ol class="steps">
+    <li>在一个干了一阵活的会话里运行 <code>/usage</code>，看缓存命中率和未命中次数。</li>
+    <li><code>/context</code> 找出大头：MCP 工具、说明文件、超长的工具输出。</li>
+    <li><code>/skill-doctor</code> 看有没有很少用却常驻的 skill，用 <code>/skills</code> 调整可见性。</li>
+    <li>调整：停用闲置 MCP、精简说明文件、日常任务改用 <code>/effort medium</code>。</li>
+    <li>一周后再看 <code>/usage</code> 的 Stats 标签对比。</li>
+  </ol>
+
+  <h3>性能</h3>
+  <ul>
+    <li>会话堆内存超过 2.5GB 会出警告：重启后 <code>claude -c</code> 继续。全屏渲染器（<code>/tui fullscreen</code>）在长对话里内存更平稳。</li>
+    <li><code>--fallback-model sonnet</code> 在主模型过载时自动回退，减少等待。</li>
+    <li>升级后的第一轮必然不命中缓存；想自己控制升级时机就设 <code>DISABLE_AUTOUPDATER=1</code>，空闲时手动 <code>claude update</code>。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>你是订阅账号，主对话享受 1 小时缓存；同时开了 <code>autoContinueAtUsageLimit</code>，触及额度上限后会等重置再自动继续（最多连续三次）。Opus 默认 xhigh 是额度消耗的主要来源，可以先从这里调。</p></aside>
+</section>
+
+<section class="topic" id="c11">
+  <header class="topic-head">
+    <span class="lv lv3">高级 · C11</span>
+    <h2>排障与调试</h2>
+    <div class="entry"><code>claude doctor</code><code>--debug</code><code>--safe-mode</code><code>claude purge</code></div>
+    <p class="lede">配置不生效的原因只有三种：文件没加载、从别的位置加载了、被另一个文件覆盖了。按下面的流程逐层排除。</p>
+  </header>
+
+  <h3>诊断工具</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>工具</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>claude doctor</code></td><td>在 shell 里运行，只读；<code>claude</code> 起不来时用，会列出无效的设置条目</td></tr>
+      <tr><td><code>/doctor</code>（<code>/checkup</code>）</td><td>会话内全面体检，提出修复并在确认后执行</td></tr>
+      <tr><td><code>claude --debug</code></td><td>调试日志写到 <code>~/.claude/debug/&lt;session-id&gt;.txt</code></td></tr>
+      <tr><td><code>--debug=hooks,mcp</code> / <code>--debug='!hooks,!mcp'</code></td><td>只看或排除某些类别</td></tr>
+      <tr><td><code>--debug-file 路径</code></td><td>开启调试并写到指定文件</td></tr>
+      <tr><td><code>/debug 问题描述</code></td><td>对当前会话开调试日志并让 Claude 据此排查</td></tr>
+      <tr><td><code>/status</code> <code>/context</code> <code>/hooks</code> <code>/mcp</code> <code>/permissions</code> <code>/memory</code> <code>/skills</code></td><td>分别查看设置来源、上下文、钩子、MCP、权限规则、说明文件、skill</td></tr>
+      <tr><td><code>claude --safe-mode</code></td><td>禁用所有自定义，判断问题是否出在配置上</td></tr>
+      <tr><td><code>/heapdump</code></td><td>内存问题时写堆快照；快照可能含凭据，公开提交时只附 <code>-diagnostics.json</code></td></tr>
+      <tr><td><code>/feedback</code>（<code>/bug</code>）</td><td>向 Anthropic 提交问题</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>教程：配置不生效时的排查流程</h3>
+  <ol class="steps">
+    <li><code>claude --safe-mode</code> 启动。问题消失，说明出在 CLAUDE.md、skill、插件、钩子或 MCP 之一。</li>
+    <li><code>/context</code> 确认目标文件是否加载。子目录 CLAUDE.md 要等读写该目录文件时才加载。</li>
+    <li><code>claude doctor</code> 查无效设置，<code>/status</code> 看加载了哪些设置来源。记住优先级：托管 &gt; 命令行 &gt; local &gt; project &gt; user。</li>
+    <li>MCP 问题看 <code>/mcp</code>。项目 <code>.mcp.json</code> 的服务器需要一次性批准，想重新弹出批准用 <code>claude mcp reset-project-choices</code>；显示已连接但没有工具时用 <code>claude --debug=mcp</code> 看服务器的 stderr。</li>
+    <li>钩子问题看 <code>/hooks</code>。<code>matcher</code> 必须是单个字符串，工具名区分大小写，多个工具写 <code>"Edit|Write"</code>。</li>
+    <li>仍无头绪就用干净配置复现：
+      <div class="code"><pre><code>mkdir -p ~/claude-clean/empty &amp;&amp; cd ~/claude-clean/empty
+CLAUDE_CONFIG_DIR=~/claude-clean/config claude --setting-sources user</code></pre></div>
+      问题消失后，把 <code>~/.claude.json</code> 和 <code>~/.claude/</code> 里的文件逐个拷进 <code>~/claude-clean/config</code>，找出罪魁。
+    </li>
+  </ol>
+
+  <h3>常见配置错误</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>现象</th><th>原因与修正</th></tr></thead>
+    <tbody>
+      <tr><td>钩子不触发</td><td>matcher 写成了数组或小写（<code>"bash"</code>）；钩子要写在 settings.json 的 <code>"hooks"</code> 键下</td></tr>
+      <tr><td>权限或钩子写了没用</td><td>写进了 <code>~/.claude.json</code>，应写在 <code>~/.claude/settings.json</code></td></tr>
+      <tr><td>skill 不出现</td><td>路径应为 <code>.claude/skills/名称/SKILL.md</code>，不是 <code>.claude/skills/名称.md</code></td></tr>
+      <tr><td>.mcp.json 不加载</td><td>文件要放在仓库根（不在 .claude/ 里），服务器写在 <code>mcpServers</code> 键下</td></tr>
+      <tr><td>settings.json 里的 MCP 不出现</td><td>settings.json 不读 <code>mcpServers</code>；用 <code>.mcp.json</code> 或 <code>claude mcp add --scope user</code></td></tr>
+      <tr><td>内置 Explore／Plan 子代理不遵守 CLAUDE.md</td><td>它们启动时不加载 CLAUDE.md；自定义子代理会加载</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>常见报错</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>报错</th><th>含义与处理</th></tr></thead>
+    <tbody>
+      <tr><td><code>Repeated 529 Overloaded errors</code></td><td>API 整体容量不足，不是你的额度问题。稍等，或 <code>/model</code> 换个模型</td></tr>
+      <tr><td><code>Request rejected (429)</code></td><td>你的 API Key 或项目触发限流。<code>/status</code> 确认用的是哪个凭据，减少并行子代理</td></tr>
+      <tr><td><code>You've hit your session limit · resets …</code></td><td>套餐额度用完。等重置，<code>/usage</code> 查看，<code>/usage-credits</code> 购买额外额度</td></tr>
+      <tr><td><code>Credit balance is too low</code></td><td>Console 余额不足，或误用了 API Key。<code>/status</code> 看是否有 API key 行，<code>unset ANTHROPIC_API_KEY</code></td></tr>
+      <tr><td><code>Request timed out</code></td><td>默认 10 分钟没响应。网络慢时调大 <code>API_TIMEOUT_MS</code></td></tr>
+      <tr><td><code>Prompt is too long</code></td><td>上下文超限。<code>/compact</code> 或 <code>/clear</code>，<code>/context</code> 查原因，<code>/mcp disable</code> 停用闲置服务器</td></tr>
+      <tr><td><code>Autocompact is thrashing</code></td><td>压缩后又被大文件或长输出填满。分段读文件、交给子代理，或 <code>/clear</code></td></tr>
+      <tr><td><code>Server error mid-response</code></td><td>输出中途断开，已保留部分结果。回复 <code>continue</code> 让它接着做</td></tr>
+      <tr><td><code>Not logged in</code> / <code>Login expired</code></td><td>运行 <code>/login</code></td></tr>
+      <tr><td><code>This organization has been disabled</code></td><td>残留的旧 <code>ANTHROPIC_API_KEY</code> 覆盖了订阅登录，unset 后 <code>/login</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>网络、超时与本地数据</h3>
+  <div class="code"><pre><code>export HTTPS_PROXY=http://proxy.example.com:8080
+export NO_PROXY=localhost,127.0.0.1
+export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem   <span class="c"># 企业代理做 TLS 检查时</span>
+export API_TIMEOUT_MS=1200000                     <span class="c"># API 超时，默认 600000</span>
+export BASH_DEFAULT_TIMEOUT_MS=300000             <span class="c"># Bash 默认超时，默认 120000；上限由 BASH_MAX_TIMEOUT_MS 控制</span>
+
+claude purge --dry-run      <span class="c"># 列出将删除的本项目数据（转录、任务、文件历史）</span>
+claude purge                <span class="c"># 删除当前项目的 Claude Code 本地数据</span>
+claude purge --all          <span class="c"># 所有项目</span></code></pre></div>
+  <ul>
+    <li>会话卡死：按 <kbd>Ctrl</kbd>+<kbd>C</kbd>，没反应就关掉终端，在同一目录 <code>claude --resume</code>，对话不会丢。</li>
+    <li>搜索结果不全：安装系统 ripgrep 并设 <code>USE_BUILTIN_RIPGREP=0</code>，<code>claude doctor</code> 的 Search 行会显示系统路径。</li>
+    <li><code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> 设成任何非空值（包括 <code>0</code>）都会关闭自动更新、遥测、<code>/feedback</code> 和功能开关拉取，Remote Control 也会因此不可用。</li>
+  </ul>
+  <aside class="note mine"><span class="tag">本机</span><p>内存只有约 1GB，长会话更容易碰到内存告警或进程被杀；遇到时重启并 <code>claude -c</code> 继续，配合 <code>/compact</code> 控制上下文。</p></aside>
+</section>
+
+<footer class="sources">
+  <h2>资料来源</h2>
+  <p>以下官方页面于 2026-11-20 读取；命令行参数另以本机 <code>claude --help</code> 及各子命令的 <code>--help</code> 核对。</p>
+  <ul>
+    <li><a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">Advanced setup</a>、<a href="https://code.claude.com/docs/en/authentication" target="_blank" rel="noopener">Authentication</a></li>
+    <li><a href="https://code.claude.com/docs/en/commands" target="_blank" rel="noopener">Commands</a>、<a href="https://code.claude.com/docs/en/interactive-mode" target="_blank" rel="noopener">Interactive mode</a></li>
+    <li><a href="https://code.claude.com/docs/en/sessions" target="_blank" rel="noopener">Manage sessions</a>、<a href="https://code.claude.com/docs/en/checkpointing" target="_blank" rel="noopener">Checkpointing</a></li>
+    <li><a href="https://code.claude.com/docs/en/model-config" target="_blank" rel="noopener">Model configuration</a>、<a href="https://code.claude.com/docs/en/fast-mode" target="_blank" rel="noopener">Fast mode</a></li>
+    <li><a href="https://code.claude.com/docs/en/settings" target="_blank" rel="noopener">Settings</a>、<a href="https://code.claude.com/docs/en/permissions" target="_blank" rel="noopener">Permissions</a>、<a href="https://code.claude.com/docs/en/permission-modes" target="_blank" rel="noopener">Permission modes</a></li>
+    <li><a href="https://code.claude.com/docs/en/context-window" target="_blank" rel="noopener">Context window</a>、<a href="https://code.claude.com/docs/en/memory" target="_blank" rel="noopener">Memory</a></li>
+    <li><a href="https://code.claude.com/docs/en/statusline" target="_blank" rel="noopener">Status line</a>、<a href="https://code.claude.com/docs/en/output-styles" target="_blank" rel="noopener">Output styles</a>、<a href="https://code.claude.com/docs/en/keybindings" target="_blank" rel="noopener">Keybindings</a>、<a href="https://code.claude.com/docs/en/fullscreen" target="_blank" rel="noopener">Fullscreen</a></li>
+    <li><a href="https://code.claude.com/docs/en/agents" target="_blank" rel="noopener">Run agents in parallel</a>、<a href="https://code.claude.com/docs/en/agent-view" target="_blank" rel="noopener">Agent view</a>、<a href="https://code.claude.com/docs/en/worktrees" target="_blank" rel="noopener">Worktrees</a></li>
+    <li><a href="https://code.claude.com/docs/en/claude-code-on-the-web" target="_blank" rel="noopener">Claude Code in the cloud</a>、<a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">Remote Control</a></li>
+    <li><a href="https://code.claude.com/docs/en/scheduled-tasks" target="_blank" rel="noopener">Scheduled tasks</a>、<a href="https://code.claude.com/docs/en/routines" target="_blank" rel="noopener">Cloud scheduled tasks</a>、<a href="https://code.claude.com/docs/en/goal" target="_blank" rel="noopener">Goal</a></li>
+    <li><a href="https://code.claude.com/docs/en/sandboxing" target="_blank" rel="noopener">Sandboxing</a>、<a href="https://code.claude.com/docs/en/auto-mode-config" target="_blank" rel="noopener">Auto mode config</a>、<a href="https://code.claude.com/docs/en/security" target="_blank" rel="noopener">Security</a></li>
+    <li><a href="https://code.claude.com/docs/en/costs" target="_blank" rel="noopener">Costs</a>、<a href="https://code.claude.com/docs/en/prompt-caching" target="_blank" rel="noopener">Prompt caching</a></li>
+    <li><a href="https://code.claude.com/docs/en/troubleshooting" target="_blank" rel="noopener">Troubleshooting</a>、<a href="https://code.claude.com/docs/en/debug-your-config" target="_blank" rel="noopener">Debug your config</a>、<a href="https://code.claude.com/docs/en/errors" target="_blank" rel="noopener">Errors</a></li>
+  </ul>
+</footer>
+</main>
+</div>
+
+<script>
+(function(){
+  // copy buttons on every code block
+  document.querySelectorAll('.code').forEach(function(box){
+    var pre = box.querySelector('pre');
+    if(!pre) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy';
+    btn.textContent = '复制';
+    btn.addEventListener('click', function(){
+      var text = pre.innerText.replace(/\n$/, '');
+      function done(msg){ btn.textContent = msg; setTimeout(function(){ btn.textContent = '复制'; }, 1400); }
+      function fallback(){
+        try{
+          var r = document.createRange(); r.selectNodeContents(pre);
+          var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+          done('已选中');
+        }catch(e){ done('请手动复制'); }
+      }
+      try{
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(text).then(function(){ done('已复制'); }, fallback);
+        }else{ fallback(); }
+      }catch(e){ fallback(); }
+    });
+    box.appendChild(btn);
+  });
+
+  // collapse the index on narrow screens
+  var det = document.getElementById('toc-details');
+  if(det && window.matchMedia && window.matchMedia('(max-width: 900px)').matches){ det.open = false; }
+
+  // highlight the topic currently in view
+  var links = {};
+  document.querySelectorAll('nav.toc a[href^="#"]').forEach(function(a){ links[a.getAttribute('href').slice(1)] = a; });
+  if(!('IntersectionObserver' in window)) return;
+  var current = null;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){
+      if(en.isIntersecting){
+        var a = links[en.target.id];
+        if(!a) return;
+        if(current) current.removeAttribute('aria-current');
+        a.setAttribute('aria-current','true');
+        current = a;
+      }
+    });
+  }, {rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('section.topic').forEach(function(s){ io.observe(s); });
+})();
+</script>

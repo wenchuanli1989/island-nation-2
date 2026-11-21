@@ -17,7 +17,7 @@
 #define STORAGE_KHASHL_MAX_BUCKETS ((size_t)1U << 31)
 #define STORAGE_KHASHL_MAX_LOAD_COUNT (STORAGE_KHASHL_MAX_BUCKETS - (STORAGE_KHASHL_MAX_BUCKETS >> 2))
 
-/** @brief 只校验加载数量对应的数组大小与 khashl 容量上限，不预分配内存。 */
+/** @brief 校验加载数量不会让数组字节数溢出或超过映射表容量，不预分配。 */
 static inline void storageValidateLoadCount(uint32_t total_count, size_t element_size) {
     if ((size_t)total_count > SIZE_MAX / element_size) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "restored entity allocation size overflows (count=%u, element_size=%zu)", total_count,
@@ -30,15 +30,15 @@ static inline void storageValidateLoadCount(uint32_t total_count, size_t element
 }
 
 typedef uint32_t (*StorageShardCountFn)(uint32_t total_count, uint32_t max_per_shard);
-/** @brief 元数据入口已创建 doc/root，type_name 来自当前注册项。 */
+/** @brief 向模块 meta 写入扩展字段。 */
 typedef void (*StorageWriteModuleMetaExtraFn)(yyjson_mut_doc* doc, yyjson_mut_val* root, const char* type_name);
-/** @brief 读取当前格式可信元数据中的模块扩展字段。 */
+/** @brief 从模块 meta 读取扩展字段。 */
 typedef void (*StorageReadModuleMetaExtraFn)(yyjson_val* root, const char* type_name);
 
-/** @brief 从可信持久化 ID 绑定运行时引用；该操作不分配资源且不可失败。 */
+/** @brief 全部模块加载后，按持久化 ID 绑定运行时指针；不分配资源、不会失败。 */
 typedef void (*StorageBindModuleReferencesFn)(void);
 
-/** @brief regions 使用单文件专用格式，其余实体使用 {type_name}_{shard_id}.json。 */
+/** @brief 一个存档模块的注册项：文件名前缀、分片规则和各回调；regions 为单文件，其余为 {type_name}_{shard_id}.json。 */
 typedef struct {
     const char* type_name;
     size_t (*count_fn)(void);
@@ -49,31 +49,29 @@ typedef struct {
     StorageReadModuleMetaExtraFn read_meta_extra_fn;
     StorageBindModuleReferencesFn bind_references_fn;
     uint32_t max_per_shard;
-} StorageModuleType;
+} StorageModuleDescriptor;
 
-extern const StorageModuleType g_storage_module_types[];
-extern const size_t g_storage_module_type_count;
+extern const StorageModuleDescriptor g_storage_module_registry[];
+extern const size_t g_storage_module_registry_count;
 
-/** @brief 按固定实体上限计算分片数；max_per_shard 为注册器中的非零常量。 */
+/** @brief 按每分片实体上限计算分片数。 */
 static inline uint32_t storageEntityShardCount(uint32_t total_count, uint32_t max_per_shard) {
     return total_count / max_per_shard + (total_count % max_per_shard != 0);
 }
 
-/** @brief 固定写出一个分片，用于 regions 这类单文件模块。 */
+/** @brief 单文件模块（regions）固定一个分片。 */
 static inline uint32_t storageSingleShardCount(uint32_t total_count, uint32_t max_per_shard) {
     (void)total_count;
     (void)max_per_shard;
     return 1;
 }
 
-static inline uint32_t storageModuleShardCount(const StorageModuleType* module_type, uint32_t total_count) {
-    return module_type->shard_count_fn(total_count, module_type->max_per_shard);
+static inline uint32_t storageModuleShardCount(const StorageModuleDescriptor* module_ptr, uint32_t total_count) {
+    return module_ptr->shard_count_fn(total_count, module_ptr->max_per_shard);
 }
 
-/**
- * @brief 生成分片读写循环；容器和 ID 映射由宏恢复，deserialize 接收已清零的实体。
- * @pre 引擎已初始化空容器与 ID 映射，每轮只由元数据入口调用一次加载。
- * @note 加载入口接收可信元数据中的总数、分片数和有效存档路径。
+/** @brief 为扁平容器实体生成 serdeSave##FuncName / serdeLoad##FuncName：按分片写出，加载时逐个反序列化（实体先清零）、
+ * 追加到容器并登记 ID 映射。EXTRA_LOAD_VALIDATE_CODE 在加载前执行，EXTRA_LOAD_BIND_CODE 在全部分片加载后执行。
  */
 #define STORAGE_DEFINE_SHARDED_IMPL(FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard,      \
                                     EXTRA_LOAD_VALIDATE_CODE, EXTRA_LOAD_BIND_CODE)                                                                 \
@@ -152,7 +150,7 @@ static inline uint32_t storageModuleShardCount(const StorageModuleType* module_t
     STORAGE_DEFINE_SHARDED_IMPL(                                                                                                                 \
         FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard, ((void)0);, ((void)0);)
 
-/** @brief data 按需插入；全部分片加载完成后再绑定指针，避免向量扩容使已绑定地址失效。 */
+/** @brief 带扩展 data 的实体：全部分片加载后再绑定 data 指针，避免容器扩容使已绑定地址失效。 */
 #define STORAGE_DEFINE_SHARDED_WITH_DATA(FuncName, type_str, EntityType, list_var, id_map, id_map_put, serialize_fn, deserialize_fn, max_per_shard, \
                                          DataType, data_get_fn)                                                                                     \
     STORAGE_DEFINE_SHARDED_IMPL(                                                                                                                    \

@@ -3,20 +3,20 @@
 
 #include "entry.h"
 
-/** @brief 所有目标共享的连续数组最小堆，从索引 1 存储，按到期时间、game_timer_id 排序；零初始化即可使用。 */
+/** @brief 数组最小堆，按 (due_ms, game_timer_id) 排序；从下标 1 开始存储，零初始化即为空堆。 */
 typedef struct DominoGameTimerHeap {
-    DominoGameTimerRequestMessage* events_ptr;  ///< 索引 0 保留不用，堆顶位于索引 1，有效元素范围为 [1, count]。
-    uint32_t capacity;                          ///< 可存元素数量，实际分配 capacity + 1 个数组位置。
+    DominoGameTimerRequestMessage* requests_ptr;  ///< 有效元素为 [1, count]，堆顶在下标 1。
+    uint32_t capacity;                            ///< 可存元素数，实际分配 capacity + 1 个位置。
     uint32_t count;
 } DominoGameTimerHeap;
 
-/** @brief 释放事件数组并恢复为空堆。 */
+/** @brief 释放数组并恢复为空堆。 */
 void dominoGameTimerHeapDestroy(DominoGameTimerHeap* heap_ptr);
-/** @brief 按值登记事件；容量或分配失败直接报告并终止进程。 */
+/** @brief 按值插入一条请求；扩容失败致命退出。 */
 void dominoGameTimerHeapPush(DominoGameTimerHeap* heap_ptr, const DominoGameTimerRequestMessage* game_timer_ptr);
-/** @brief 返回最早到期事件，空堆返回 nullptr；返回指针仅在下次堆操作前有效。 */
+/** @brief 最早到期的请求，空堆返回空指针；指针在下次堆操作前有效。 */
 const DominoGameTimerRequestMessage* dominoGameTimerHeapPeek(const DominoGameTimerHeap* heap_ptr);
-/** @brief 移除非空堆的最早到期事件，用于取消项回收或到期请求转移。 */
+/** @brief 移除非空堆的堆顶。 */
 void dominoGameTimerHeapPop(DominoGameTimerHeap* heap_ptr);
 
 #endif

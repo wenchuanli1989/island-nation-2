@@ -9,34 +9,32 @@
 #include "domino_shared_nav.h"
 #include "graph.h"
 #include "klib/kvec.h"
-#include "road_id.h"
 #include "state.h"
-#include "storage_view.h"
 
 /**
  * @brief 在原槽位提交道路恢复。
  * @note 调用方已确认道路已删除、端点活跃且分组匹配，邻接尚不存在且可追加；road_segment_index 为本次定位结果。
  */
-static void navRestoreRoad(DominoRoad* road, DominoForkRoad* start_fork_road, domino_fork_road_id_t target_id, domino_nav_weight_atom_t weight,
-                           int road_segment_index) {
+static void restoreRoad(DominoRoad* road, DominoForkRoad* start_fork_road, domino_fork_road_id_t target_id, domino_nav_edge_weight_t weight,
+                        int road_segment_index) {
     const uint8_t region_index = start_fork_road->region_index;
     const uint8_t network_type = start_fork_road->type;
-    const uint32_t road_index = (uint32_t)(road - domino_all_road_list.a);
+    const uint32_t road_index = (uint32_t)(road - g_domino_road_list.a);
     navGraphAppendEdge(start_fork_road, target_id);
     road->weight[0] = weight;
     road->status = 0U;
     if (road_segment_index >= 0) {
-        DominoNavDataSegment* segment = &kv_A(domino_all_road_nav_data_segment_list, (size_t)road_segment_index);
+        DominoNavSegment* segment = &kv_A(g_domino_road_segment_list, (size_t)road_segment_index);
         segment->total_count++;
-        const uint64_t init_end = (uint64_t)segment->init_index + segment->init_count;
+        const uint64_t init_end = (uint64_t)segment->base_index + segment->base_count;
         /* 原基段中的实体仍由基段扫描；其余恢复记录须被增量范围覆盖。 */
-        if (road_index >= init_end && road_index < segment->increment_index) {
-            segment->increment_index = road_index;
+        if (road_index >= init_end && road_index < segment->tail_index) {
+            segment->tail_index = road_index;
         }
     } else {
-        kv_push(DominoNavDataSegment, domino_all_road_nav_data_segment_list,
-                ((DominoNavDataSegment){
-                    .increment_index = road_index,
+        kv_push(DominoNavSegment, g_domino_road_segment_list,
+                ((DominoNavSegment){
+                    .tail_index = road_index,
                     .total_count = 1U,
                     .region_index = region_index,
                     .road_network_type = network_type,
@@ -46,7 +44,7 @@ static void navRestoreRoad(DominoRoad* road, DominoForkRoad* start_fork_road, do
     navStateMarkDirty();
 }
 
-DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* target_fork_road, domino_nav_weight_atom_t weight, uint8_t region_index,
+DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* target_fork_road, domino_nav_edge_weight_t weight, uint8_t region_index,
                           uint8_t network_type) {
     if (!start_fork_road || !target_fork_road) {
         return ERR_NULL_POINTER;
@@ -70,18 +68,18 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
         start_value.region_index = region_index;
         start_value.type = network_type;
         start_value.status = 0U;
-        memset(start_value.to_fork_road_id, 0, sizeof(start_value.to_fork_road_id));
+        memset(start_value.to_fork_road_id_list, 0, sizeof(start_value.to_fork_road_id_list));
         start_value.to_fork_road_count = 0U;
-        start_value.temp_index = 0U;
+        start_value.vertex_index = 0U;
     }
     if (create_target) {
         target_value = *target_fork_road;
         target_value.region_index = region_index;
         target_value.type = network_type;
         target_value.status = 0U;
-        memset(target_value.to_fork_road_id, 0, sizeof(target_value.to_fork_road_id));
+        memset(target_value.to_fork_road_id_list, 0, sizeof(target_value.to_fork_road_id_list));
         target_value.to_fork_road_count = 0U;
-        target_value.temp_index = 0U;
+        target_value.vertex_index = 0U;
     }
 
     if (!create_start) {
@@ -121,57 +119,56 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
         }
     }
     if (existing_start) {
-        if (existing_start->to_fork_road_count > MAX_EDGES_PER_VERTEX) {
+        if (existing_start->to_fork_road_count > DOMINO_MAX_EDGE_COUNT_PER_VERTEX) {
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "road start has invalid outgoing edge count: id=%u count=%u", start_id,
                                    (unsigned)existing_start->to_fork_road_count);
         }
-        if (existing_start->to_fork_road_count == MAX_EDGES_PER_VERTEX) {
+        if (existing_start->to_fork_road_count == DOMINO_MAX_EDGE_COUNT_PER_VERTEX) {
             return ERR_CAPACITY_EXCEEDED;
         }
         if (!create_target && navGraphHasEdge(existing_start, target_id)) {
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "outgoing edge exists without an active road: start=%u target=%u", start_id, target_id);
         }
     }
-    const int road_segment_index = navStateFindSegmentIndex(&domino_all_road_nav_data_segment_list, region_index, network_type);
+    const int road_segment_index = navStateFindSegmentIndex(&g_domino_road_segment_list, region_index, network_type);
     if (existing_road) {
         if (existing_road->region_index != region_index || existing_road->type != network_type) {
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "deleted road network differs from its endpoints: start=%u target=%u", start_id, target_id);
         }
-        navRestoreRoad(existing_road, existing_start, target_id, weight, road_segment_index);
+        restoreRoad(existing_road, existing_start, target_id, weight, road_segment_index);
         return CODE_OK;
     }
 
-    const size_t old_fork_count = kv_size(domino_all_fork_road_list);
-    const size_t old_road_count = kv_size(domino_all_road_list);
+    const size_t old_fork_count = kv_size(g_domino_fork_road_list);
+    const size_t old_road_count = kv_size(g_domino_road_list);
     /* 参数可能指向全局数组；串行追加只改变基址，不改变已有节点的下标。 */
-    const size_t start_index = create_start ? old_fork_count : (size_t)(existing_start - domino_all_fork_road_list.a);
+    const size_t start_index = create_start ? old_fork_count : (size_t)(existing_start - g_domino_fork_road_list.a);
     const uint32_t fork_segment_delta = (create_start ? 1U : 0U) + (create_target ? 1U : 0U);
     if (old_fork_count > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX - fork_segment_delta || old_road_count >= DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
         return ERR_CAPACITY_EXCEEDED;
     }
     const size_t required_fork_count = old_fork_count + (size_t)fork_segment_delta;
-    const int fork_segment_index = navStateFindSegmentIndex(&domino_all_fork_road_nav_data_segment_list, region_index, network_type);
+    const int fork_segment_index = navStateFindSegmentIndex(&g_domino_fork_road_segment_list, region_index, network_type);
     if (fork_segment_index < 0 && fork_segment_delta == 0U) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "existing road endpoints have no fork segment: region=%u type=%u", (unsigned)region_index,
                                (unsigned)network_type);
     }
-    const uint32_t active_fork_count =
-        fork_segment_index >= 0 ? kv_A(domino_all_fork_road_nav_data_segment_list, (size_t)fork_segment_index).total_count : 0U;
-    if ((uint64_t)active_fork_count + fork_segment_delta > MAX_FORK_ROAD_COUNT_PER_NETWORK) {
+    const uint32_t active_fork_count = fork_segment_index >= 0 ? kv_A(g_domino_fork_road_segment_list, (size_t)fork_segment_index).total_count : 0U;
+    if ((uint64_t)active_fork_count + fork_segment_delta > DOMINO_MAX_FORK_ROAD_COUNT_PER_NETWORK) {
         return ERR_CAPACITY_EXCEEDED;
     }
     if (fork_segment_delta > 0U) {
         /* Nav 修改须串行执行，在原子递增前检查本次新增路口所需的 ID 范围。 */
-        const domino_fork_road_id_t next_id = atomic_load_explicit(&g_domino_global_increment_id.fork_road_increment_id, memory_order_relaxed);
+        const domino_fork_road_id_t next_id = atomic_load_explicit(&g_domino_id_counters.next_fork_road_id, memory_order_relaxed);
         if (next_id > UINT32_MAX - fork_segment_delta) {
             DOMINO_EXIT_WITH_ERROR(ERR_ID_EXHAUSTED, "fork road ID range exhausted: next_id=%u requested=%u", next_id, fork_segment_delta);
         }
         if (create_start) {
-            DOMINO_ALLOC_NON_ZERO_ID(g_domino_global_increment_id.fork_road_increment_id, start_id);
+            DOMINO_ALLOC_NON_ZERO_ID(g_domino_id_counters.next_fork_road_id, start_id);
             start_value.id = start_id;
         }
         if (create_target) {
-            DOMINO_ALLOC_NON_ZERO_ID(g_domino_global_increment_id.fork_road_increment_id, target_id);
+            DOMINO_ALLOC_NON_ZERO_ID(g_domino_id_counters.next_fork_road_id, target_id);
             target_value.id = target_id;
         }
         road_id = navBuildRoadId(start_id, target_id);
@@ -184,41 +181,41 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
 
     int absent = 0;
     if (create_start) {
-        khint_t slot = dominoForkRoadIdMap_put(dominoForkRoadIdMap, start_id, &absent);
+        khint_t slot = dominoForkRoadIdMap_put(g_domino_fork_road_id_map, start_id, &absent);
         if (absent != 1) {
             DOMINO_EXIT_WITH_ERROR(absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA, "failed to insert allocated start fork ID: id=%u reason=%s",
                                    start_id, absent < 0 ? "allocation failure" : "allocated ID already registered");
         }
-        kh_val(dominoForkRoadIdMap, slot) = (uint32_t)old_fork_count;
+        kh_val(g_domino_fork_road_id_map, slot) = (uint32_t)old_fork_count;
     }
     if (create_target) {
-        khint_t target_map_slot = dominoForkRoadIdMap_put(dominoForkRoadIdMap, target_id, &absent);
+        khint_t target_map_slot = dominoForkRoadIdMap_put(g_domino_fork_road_id_map, target_id, &absent);
         if (absent != 1) {
             DOMINO_EXIT_WITH_ERROR(absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA, "failed to insert allocated target fork ID: id=%u reason=%s",
                                    target_id, absent < 0 ? "allocation failure" : "allocated ID already registered");
         }
-        kh_val(dominoForkRoadIdMap, target_map_slot) = (uint32_t)(old_fork_count + (create_start ? 1U : 0U));
+        kh_val(g_domino_fork_road_id_map, target_map_slot) = (uint32_t)(old_fork_count + (create_start ? 1U : 0U));
     }
     {
-        khint_t slot = dominoRoadIdMap_put(dominoRoadIdMap, road_id, &absent);
+        khint_t slot = dominoRoadIdMap_put(g_domino_road_id_map, road_id, &absent);
         if (absent != 1) {
             DOMINO_EXIT_WITH_ERROR(absent < 0 ? ERR_MEMORY_ALLOC : ERR_INVALID_DATA, "failed to insert new road ID: start=%u target=%u reason=%s",
                                    start_id, target_id, absent < 0 ? "allocation failure" : "unexpected registered road ID");
         }
-        kh_val(dominoRoadIdMap, slot) = (uint32_t)old_road_count;
+        kh_val(g_domino_road_id_map, slot) = (uint32_t)old_road_count;
     }
 
     /* 业务校验已完成；后续分配失败直接终止进程。 */
-    if (required_fork_count > kv_max(domino_all_fork_road_list)) {
+    if (required_fork_count > kv_max(g_domino_fork_road_list)) {
         navStateInvalidateAllPathCaches();
     }
     if (create_start) {
-        kv_push(DominoForkRoad, domino_all_fork_road_list, start_value);
+        kv_push(DominoForkRoad, g_domino_fork_road_list, start_value);
     }
     if (create_target) {
-        kv_push(DominoForkRoad, domino_all_fork_road_list, target_value);
+        kv_push(DominoForkRoad, g_domino_fork_road_list, target_value);
     }
-    kv_push(DominoRoad, domino_all_road_list,
+    kv_push(DominoRoad, g_domino_road_list,
             ((DominoRoad){
                 .id = road_id,
                 .weight = {weight},
@@ -227,24 +224,24 @@ DOMINO_CODE dominoAddRoad(DominoForkRoad* start_fork_road, DominoForkRoad* targe
                 .region_index = region_index,
             }));
     /* 追加只可能搬迁数组基址；按保存的下标提交邻接和分组计数。 */
-    navGraphAppendEdge(&kv_A(domino_all_fork_road_list, start_index), target_id);
+    navGraphAppendEdge(&kv_A(g_domino_fork_road_list, start_index), target_id);
     if (fork_segment_index >= 0) {
-        kv_A(domino_all_fork_road_nav_data_segment_list, (size_t)fork_segment_index).total_count += fork_segment_delta;
+        kv_A(g_domino_fork_road_segment_list, (size_t)fork_segment_index).total_count += fork_segment_delta;
     } else {
-        kv_push(DominoNavDataSegment, domino_all_fork_road_nav_data_segment_list,
-                ((DominoNavDataSegment){
-                    .increment_index = (uint32_t)old_fork_count,
+        kv_push(DominoNavSegment, g_domino_fork_road_segment_list,
+                ((DominoNavSegment){
+                    .tail_index = (uint32_t)old_fork_count,
                     .total_count = fork_segment_delta,
                     .region_index = region_index,
                     .road_network_type = network_type,
                 }));
     }
     if (road_segment_index >= 0) {
-        kv_A(domino_all_road_nav_data_segment_list, (size_t)road_segment_index).total_count++;
+        kv_A(g_domino_road_segment_list, (size_t)road_segment_index).total_count++;
     } else {
-        kv_push(DominoNavDataSegment, domino_all_road_nav_data_segment_list,
-                ((DominoNavDataSegment){
-                    .increment_index = (uint32_t)old_road_count,
+        kv_push(DominoNavSegment, g_domino_road_segment_list,
+                ((DominoNavSegment){
+                    .tail_index = (uint32_t)old_road_count,
                     .total_count = 1U,
                     .region_index = region_index,
                     .road_network_type = network_type,
@@ -289,7 +286,7 @@ DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot remove road with missing or inconsistent endpoints: start=%u target=%u", start_id,
                                target_id);
     }
-    if (start->to_fork_road_count > MAX_EDGES_PER_VERTEX) {
+    if (start->to_fork_road_count > DOMINO_MAX_EDGE_COUNT_PER_VERTEX) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot remove road with invalid start edge count: id=%u count=%u", start_id,
                                (unsigned)start->to_fork_road_count);
     }
@@ -297,8 +294,8 @@ DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id) {
     bool remove_start = true;
     bool remove_target = true;
     /* 一次扫描同时判断两端是否孤立；不可通行的活跃道路也保留关联路口。 */
-    for (size_t index = 0U; index < kv_size(domino_all_road_list); index++) {
-        const DominoRoad* other_road = &kv_A(domino_all_road_list, index);
+    for (size_t index = 0U; index < kv_size(g_domino_road_list); index++) {
+        const DominoRoad* other_road = &kv_A(g_domino_road_list, index);
         if (other_road->status != 0U || other_road->id == road_id) {
             continue;
         }
@@ -316,14 +313,14 @@ DOMINO_CODE dominoRemoveRoad(domino_road_id_t road_id) {
     }
     const uint32_t fork_segment_delta = (remove_start ? 1U : 0U) + (remove_target ? 1U : 0U);
 
-    const int fork_segment_index = navStateFindSegmentIndex(&domino_all_fork_road_nav_data_segment_list, road->region_index, road->type);
-    const int road_segment_index = navStateFindSegmentIndex(&domino_all_road_nav_data_segment_list, road->region_index, road->type);
+    const int fork_segment_index = navStateFindSegmentIndex(&g_domino_fork_road_segment_list, road->region_index, road->type);
+    const int road_segment_index = navStateFindSegmentIndex(&g_domino_road_segment_list, road->region_index, road->type);
     if (fork_segment_index < 0 || road_segment_index < 0) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot remove road with missing segments: start=%u target=%u fork_segment=%d road_segment=%d",
                                start_id, target_id, fork_segment_index, road_segment_index);
     }
-    DominoNavDataSegment* fork_segment = &kv_A(domino_all_fork_road_nav_data_segment_list, (size_t)fork_segment_index);
-    DominoNavDataSegment* road_segment = &kv_A(domino_all_road_nav_data_segment_list, (size_t)road_segment_index);
+    DominoNavSegment* fork_segment = &kv_A(g_domino_fork_road_segment_list, (size_t)fork_segment_index);
+    DominoNavSegment* road_segment = &kv_A(g_domino_road_segment_list, (size_t)road_segment_index);
     if (fork_segment->total_count < fork_segment_delta || road_segment->total_count == 0U) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cannot remove road with inconsistent segment counts: forks=%u removed_forks=%u roads=%u",
                                fork_segment->total_count, fork_segment_delta, road_segment->total_count);

@@ -8,42 +8,41 @@
 
 #include "domino_shared_common.h"
 #include "klib/kvec.h"
-#include "storage_view.h"
 
-DominoForkRoadVec domino_all_fork_road_list;
-DominoRoadVec domino_all_road_list;
-DominoRoadLineVec domino_all_road_line_list;
-DominoNavDataSegmentVec domino_all_fork_road_nav_data_segment_list;
-DominoNavDataSegmentVec domino_all_road_nav_data_segment_list;
+DominoForkRoadVec g_domino_fork_road_list;
+DominoRoadVec g_domino_road_list;
+DominoRoadLineVec g_domino_road_line_list;
+DominoNavSegmentVec g_domino_fork_road_segment_list;
+DominoNavSegmentVec g_domino_road_segment_list;
 
-DominoForkRoadIDMap* dominoForkRoadIdMap;
-DominoRoadIDMap* dominoRoadIdMap;
-DominoRoadLineIDMap* dominoRoadLineIdMap;
+DominoForkRoadIdMap* g_domino_fork_road_id_map;
+DominoRoadIdMap* g_domino_road_id_map;
+DominoRoadLineIdMap* g_domino_road_line_id_map;
 
-static bool g_nav_compaction_required = true;
+static bool g_compaction_required_flag = true;
 
-static DominoNavPathCache* g_nav_path_cache_slots[DOMINO_NAV_PATH_CACHE_SLOT_COUNT];
+static DominoNavPathCache* g_path_cache_slot_list[DOMINO_NAV_PATH_CACHE_SLOT_COUNT];
 
-static inline size_t navStatePathCacheSlotIndex(uint8_t region_index, uint8_t road_network_type) {
+static inline size_t pathCacheSlotIndex(uint8_t region_index, uint8_t road_network_type) {
     return ((size_t)region_index << 8U) | (size_t)road_network_type;
 }
 
 DominoNavPathCache* navStatePreparePathCache(uint8_t region_index, uint8_t road_network_type) {
-    const size_t slot_index = navStatePathCacheSlotIndex(region_index, road_network_type);
-    DominoNavPathCache* cache = g_nav_path_cache_slots[slot_index];
+    const size_t slot_index = pathCacheSlotIndex(region_index, road_network_type);
+    DominoNavPathCache* cache = g_path_cache_slot_list[slot_index];
     if (!cache) {
         cache = (DominoNavPathCache*)calloc(1U, sizeof(*cache));
         if (!cache) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate path cache: region=%u network=%u", (unsigned)region_index,
                                    (unsigned)road_network_type);
         }
-        g_nav_path_cache_slots[slot_index] = cache;
+        g_path_cache_slot_list[slot_index] = cache;
     }
     return cache;
 }
 
 /** @brief 清空有效缓存槽；调用方保证 cache 非空。 */
-static void navStateResetPathCache(DominoNavPathCache* cache) {
+static void resetPathCache(DominoNavPathCache* cache) {
     free(cache->path_matrix);
     free(cache->fork_road_list);
     cache->path_matrix = nullptr;
@@ -51,82 +50,82 @@ static void navStateResetPathCache(DominoNavPathCache* cache) {
     cache->vertex_count = 0U;
 }
 
-static void navStateDestroyPathCaches(void) {
+static void destroyPathCaches(void) {
     for (size_t slot_index = 0U; slot_index < DOMINO_NAV_PATH_CACHE_SLOT_COUNT; slot_index++) {
-        DominoNavPathCache* cache = g_nav_path_cache_slots[slot_index];
+        DominoNavPathCache* cache = g_path_cache_slot_list[slot_index];
         if (!cache) {
             continue;
         }
-        navStateResetPathCache(cache);
+        resetPathCache(cache);
         free(cache);
-        g_nav_path_cache_slots[slot_index] = nullptr;
+        g_path_cache_slot_list[slot_index] = nullptr;
     }
 }
 
 void navStateInit(void) {
-    dominoForkRoadIdMap = dominoForkRoadIdMap_init();
-    if (!dominoForkRoadIdMap) {
+    g_domino_fork_road_id_map = dominoForkRoadIdMap_init();
+    if (!g_domino_fork_road_id_map) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate fork road ID map");
     }
-    dominoRoadIdMap = dominoRoadIdMap_init();
-    if (!dominoRoadIdMap) {
+    g_domino_road_id_map = dominoRoadIdMap_init();
+    if (!g_domino_road_id_map) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate road ID map");
     }
-    dominoRoadLineIdMap = dominoRoadLineIdMap_init();
-    if (!dominoRoadLineIdMap) {
+    g_domino_road_line_id_map = dominoRoadLineIdMap_init();
+    if (!g_domino_road_line_id_map) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate road line ID map");
     }
 }
 
 void navStateDestroy(void) {
-    navStateDestroyPathCaches();
+    destroyPathCaches();
 
-    for (size_t index = 0U; index < kv_size(domino_all_road_list); index++) {
-        DominoRoad* road = &kv_A(domino_all_road_list, index);
-        if (road->corner_point_count > MIN_CORNER_POINTS_PER_ROAD) {
+    for (size_t index = 0U; index < kv_size(g_domino_road_list); index++) {
+        DominoRoad* road = &kv_A(g_domino_road_list, index);
+        if (road->corner_point_count > DOMINO_ROAD_INLINE_CORNER_POINT_MAX) {
             free(road->corner_point_ptr);
         }
     }
 
-    dominoForkRoadIdMap_destroy(dominoForkRoadIdMap);
-    dominoRoadIdMap_destroy(dominoRoadIdMap);
-    dominoRoadLineIdMap_destroy(dominoRoadLineIdMap);
-    dominoForkRoadIdMap = nullptr;
-    dominoRoadIdMap = nullptr;
-    dominoRoadLineIdMap = nullptr;
+    dominoForkRoadIdMap_destroy(g_domino_fork_road_id_map);
+    dominoRoadIdMap_destroy(g_domino_road_id_map);
+    dominoRoadLineIdMap_destroy(g_domino_road_line_id_map);
+    g_domino_fork_road_id_map = nullptr;
+    g_domino_road_id_map = nullptr;
+    g_domino_road_line_id_map = nullptr;
 
-    kv_destroy(domino_all_fork_road_list);
-    kv_destroy(domino_all_road_list);
-    kv_destroy(domino_all_road_line_list);
-    kv_destroy(domino_all_fork_road_nav_data_segment_list);
-    kv_destroy(domino_all_road_nav_data_segment_list);
-    kv_init(domino_all_fork_road_list);
-    kv_init(domino_all_road_list);
-    kv_init(domino_all_road_line_list);
-    kv_init(domino_all_fork_road_nav_data_segment_list);
-    kv_init(domino_all_road_nav_data_segment_list);
+    kv_destroy(g_domino_fork_road_list);
+    kv_destroy(g_domino_road_list);
+    kv_destroy(g_domino_road_line_list);
+    kv_destroy(g_domino_fork_road_segment_list);
+    kv_destroy(g_domino_road_segment_list);
+    kv_init(g_domino_fork_road_list);
+    kv_init(g_domino_road_list);
+    kv_init(g_domino_road_line_list);
+    kv_init(g_domino_fork_road_segment_list);
+    kv_init(g_domino_road_segment_list);
 
-    g_nav_compaction_required = true;
+    g_compaction_required_flag = true;
 }
 
 bool navStateIsReady(void) {
-    return dominoForkRoadIdMap != nullptr;
+    return g_domino_fork_road_id_map != nullptr;
 }
 
 bool navStateNeedsCompaction(void) {
-    return g_nav_compaction_required;
+    return g_compaction_required_flag;
 }
 
 void navStateMarkDirty(void) {
-    g_nav_compaction_required = true;
+    g_compaction_required_flag = true;
 }
 
 void navStateMarkCanonical(void) {
-    g_nav_compaction_required = false;
+    g_compaction_required_flag = false;
 }
 
 void navStateValidateLoadedCapacity(void) {
-    const size_t entity_counts[] = {kv_size(domino_all_fork_road_list), kv_size(domino_all_road_list), kv_size(domino_all_road_line_list)};
+    const size_t entity_counts[] = {kv_size(g_domino_fork_road_list), kv_size(g_domino_road_list), kv_size(g_domino_road_line_list)};
     const char* const entity_names[] = {"fork road", "road", "road line"};
     for (size_t index = 0U; index < sizeof(entity_counts) / sizeof(entity_counts[0]); index++) {
         if (entity_counts[index] > DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX) {
@@ -134,30 +133,30 @@ void navStateValidateLoadedCapacity(void) {
                                    entity_counts[index], DOMINO_NAV_ID_MAP_ENTITY_COUNT_MAX);
         }
     }
-    for (size_t index = 0U; index < kv_size(domino_all_fork_road_nav_data_segment_list); index++) {
-        const DominoNavDataSegment* segment = &kv_A(domino_all_fork_road_nav_data_segment_list, index);
-        if (segment->total_count > MAX_FORK_ROAD_COUNT_PER_NETWORK) {
+    for (size_t index = 0U; index < kv_size(g_domino_fork_road_segment_list); index++) {
+        const DominoNavSegment* segment = &kv_A(g_domino_fork_road_segment_list, index);
+        if (segment->total_count > DOMINO_MAX_FORK_ROAD_COUNT_PER_NETWORK) {
             DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "loaded fork road segment exceeds network capacity: segment=%zu count=%" PRIu32 " limit=%u",
-                                   index, segment->total_count, (unsigned)MAX_FORK_ROAD_COUNT_PER_NETWORK);
+                                   index, segment->total_count, (unsigned)DOMINO_MAX_FORK_ROAD_COUNT_PER_NETWORK);
         }
     }
 }
 
 void navStateRefreshIdMapIndices(void) {
-    const size_t fork_count = kv_size(domino_all_fork_road_list);
-    const size_t road_count = kv_size(domino_all_road_list);
+    const size_t fork_count = kv_size(g_domino_fork_road_list);
+    const size_t road_count = kv_size(g_domino_road_list);
 
     /* 可信加载与增删入口维护实体和 ID map；排序只改变实体所在的数组下标。 */
     for (uint32_t index = 0U; index < (uint32_t)fork_count; index++) {
-        DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, index);
-        const khint_t slot = dominoForkRoadIdMap_get(dominoForkRoadIdMap, fork_road->id);
-        kh_val(dominoForkRoadIdMap, slot) = index;
-        fork_road->temp_index = 0U;
+        DominoForkRoad* fork_road = &kv_A(g_domino_fork_road_list, index);
+        const khint_t slot = dominoForkRoadIdMap_get(g_domino_fork_road_id_map, fork_road->id);
+        kh_val(g_domino_fork_road_id_map, slot) = index;
+        fork_road->vertex_index = 0U;
     }
     for (uint32_t index = 0U; index < (uint32_t)road_count; index++) {
-        const DominoRoad* road = &kv_A(domino_all_road_list, index);
-        const khint_t slot = dominoRoadIdMap_get(dominoRoadIdMap, road->id);
-        kh_val(dominoRoadIdMap, slot) = index;
+        const DominoRoad* road = &kv_A(g_domino_road_list, index);
+        const khint_t slot = dominoRoadIdMap_get(g_domino_road_id_map, road->id);
+        kh_val(g_domino_road_id_map, slot) = index;
     }
 }
 
@@ -166,13 +165,13 @@ DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoF
     if (fork_road_id == 0U) {
         return ERR_NOT_FOUND;
     }
-    khint_t slot = dominoForkRoadIdMap_get(dominoForkRoadIdMap, fork_road_id);
-    if (!kh_exist(dominoForkRoadIdMap, slot)) {
+    khint_t slot = dominoForkRoadIdMap_get(g_domino_fork_road_id_map, fork_road_id);
+    if (!kh_exist(g_domino_fork_road_id_map, slot)) {
         return ERR_NOT_FOUND;
     }
-    uint32_t index = kh_val(dominoForkRoadIdMap, slot);
-    assert(index < kv_size(domino_all_fork_road_list) && kv_A(domino_all_fork_road_list, index).id == fork_road_id);
-    *out_fork_road = &kv_A(domino_all_fork_road_list, index);
+    uint32_t index = kh_val(g_domino_fork_road_id_map, slot);
+    assert(index < kv_size(g_domino_fork_road_list) && kv_A(g_domino_fork_road_list, index).id == fork_road_id);
+    *out_fork_road = &kv_A(g_domino_fork_road_list, index);
     return CODE_OK;
 }
 
@@ -181,32 +180,32 @@ DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road
     if (road_id == 0U) {
         return ERR_NOT_FOUND;
     }
-    khint_t slot = dominoRoadIdMap_get(dominoRoadIdMap, road_id);
-    if (!kh_exist(dominoRoadIdMap, slot)) {
+    khint_t slot = dominoRoadIdMap_get(g_domino_road_id_map, road_id);
+    if (!kh_exist(g_domino_road_id_map, slot)) {
         return ERR_NOT_FOUND;
     }
-    uint32_t index = kh_val(dominoRoadIdMap, slot);
-    assert(index < kv_size(domino_all_road_list) && kv_A(domino_all_road_list, index).id == road_id);
-    *out_road = &kv_A(domino_all_road_list, index);
+    uint32_t index = kh_val(g_domino_road_id_map, slot);
+    assert(index < kv_size(g_domino_road_list) && kv_A(g_domino_road_list, index).id == road_id);
+    *out_road = &kv_A(g_domino_road_list, index);
     return CODE_OK;
 }
 
-DominoRoadLine* dominoGetRoadLineByID(domino_road_line_id_t road_line_id) {
+DominoRoadLine* dominoGetRoadLineById(domino_road_line_id_t road_line_id) {
     if (road_line_id == 0U) {
         return nullptr;
     }
-    khint_t slot = dominoRoadLineIdMap_get(dominoRoadLineIdMap, road_line_id);
-    if (!kh_exist(dominoRoadLineIdMap, slot)) {
+    khint_t slot = dominoRoadLineIdMap_get(g_domino_road_line_id_map, road_line_id);
+    if (!kh_exist(g_domino_road_line_id_map, slot)) {
         return nullptr;
     }
-    uint32_t index = kh_val(dominoRoadLineIdMap, slot);
-    assert(index < kv_size(domino_all_road_line_list) && kv_A(domino_all_road_line_list, index).id == road_line_id);
-    return &kv_A(domino_all_road_line_list, index);
+    uint32_t index = kh_val(g_domino_road_line_id_map, slot);
+    assert(index < kv_size(g_domino_road_line_list) && kv_A(g_domino_road_line_list, index).id == road_line_id);
+    return &kv_A(g_domino_road_line_list, index);
 }
 
-int navStateFindSegmentIndex(const DominoNavDataSegmentVec* segment_list, uint8_t region_index, uint8_t network_type) {
+int navStateFindSegmentIndex(const DominoNavSegmentVec* segment_list, uint8_t region_index, uint8_t network_type) {
     for (size_t index = 0U; index < kv_size(*segment_list); index++) {
-        const DominoNavDataSegment* segment = &kv_A(*segment_list, index);
+        const DominoNavSegment* segment = &kv_A(*segment_list, index);
         if (segment->region_index == region_index && segment->road_network_type == network_type) {
             return (int)index;
         }
@@ -214,36 +213,36 @@ int navStateFindSegmentIndex(const DominoNavDataSegmentVec* segment_list, uint8_
     return -1;
 }
 
-const DominoNavDataSegment* navStateFindSegment(const DominoNavDataSegmentVec* segment_list, uint8_t region_index, uint8_t network_type) {
+const DominoNavSegment* navStateFindSegment(const DominoNavSegmentVec* segment_list, uint8_t region_index, uint8_t network_type) {
     int segment_index = navStateFindSegmentIndex(segment_list, region_index, network_type);
     return segment_index < 0 ? nullptr : &kv_A(*segment_list, (size_t)segment_index);
 }
 
 void navStateInvalidateAllPathCaches(void) {
     for (size_t slot_index = 0U; slot_index < DOMINO_NAV_PATH_CACHE_SLOT_COUNT; slot_index++) {
-        DominoNavPathCache* cache = g_nav_path_cache_slots[slot_index];
+        DominoNavPathCache* cache = g_path_cache_slot_list[slot_index];
         if (cache) {
-            navStateResetPathCache(cache);
+            resetPathCache(cache);
         }
     }
 }
 
 void navStateInvalidatePathCache(uint8_t region_index, uint8_t road_network_type) {
-    DominoNavPathCache* cache = g_nav_path_cache_slots[navStatePathCacheSlotIndex(region_index, road_network_type)];
+    DominoNavPathCache* cache = g_path_cache_slot_list[pathCacheSlotIndex(region_index, road_network_type)];
     if (cache) {
-        navStateResetPathCache(cache);
+        resetPathCache(cache);
     }
 }
 
 const DominoNavPathCache* navStateGetPathCache(uint8_t region_index, uint8_t road_network_type) {
-    const DominoNavPathCache* cache = g_nav_path_cache_slots[navStatePathCacheSlotIndex(region_index, road_network_type)];
+    const DominoNavPathCache* cache = g_path_cache_slot_list[pathCacheSlotIndex(region_index, road_network_type)];
     /* 缓存只通过 reset/commit 改写，非零 vertex_count 同时保证两个数组完整。 */
     return cache && cache->vertex_count != 0U ? cache : nullptr;
 }
 
-void navStateCommitPathCache(DominoNavPathCache* cache, PathInfo* path_matrix, DominoForkRoad** fork_road_list,
+void navStateCommitPathCache(DominoNavPathCache* cache, DominoNavPathCell* path_matrix, DominoForkRoad** fork_road_list,
                              domino_nav_vertex_index_t vertex_count) {
-    navStateResetPathCache(cache);
+    resetPathCache(cache);
     cache->path_matrix = path_matrix;
     cache->fork_road_list = fork_road_list;
     cache->vertex_count = vertex_count;

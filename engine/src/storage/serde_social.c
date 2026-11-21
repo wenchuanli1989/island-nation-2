@@ -48,15 +48,15 @@ static yyjson_mut_val* serializeOrg(yyjson_mut_doc* doc, const DominoOrg* org) {
         !yyjson_mut_obj_add_uint(doc, obj, "founder_id", org->founder_id) ||
         !yyjson_mut_obj_add_val(doc, obj, "key_member_id_list",
                                 serdeWriteU32Array(doc, org->key_member_id_list, DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG)) ||
-        !yyjson_mut_obj_add_val(doc, obj, "micro_member_id_list",
-                                serdeWriteU32Array(doc, org->micro_member_id_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_ORG)) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "address_id", org->address_id) ||
+        !yyjson_mut_obj_add_val(doc, obj, "inline_member_id_list",
+                                serdeWriteU32Array(doc, org->inline_member_id_list, DOMINO_MAX_INLINE_MEMBER_COUNT_PER_ORG)) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "fork_road_id", org->fork_road_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "outer_host_country_id", org->outer_host_country_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "total_member_count", org->total_member_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "status", org->status) || !yyjson_mut_obj_add_uint(doc, obj, "type", org->type) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "space_id", org->space_id) || !yyjson_mut_obj_add_uint(doc, obj, "space_area_id", org->space_area_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "member_count", org->member_count) || !yyjson_mut_obj_add_uint(doc, obj, "status", org->status) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "type", org->type) || !yyjson_mut_obj_add_uint(doc, obj, "space_id", org->space_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "space_area_id", org->space_area_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "region_index", org->region_index) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "own_asset_list_count", org->own_asset_list_count)) {
+        !yyjson_mut_obj_add_uint(doc, obj, "own_asset_count", org->own_asset_count)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize organization JSON: id=%u, data_id=%u", org->id, org->data_id);
     }
 
@@ -83,37 +83,37 @@ static void deserializeOrg(yyjson_val* obj, DominoOrg* out_org) {
     out_org->wealth = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "wealth"));
     out_org->founder_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "founder_id"));
     serdeReadU32Array(yyjson_obj_get(obj, "key_member_id_list"), out_org->key_member_id_list, DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG);
-    serdeReadU32Array(yyjson_obj_get(obj, "micro_member_id_list"), out_org->micro_member_id_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_ORG);
-    out_org->address_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "address_id"));
+    serdeReadU32Array(yyjson_obj_get(obj, "inline_member_id_list"), out_org->inline_member_id_list, DOMINO_MAX_INLINE_MEMBER_COUNT_PER_ORG);
+    out_org->fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "fork_road_id"));
     out_org->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
-    out_org->total_member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "total_member_count"));
+    out_org->member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "member_count"));
     out_org->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_org->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_org->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_org->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
     out_org->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
-    out_org->own_asset_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "own_asset_list_count"));
+    out_org->own_asset_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "own_asset_count"));
 
     yyjson_val* data_val = yyjson_obj_get(obj, "data");
     if (data_val && !yyjson_is_null(data_val)) {
         /* 按需插入 data 与索引，失败直接终止；指针在模块加载完成后绑定。 */
         DominoOrgData loaded_org_data;
         deserializeOrgData(data_val, &loaded_org_data);
-        size_t old_data_count = kv_size(domino_all_org_data_list);
+        size_t old_data_count = kv_size(g_domino_org_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
-        khint_t data_id_map_slot = dominoOrgDataIdMap_put(dominoOrgDataIdMap, loaded_org_data.data_id, &absent);
+        khint_t data_id_map_slot = dominoOrgDataIdMap_put(g_domino_org_data_id_map, loaded_org_data.data_id, &absent);
         if (absent < 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate organization data index: id=%u, data_id=%u", out_org->id,
                                    loaded_org_data.data_id);
         }
-        kv_push(DominoOrgData, domino_all_org_data_list, loaded_org_data);
-        kh_val(dominoOrgDataIdMap, data_id_map_slot) = data_arr_index;
+        kv_push(DominoOrgData, g_domino_org_data_list, loaded_org_data);
+        kh_val(g_domino_org_data_id_map, data_id_map_slot) = data_arr_index;
     }
 }
 
-STORAGE_DEFINE_SHARDED_WITH_DATA(Org, "org", DominoOrg, domino_all_org_list, dominoOrgIdMap, dominoOrgIdMap_put, serializeOrg, deserializeOrg,
-                                 DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoOrgData, dominoGetOrgDataByID)
+STORAGE_DEFINE_SHARDED_WITH_DATA(Org, "org", DominoOrg, g_domino_org_list, g_domino_org_id_map, dominoOrgIdMap_put, serializeOrg, deserializeOrg,
+                                 DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoOrgData, dominoGetOrgDataById)
 
 static yyjson_mut_val* serializeBuildingData(yyjson_mut_doc* doc, const DominoBuildingData* building_data) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
@@ -148,21 +148,21 @@ static yyjson_mut_val* serializeBuilding(yyjson_mut_doc* doc, const DominoBuildi
         !yyjson_mut_obj_add_uint(doc, obj, "owner_org_id", building->owner_org_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "island_id", building->island_id) || !yyjson_mut_obj_add_uint(doc, obj, "city_id", building->city_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "country_id", building->country_id) || !yyjson_mut_obj_add_sint(doc, obj, "wealth", building->wealth) ||
-        !yyjson_mut_obj_add_val(doc, obj, "micro_member_id_list",
-                                serdeWriteU32Array(doc, building->micro_member_id_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING)) ||
+        !yyjson_mut_obj_add_val(doc, obj, "inline_member_id_list",
+                                serdeWriteU32Array(doc, building->inline_member_id_list, DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING)) ||
         !yyjson_mut_obj_add_sint(doc, obj, "position_x", building->position_x) ||
         !yyjson_mut_obj_add_sint(doc, obj, "position_y", building->position_y) ||
         !yyjson_mut_obj_add_sint(doc, obj, "position_z", building->position_z) ||
         !yyjson_mut_obj_add_uint(doc, obj, "outer_host_country_id", building->outer_host_country_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "address_id", building->address_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "total_member_count", building->total_member_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "fork_road_id", building->fork_road_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "member_count", building->member_count) ||
         !yyjson_mut_obj_add_uint(doc, obj, "status", building->status) || !yyjson_mut_obj_add_uint(doc, obj, "type", building->type) ||
         !yyjson_mut_obj_add_uint(doc, obj, "region_index", building->region_index) ||
         !yyjson_mut_obj_add_uint(doc, obj, "owner_type", building->owner_type) ||
         !yyjson_mut_obj_add_uint(doc, obj, "space_id", building->space_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "space_area_id", building->space_area_id) ||
-        !yyjson_mut_obj_add_val(doc, obj, "micro_member_type_list",
-                                serdeWriteU8Array(doc, building->micro_member_type_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING))) {
+        !yyjson_mut_obj_add_val(doc, obj, "inline_member_type_list",
+                                serdeWriteU8Array(doc, building->inline_member_type_list, DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING))) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize building JSON: id=%u, data_id=%u", building->id, building->data_id);
     }
 
@@ -186,41 +186,42 @@ static void deserializeBuilding(yyjson_val* obj, DominoBuilding* out_building) {
     out_building->city_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "city_id"));
     out_building->country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "country_id"));
     out_building->wealth = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "wealth"));
-    serdeReadU32Array(yyjson_obj_get(obj, "micro_member_id_list"), out_building->micro_member_id_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING);
+    serdeReadU32Array(yyjson_obj_get(obj, "inline_member_id_list"), out_building->inline_member_id_list, DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING);
     out_building->position_x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
     out_building->position_y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
     out_building->position_z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
     out_building->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
-    out_building->address_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "address_id"));
-    out_building->total_member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "total_member_count"));
+    out_building->fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "fork_road_id"));
+    out_building->member_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "member_count"));
     out_building->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_building->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_building->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_building->owner_type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "owner_type"));
     out_building->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_building->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
-    serdeReadU8Array(yyjson_obj_get(obj, "micro_member_type_list"), out_building->micro_member_type_list, DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING);
+    serdeReadU8Array(yyjson_obj_get(obj, "inline_member_type_list"), out_building->inline_member_type_list,
+                     DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING);
 
     yyjson_val* data_val = yyjson_obj_get(obj, "data");
     if (data_val && !yyjson_is_null(data_val)) {
         DominoBuildingData loaded_building_data;
         deserializeBuildingData(data_val, &loaded_building_data);
-        size_t old_data_count = kv_size(domino_all_building_data_list);
+        size_t old_data_count = kv_size(g_domino_building_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
-        khint_t data_id_map_slot = dominoBuildingDataIdMap_put(dominoBuildingDataIdMap, loaded_building_data.data_id, &absent);
+        khint_t data_id_map_slot = dominoBuildingDataIdMap_put(g_domino_building_data_id_map, loaded_building_data.data_id, &absent);
         if (absent < 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate building data index: id=%u, data_id=%u", out_building->id,
                                    loaded_building_data.data_id);
         }
-        kv_push(DominoBuildingData, domino_all_building_data_list, loaded_building_data);
-        kh_val(dominoBuildingDataIdMap, data_id_map_slot) = data_arr_index;
+        kv_push(DominoBuildingData, g_domino_building_data_list, loaded_building_data);
+        kh_val(g_domino_building_data_id_map, data_id_map_slot) = data_arr_index;
     }
 }
 
-STORAGE_DEFINE_SHARDED_WITH_DATA(Building, "building", DominoBuilding, domino_all_building_list, dominoBuildingIdMap, dominoBuildingIdMap_put,
+STORAGE_DEFINE_SHARDED_WITH_DATA(Building, "building", DominoBuilding, g_domino_building_list, g_domino_building_id_map, dominoBuildingIdMap_put,
                                  serializeBuilding, deserializeBuilding, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoBuildingData,
-                                 dominoGetBuildingDataByID)
+                                 dominoGetBuildingDataById)
 
 static yyjson_mut_val* serializeCityData(yyjson_mut_doc* doc, const DominoCityData* city_data) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
@@ -257,15 +258,15 @@ static yyjson_mut_val* serializeCity(yyjson_mut_doc* doc, const DominoCity* city
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize city JSON: id=%u, data_id=%u", city->id, city->data_id);
     }
     if (!yyjson_mut_obj_add_uint(doc, obj, "id", city->id) || !yyjson_mut_obj_add_uint(doc, obj, "data_id", city->data_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "manager_id", city->manager_id) || !yyjson_mut_obj_add_uint(doc, obj, "country_id", city->country_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "island_id", city->island_id) || !yyjson_mut_obj_add_sint(doc, obj, "wealth", city->wealth) ||
-        !yyjson_mut_obj_add_sint(doc, obj, "position_x", city->position_x) || !yyjson_mut_obj_add_sint(doc, obj, "position_y", city->position_y) ||
-        !yyjson_mut_obj_add_sint(doc, obj, "position_z", city->position_z) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "manager_org_id", city->manager_org_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "country_id", city->country_id) || !yyjson_mut_obj_add_uint(doc, obj, "island_id", city->island_id) ||
+        !yyjson_mut_obj_add_sint(doc, obj, "wealth", city->wealth) || !yyjson_mut_obj_add_sint(doc, obj, "position_x", city->position_x) ||
+        !yyjson_mut_obj_add_sint(doc, obj, "position_y", city->position_y) || !yyjson_mut_obj_add_sint(doc, obj, "position_z", city->position_z) ||
         !yyjson_mut_obj_add_uint(doc, obj, "outer_host_country_id", city->outer_host_country_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "human_count", city->human_count) || !yyjson_mut_obj_add_uint(doc, obj, "org_count", city->org_count) ||
         !yyjson_mut_obj_add_uint(doc, obj, "building_count", city->building_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "movable_human_count", city->movable_human_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "movable_asset_count", city->movable_asset_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "moving_human_count", city->moving_human_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "moving_asset_count", city->moving_asset_count) ||
         !yyjson_mut_obj_add_uint(doc, obj, "status", city->status) || !yyjson_mut_obj_add_uint(doc, obj, "type", city->type) ||
         !yyjson_mut_obj_add_uint(doc, obj, "region_index", city->region_index) || !yyjson_mut_obj_add_uint(doc, obj, "space_id", city->space_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "space_area_id", city->space_area_id)) {
@@ -287,7 +288,7 @@ static yyjson_mut_val* serializeCity(yyjson_mut_doc* doc, const DominoCity* city
 static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
     out_city->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
     out_city->data_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "data_id"));
-    out_city->manager_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "manager_id"));
+    out_city->manager_org_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "manager_org_id"));
     out_city->country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "country_id"));
     out_city->island_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "island_id"));
     out_city->wealth = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "wealth"));
@@ -298,8 +299,8 @@ static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
     out_city->human_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "human_count"));
     out_city->org_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "org_count"));
     out_city->building_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "building_count"));
-    out_city->movable_human_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "movable_human_count"));
-    out_city->movable_asset_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "movable_asset_count"));
+    out_city->moving_human_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "moving_human_count"));
+    out_city->moving_asset_count = (uint16_t)yyjson_get_uint(yyjson_obj_get(obj, "moving_asset_count"));
     out_city->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_city->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
     out_city->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
@@ -310,20 +311,20 @@ static void deserializeCity(yyjson_val* obj, DominoCity* out_city) {
     if (data_val && !yyjson_is_null(data_val)) {
         DominoCityData loaded_city_data;
         deserializeCityData(data_val, &loaded_city_data);
-        size_t old_data_count = kv_size(domino_all_city_data_list);
+        size_t old_data_count = kv_size(g_domino_city_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
-        khint_t data_id_map_slot = dominoCityDataIdMap_put(dominoCityDataIdMap, loaded_city_data.data_id, &absent);
+        khint_t data_id_map_slot = dominoCityDataIdMap_put(g_domino_city_data_id_map, loaded_city_data.data_id, &absent);
         if (absent < 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate city data index: id=%u, data_id=%u", out_city->id, loaded_city_data.data_id);
         }
-        kv_push(DominoCityData, domino_all_city_data_list, loaded_city_data);
-        kh_val(dominoCityDataIdMap, data_id_map_slot) = data_arr_index;
+        kv_push(DominoCityData, g_domino_city_data_list, loaded_city_data);
+        kh_val(g_domino_city_data_id_map, data_id_map_slot) = data_arr_index;
     }
 }
 
-STORAGE_DEFINE_SHARDED_WITH_DATA(City, "city", DominoCity, domino_all_city_list, dominoCityIdMap, dominoCityIdMap_put, serializeCity, deserializeCity,
-                                 DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoCityData, dominoGetCityDataByID)
+STORAGE_DEFINE_SHARDED_WITH_DATA(City, "city", DominoCity, g_domino_city_list, g_domino_city_id_map, dominoCityIdMap_put, serializeCity,
+                                 deserializeCity, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoCityData, dominoGetCityDataById)
 
 static yyjson_mut_val* serializeCountryData(yyjson_mut_doc* doc, const DominoCountryData* country_data) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
@@ -406,22 +407,22 @@ static void deserializeCountry(yyjson_val* obj, DominoCountry* out_country) {
     if (data_val && !yyjson_is_null(data_val)) {
         DominoCountryData loaded_country_data;
         deserializeCountryData(data_val, &loaded_country_data);
-        size_t old_data_count = kv_size(domino_all_country_data_list);
+        size_t old_data_count = kv_size(g_domino_country_data_list);
         uint32_t data_arr_index = (uint32_t)old_data_count;
         int absent;
-        khint_t data_id_map_slot = dominoCountryDataIdMap_put(dominoCountryDataIdMap, loaded_country_data.data_id, &absent);
+        khint_t data_id_map_slot = dominoCountryDataIdMap_put(g_domino_country_data_id_map, loaded_country_data.data_id, &absent);
         if (absent < 0) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate country data index: id=%u, data_id=%u", out_country->id,
                                    loaded_country_data.data_id);
         }
-        kv_push(DominoCountryData, domino_all_country_data_list, loaded_country_data);
-        kh_val(dominoCountryDataIdMap, data_id_map_slot) = data_arr_index;
+        kv_push(DominoCountryData, g_domino_country_data_list, loaded_country_data);
+        kh_val(g_domino_country_data_id_map, data_id_map_slot) = data_arr_index;
     }
 }
 
-STORAGE_DEFINE_SHARDED_WITH_DATA(Country, "country", DominoCountry, domino_all_country_list, dominoCountryIdMap, dominoCountryIdMap_put,
+STORAGE_DEFINE_SHARDED_WITH_DATA(Country, "country", DominoCountry, g_domino_country_list, g_domino_country_id_map, dominoCountryIdMap_put,
                                  serializeCountry, deserializeCountry, DOMINO_STORAGE_SHARD_ENTITIES_WITH_DATA, DominoCountryData,
-                                 dominoGetCountryDataByID)
+                                 dominoGetCountryDataById)
 
 static yyjson_mut_val* serializeAsset(yyjson_mut_doc* doc, const DominoAsset* asset) {
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
@@ -449,24 +450,24 @@ static yyjson_mut_val* serializeAsset(yyjson_mut_doc* doc, const DominoAsset* as
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize asset JSON: asset_id=%u", asset->id);
     }
     if (movable_object_id == 0) {
-        if (!yyjson_mut_obj_add_sint(doc, obj, "position_x", asset->position_info.x) ||
-            !yyjson_mut_obj_add_sint(doc, obj, "position_y", asset->position_info.y) ||
-            !yyjson_mut_obj_add_sint(doc, obj, "position_z", asset->position_info.z)) {
+        if (!yyjson_mut_obj_add_sint(doc, obj, "position_x", asset->position.x) ||
+            !yyjson_mut_obj_add_sint(doc, obj, "position_y", asset->position.y) ||
+            !yyjson_mut_obj_add_sint(doc, obj, "position_z", asset->position.z)) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize asset JSON: asset_id=%u", asset->id);
         }
     }
 
-    if (!yyjson_mut_obj_add_uint(doc, obj, "production_time", asset->production_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "expiration_time", asset->expiration_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "sales_time", asset->sales_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "dealer_time", asset->dealer_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "trade_time", asset->trade_time)) {
+    if (!yyjson_mut_obj_add_uint(doc, obj, "production_at_ms", asset->production_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "expiration_at_ms", asset->expiration_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "sales_at_ms", asset->sales_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "dealer_at_ms", asset->dealer_at_ms) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "trade_at_ms", asset->trade_at_ms)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize asset JSON: asset_id=%u", asset->id);
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "country_id", asset->country_id) || !yyjson_mut_obj_add_uint(doc, obj, "island_id", asset->island_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "city_id", asset->city_id) || !yyjson_mut_obj_add_uint(doc, obj, "building_id", asset->building_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "address_id", asset->address_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "fork_road_id", asset->fork_road_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "outer_host_country_id", asset->outer_host_country_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize asset JSON: asset_id=%u", asset->id);
     }
@@ -503,24 +504,24 @@ static void deserializeAsset(yyjson_val* obj, DominoAsset* out_asset) {
     domino_movable_object_id_t movable_object_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "movable_object_id"));
     out_asset->movable_object_id = movable_object_id;
     if (movable_object_id == 0) {
-        out_asset->position_info.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
-        out_asset->position_info.y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
-        out_asset->position_info.z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
+        out_asset->position.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
+        out_asset->position.y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
+        out_asset->position.z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
     } else {
         out_asset->movable_object = nullptr;
     }
 
-    out_asset->production_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "production_time"));
-    out_asset->expiration_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "expiration_time"));
-    out_asset->sales_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "sales_time"));
-    out_asset->dealer_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "dealer_time"));
-    out_asset->trade_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "trade_time"));
+    out_asset->production_at_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "production_at_ms"));
+    out_asset->expiration_at_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "expiration_at_ms"));
+    out_asset->sales_at_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "sales_at_ms"));
+    out_asset->dealer_at_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "dealer_at_ms"));
+    out_asset->trade_at_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "trade_at_ms"));
 
     out_asset->country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "country_id"));
     out_asset->island_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "island_id"));
     out_asset->city_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "city_id"));
     out_asset->building_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "building_id"));
-    out_asset->address_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "address_id"));
+    out_asset->fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "fork_road_id"));
     out_asset->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
 
     out_asset->expiration_months = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "expiration_months"));
@@ -539,14 +540,14 @@ static void deserializeAsset(yyjson_val* obj, DominoAsset* out_asset) {
     out_asset->quality = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "quality"));
 }
 
-STORAGE_DEFINE_SHARDED_SIMPLE(Asset, "asset", DominoAsset, domino_all_asset_list, dominoAssetIdMap, dominoAssetIdMap_put, serializeAsset,
+STORAGE_DEFINE_SHARDED_SIMPLE(Asset, "asset", DominoAsset, g_domino_asset_list, g_domino_asset_id_map, dominoAssetIdMap_put, serializeAsset,
                               deserializeAsset, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)
 
 void serdeBindAssetReferences(void) {
-    for (size_t asset_index = 0; asset_index < kv_size(domino_all_asset_list); asset_index++) {
-        DominoAsset* asset = &kv_A(domino_all_asset_list, asset_index);
+    for (size_t asset_index = 0; asset_index < kv_size(g_domino_asset_list); asset_index++) {
+        DominoAsset* asset = &kv_A(g_domino_asset_list, asset_index);
         if (asset->movable_object_id != 0) {
-            asset->movable_object = dominoGetMovableObjectByID(asset->movable_object_id);
+            asset->movable_object = dominoGetMovableObjectById(asset->movable_object_id);
         }
     }
 }

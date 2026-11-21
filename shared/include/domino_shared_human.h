@@ -17,15 +17,15 @@
 #define DOMINO_MAX_HUMAN_AGE 24
 #define DOMINO_MAX_CHILD_COUNT_PER_FAMILY 5
 
-#define DOMINO_HUMAN_ID_CARD_LENGTH 8  // 身份证长度，前四位祖先代号，后四位个人代号
+#define DOMINO_HUMAN_ID_CARD_LENGTH 8  ///< 身份证长度：前四位为祖先代号，后四位为个人代号。
 
 #define DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT 64
-#define DOMINO_MAX_RECENT_VISITED_ADDRESS_COUNT 64
+#define DOMINO_MAX_RECENT_FORK_ROAD_COUNT 64
 
 #define DOMINO_MAX_ASSET_COUNT_PER_HUMAN 128
-#define DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN 16  // 当前持有/携带资产数量上限，出入境，一个资产可以是容器包含其他资产
+#define DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN 16  ///< 随身携带的资产上限；一个资产可以是包含其他资产的容器。
 
-#define DOMINO_MAX_ASSET_COUNT_PER_TRADE 16  // 一次贸易可以包含的资产数量上限，数量合并之后按照商品类型分类统计
+#define DOMINO_MAX_ASSET_COUNT_PER_TRADE 16  ///< 一次交易的资产种类上限，同类商品合并计数。
 
 #define DOMINO_MAX_FRIEND_COUNT_PER_HUMAN 5
 #define DOMINO_MAX_COLLEAGUE_COUNT_PER_HUMAN 5
@@ -68,7 +68,7 @@ typedef struct DominoHumanData {
     uint8_t recreation;
     uint8_t social;
     uint8_t health;
-    uint8_t body_hp_value;
+    uint8_t body_hp;
     uint8_t ai_flags;          ///< DOMINO_HUMAN_AI_FLAG_*。
     uint8_t stimulus_kind;     ///< 待处理外部信息类别，DOMINO_HUMAN_STIMULUS_KIND；NONE 表示没有或已被回应承接。
     uint8_t motivation_count;  ///< 持有动机数，0..8。
@@ -84,8 +84,9 @@ typedef struct DominoHumanData {
     domino_city_id_t current_city_id;
     domino_building_id_t current_building_id;
     domino_island_id_t current_island_id;
-    domino_fork_road_id_t current_address;  // 当前最近的地点，寻路系统使用
-    domino_fork_road_id_t sleep_address;    // 休息地址，可以是家庭地址，旅馆酒店地址，公司地址
+    /* 以下 *_fork_road_id 地点都是导航路口 ID，不是建筑 ID。 */
+    domino_fork_road_id_t current_fork_road_id;  ///< 当前最近的路口，寻路起点。
+    domino_fork_road_id_t sleep_fork_road_id;    ///< 休息地点，可以是家、旅馆或公司附近的路口。
     domino_wealth_value_t wealth;
 
     /* 其他身体状态、情绪与外观。 */
@@ -104,26 +105,26 @@ typedef struct DominoHumanData {
 
     /* 组织、工作地址与职业属性。 */
     domino_org_id_t company_org_id;
-    domino_fork_road_id_t company_address;
+    domino_fork_road_id_t company_fork_road_id;
     domino_org_id_t org_id_list[DOMINO_MAX_ORG_COUNT_PER_HUMAN];
     domino_human_id_t org_boss_id_list[DOMINO_MAX_ORG_BOSS_COUNT_PER_HUMAN];
     uint8_t job;
     uint8_t influence;
     uint8_t fame;
-    uint8_t org_info;  // 是否是雇员，是否是公司老板，是否是反抗组织头目，是否是帮派头目，是否是宗教组织头目，是否是临时性组织头目
+    uint8_t org_role_flags;  ///< 组织身份位：雇员、公司老板及各类组织头目。
 
     /* 身份与基本人口属性。 */
     domino_name_id_t name_id;
     domino_description_id_t description_id;
     domino_country_id_t country_id;
-    char id_card[DOMINO_HUMAN_ID_CARD_LENGTH + 1];  // 身份证，0开头代表外来者
+    char id_card[DOMINO_HUMAN_ID_CARD_LENGTH + 1];  ///< 身份证号，以 0 开头表示外来者。
     uint8_t generation;                             ///< 人物所属家族的代数。
     uint8_t gender;
     uint8_t age;
 
     /* 家庭、社交关系及最近接触记录。 */
     domino_org_id_t family_org_id;
-    domino_fork_road_id_t family_address;
+    domino_fork_road_id_t family_fork_road_id;
     domino_human_id_t partner_id;
     domino_human_id_t father_id;
     domino_human_id_t mother_id;
@@ -131,19 +132,19 @@ typedef struct DominoHumanData {
     domino_human_id_t sibling_id_list[DOMINO_MAX_CHILD_COUNT_PER_FAMILY - 1];
     domino_human_id_t friend_id_list[DOMINO_MAX_FRIEND_COUNT_PER_HUMAN];
     domino_human_id_t colleague_id_list[DOMINO_MAX_COLLEAGUE_COUNT_PER_HUMAN];
-    domino_human_id_t recent_contact_id_list[DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT];  // 最近接触人物列表，环形数组
-    uint8_t family_info;  // 是否结婚，是否有子女，是否有兄弟姐妹，是否有父母，是否是户主，是否是家庭子女
+    domino_human_id_t recent_contact_id_list[DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT];  ///< 最近接触的人物，环形数组。
+    uint8_t family_flags;  ///< 家庭状况位：已婚、有子女、有兄弟姐妹、有父母、户主、家庭子女。
     uint8_t family_love;
     uint8_t couple_love;
     uint8_t friendship;
-    uint8_t recent_contact_list_count;
-    uint8_t recent_contact_id_list_head_index;
+    uint8_t recent_contact_count;
+    uint8_t recent_contact_head_index;
 
     /* 资产列表与当前装备。 */
     domino_asset_id_t own_asset_id_list[DOMINO_MAX_ASSET_COUNT_PER_HUMAN];
-    domino_asset_id_t hold_asset_id_list[DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN];  // 当前装备资产列表
-    uint8_t own_asset_list_count;
-    uint8_t hold_asset_list_count;
+    domino_asset_id_t hold_asset_id_list[DOMINO_MAX_ASSET_COUNT_HOLD_PER_HUMAN];  ///< 随身携带的资产。
+    uint8_t own_asset_count;
+    uint8_t hold_asset_count;
     uint8_t hat;
     uint8_t hair;
     uint8_t glasses;
@@ -170,7 +171,7 @@ typedef struct DominoHumanData {
     uint8_t value_view;
 
     /* 历史位置与最近访问记录。 */
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
     domino_country_id_t last_active_country_id;
     domino_city_id_t last_active_city_id;
     domino_building_id_t last_active_building_id;
@@ -180,18 +181,18 @@ typedef struct DominoHumanData {
     domino_country_id_t death_country_id;
     domino_city_id_t death_city_id;
     domino_building_id_t death_building_id;
-    domino_fork_road_id_t recent_visited_address_id_list[DOMINO_MAX_RECENT_VISITED_ADDRESS_COUNT];  // 最近去过的地址列表，环形数组
+    domino_fork_road_id_t recent_fork_road_id_list[DOMINO_MAX_RECENT_FORK_ROAD_COUNT];  ///< 最近去过的路口，环形数组。
     uint8_t last_active_region_index;
     domino_space_id_t last_active_space_id;
-    domino_space_area_id_t last_active_area_id;
+    domino_space_area_id_t last_active_space_area_id;
     uint8_t birth_region_index;
     domino_space_id_t birth_space_id;
-    domino_space_area_id_t birth_area_id;
+    domino_space_area_id_t birth_space_area_id;
     uint8_t death_region_index;
     domino_space_id_t death_space_id;
-    domino_space_area_id_t death_area_id;
-    uint8_t recent_visited_address_list_count;
-    uint8_t recent_visited_address_id_list_head_index;
+    domino_space_area_id_t death_space_area_id;
+    uint8_t recent_fork_road_count;
+    uint8_t recent_fork_road_head_index;
 
     uint8_t other_info[2342];  ///< 预留补齐 4096 字节，不持久化。
 } DominoHumanData;
@@ -211,7 +212,7 @@ typedef struct DominoHuman {
             int32_t x;
             int32_t y;
             int32_t z;
-        } position_info;
+        } position;
     };
 
     domino_human_id_t human_id;                    ///< 核心、Data 和索引统一使用的人物身份，必须非零。

@@ -2,7 +2,7 @@
 
 #include "sleep.h"
 
-/** @brief 通用计时行为：ACTIVE 时按有效时长累计进度，param 为精力消耗周期（0 为不消耗），有效进度每跨过一个整周期消耗 1 点，达到目标即成功。 */
+/* 通用计时行为：ACTIVE 时按有效时长累计进度，达到目标即成功；param 为精力消耗周期（0 不消耗），每跨过一个整周期消耗 1 点。 */
 static bool validateTimedStep(const DominoBehaviorPlanItem* item_ptr) {
     return item_ptr->target_effective_ms > 0U;
 }
@@ -24,7 +24,7 @@ static void calcTimed(const DominoBehaviorCalcInput* input_ptr, DominoBehaviorCa
     if (input_ptr->param != 0U) {
         const uint32_t cost_count = dominoBehaviorCountPeriods(input_ptr->progress_ms, output_ptr->progress_ms, input_ptr->param);
         output_ptr->energy_delta = -(int32_t)(cost_count > 100U ? 100U : cost_count);
-        const domino_runtime_ms_t cost_ms = dominoBehaviorCalcPeriodGapMs(output_ptr->progress_ms, input_ptr->param);
+        const domino_runtime_ms_t cost_ms = dominoBehaviorMsUntilPeriod(output_ptr->progress_ms, input_ptr->param);
         if (cost_ms < next_ms) {
             next_ms = cost_ms;
         }
@@ -45,8 +45,8 @@ static const DominoBehaviorRules g_timed_behavior_rules = {
     .judge = judgeTimed,
 };
 
-static const DominoBehaviorRules* const g_behavior_rules[DOMINO_BEHAVIOR_TYPE_COUNT] = {
-    [DOMINO_BEHAVIOR_TYPE_SLEEP] = &domino_sleep_behavior_rules,
+static const DominoBehaviorRules* const g_behavior_rules_by_type[DOMINO_BEHAVIOR_TYPE_COUNT] = {
+    [DOMINO_BEHAVIOR_TYPE_SLEEP] = &g_domino_sleep_behavior_rules,
     [DOMINO_BEHAVIOR_TYPE_WORK] = &g_timed_behavior_rules,
     [DOMINO_BEHAVIOR_TYPE_PHONE_CALL] = &g_timed_behavior_rules,
     [DOMINO_BEHAVIOR_TYPE_MESSAGE] = &g_timed_behavior_rules,
@@ -56,7 +56,7 @@ const DominoBehaviorRules* dominoHumanGetBehaviorRules(uint8_t type) {
     if (type == DOMINO_BEHAVIOR_TYPE_NONE || type >= DOMINO_BEHAVIOR_TYPE_COUNT) {
         return nullptr;
     }
-    return g_behavior_rules[type];
+    return g_behavior_rules_by_type[type];
 }
 
 DominoBehaviorCalcOutput dominoHumanCalcBehavior(const DominoBehavior* behavior_ptr, const DominoHumanConditionView* view_ptr,

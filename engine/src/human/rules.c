@@ -42,7 +42,7 @@ void dominoHumanAiConfigInit(void) {
 #endif
     for (uint32_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
         const DominoHumanPlannerConfig* planner_ptr = &config.planner_list[kind];
-        /* K + 1 必须可表示且受每批临时存储上限约束；巨大配额不能绕过每批工作有限的约束。 */
+        // high_quota 受每批临时存储上限约束，保证每批工作有限。
         if (planner_ptr->high_quota == 0U || planner_ptr->high_quota > DOMINO_HUMAN_PLANNER_HIGH_QUOTA_MAX || planner_ptr->compute_budget == 0U) {
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "invalid human planner config kind=%u", kind);
         }
@@ -61,7 +61,7 @@ void dominoHumanAiConfigInit(void) {
 }
 
 void dominoHumanAiConfigDestroy(void) {
-    /* playground 覆盖值属于进程级测试设置，不随实例清空。 */
+    // playground 指定的配置是进程级设置，不在这里清除。
     memset(&g_domino_human_ai_config, 0, sizeof(g_domino_human_ai_config));
 }
 

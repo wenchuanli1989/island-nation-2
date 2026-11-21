@@ -1,7 +1,7 @@
 #include "entry.h"
 
 #include "graph.h"
-#include "persistence.h"
+#include "layout.h"
 #include "state.h"
 
 void dominoNavModuleInit(void) {
@@ -17,7 +17,7 @@ void dominoNavModuleInitAfter(void) {
 void dominoNavModuleDestroyBefore(void) {
     if (navStateNeedsCompaction()) {
         navStateInvalidateAllPathCaches();
-        navPersistenceCompact();
+        navLayoutCompact();
         navStateMarkCanonical();
     }
 }

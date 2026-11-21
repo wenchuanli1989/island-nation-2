@@ -7,24 +7,21 @@
 #include "domino_shared_common.h"
 #include "floyd.h"
 #include "klib/kvec.h"
-#include "road_id.h"
 #include "state.h"
-#include "storage_view.h"
 
-/** @brief 调用方已定位分段；规划期间实体数组和分段保持稳定。 */
-static void navPlanSegmentPaths(const DominoNavDataSegment* segment, FloydPathPlanningResult* out_stat);
+static void buildSegmentPathCache(const DominoNavSegment* segment, DominoNavFloydStats* out_stat);
 
-/** @brief 分段非空、顶点数已校验且输出数组已分配；实体属性和填充数量仍须校验。 */
-static void navFillForkRoadListCache(const DominoNavDataSegment* segment, DominoForkRoad** fork_road_list_out) {
+/** @brief 按分段收集组内活跃路口作为顶点（基础段在前、增量尾在后），并回写各路口的 vertex_index；数量不符致命退出。 */
+static void fillSegmentVertices(const DominoNavSegment* segment, DominoForkRoad** fork_road_list_out) {
     const domino_nav_vertex_index_t vertex_count = (domino_nav_vertex_index_t)segment->total_count;
-    const size_t fork_road_count = kv_size(domino_all_fork_road_list);
-    /* 加载与新增入口已限制实体数；64 位加法同时覆盖基础段起点和终点检查。 */
-    const uint64_t init_end_u64 = (uint64_t)segment->init_index + (uint64_t)segment->init_count;
+    const size_t fork_road_count = kv_size(g_domino_fork_road_list);
+    // 64 位加法避免基础段终点溢出。
+    const uint64_t init_end_u64 = (uint64_t)segment->base_index + (uint64_t)segment->base_count;
     if (init_end_u64 > fork_road_count) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "navFillForkRoadListCache init end out of range");
     }
-    if (segment->increment_index > (uint32_t)fork_road_count) {
-        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "navFillForkRoadListCache increment_index out of range");
+    if (segment->tail_index > (uint32_t)fork_road_count) {
+        DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "navFillForkRoadListCache tail_index out of range");
     }
 
     domino_nav_vertex_index_t filled_count = 0U;
@@ -32,8 +29,8 @@ static void navFillForkRoadListCache(const DominoNavDataSegment* segment, Domino
     const uint8_t road_network_type = segment->road_network_type;
     const uint32_t init_end = (uint32_t)init_end_u64;
 
-    for (uint32_t index = segment->init_index; index < init_end; index++) {
-        DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, (size_t)index);
+    for (uint32_t index = segment->base_index; index < init_end; index++) {
+        DominoForkRoad* fork_road = &kv_A(g_domino_fork_road_list, (size_t)index);
         if (fork_road->status != 0U) {
             continue;
         }
@@ -44,12 +41,12 @@ static void navFillForkRoadListCache(const DominoNavDataSegment* segment, Domino
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "fork road segment vertex overflow (capacity=%u)", (uint32_t)vertex_count);
         }
         fork_road_list_out[filled_count] = fork_road;
-        fork_road->temp_index = filled_count;
+        fork_road->vertex_index = filled_count;
         filled_count++;
     }
 
-    for (uint32_t index = segment->increment_index; index < (uint32_t)fork_road_count; index++) {
-        DominoForkRoad* fork_road = &kv_A(domino_all_fork_road_list, (size_t)index);
+    for (uint32_t index = segment->tail_index; index < (uint32_t)fork_road_count; index++) {
+        DominoForkRoad* fork_road = &kv_A(g_domino_fork_road_list, (size_t)index);
         if (fork_road->status != 0U || fork_road->region_index != region_index || fork_road->type != road_network_type) {
             continue;
         }
@@ -57,7 +54,7 @@ static void navFillForkRoadListCache(const DominoNavDataSegment* segment, Domino
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "fork road segment vertex overflow (capacity=%u)", (uint32_t)vertex_count);
         }
         fork_road_list_out[filled_count] = fork_road;
-        fork_road->temp_index = filled_count;
+        fork_road->vertex_index = filled_count;
         filled_count++;
     }
 
@@ -67,9 +64,8 @@ static void navFillForkRoadListCache(const DominoNavDataSegment* segment, Domino
     }
 }
 
-/** @brief 完整路径缓存保证顶点数非零、表内各实体指针有效；返回最近的实体。 */
-static DominoForkRoad* navFindNearestForkRoad(domino_nav_vertex_index_t vertex_count, DominoForkRoad* const* fork_road_list,
-                                              DominoLocationXY location) {
+/** @brief 返回离坐标最近的顶点路口；缓存保证顶点数非零。 */
+static DominoForkRoad* findNearestForkRoad(domino_nav_vertex_index_t vertex_count, DominoForkRoad* const* fork_road_list, DominoLocationXY location) {
     DominoForkRoad* nearest_fork_road = nullptr;
     uint64_t nearest_distance_squared_low = 0U;
     bool nearest_distance_squared_high = false;
@@ -81,7 +77,7 @@ static DominoForkRoad* navFindNearestForkRoad(domino_nav_vertex_index_t vertex_c
         const uint64_t absolute_delta_y = delta_y < 0 ? (uint64_t)-delta_y : (uint64_t)delta_y;
         const uint64_t delta_x_squared = absolute_delta_x * absolute_delta_x;
         const uint64_t delta_y_squared = absolute_delta_y * absolute_delta_y;
-        /* 两个 32 位坐标差的平方和最多需要 65 位，单独保留加法进位。 */
+        // 两个 32 位坐标差的平方和最多 65 位，用 high 保存加法进位。
         const uint64_t distance_squared_low = delta_x_squared + delta_y_squared;
         const bool distance_squared_high = distance_squared_low < delta_x_squared;
         if (!nearest_fork_road || distance_squared_high < nearest_distance_squared_high ||
@@ -94,16 +90,16 @@ static DominoForkRoad* navFindNearestForkRoad(domino_nav_vertex_index_t vertex_c
     return nearest_fork_road;
 }
 
-/** @brief road_line 非空且缓存完整；可写实体上的顶点下标仍须检查。 */
-static DOMINO_CODE navFillRoadLinePath(DominoRoadLine* road_line, domino_nav_vertex_index_t vertex_count, DominoForkRoad* const* fork_road_list,
-                                       PathInfo (*path_matrix)[vertex_count], domino_nav_vertex_index_t start_vertex_index,
-                                       domino_nav_vertex_index_t target_vertex_index) {
+/** @brief 写入起点到终点的中间路口和路径权重；顶点下标来自可写实体，仍须校验。 */
+static DOMINO_CODE fillRoadLinePath(DominoRoadLine* road_line, domino_nav_vertex_index_t vertex_count, DominoForkRoad* const* fork_road_list,
+                                    DominoNavPathCell (*path_matrix)[vertex_count], domino_nav_vertex_index_t start_vertex_index,
+                                    domino_nav_vertex_index_t target_vertex_index) {
     if (start_vertex_index >= vertex_count || target_vertex_index >= vertex_count) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "cached fork vertex index is invalid: start=%u target=%u vertex_count=%u",
                                (unsigned)start_vertex_index, (unsigned)target_vertex_index, (unsigned)vertex_count);
     }
 
-    for (uint32_t index = 0U; index < MAX_FORK_ROAD_COUNT_PER_ROAD_LINE; index++) {
+    for (uint32_t index = 0U; index < DOMINO_MAX_FORK_ROAD_COUNT_PER_ROAD_LINE; index++) {
         road_line->fork_road_id_list[index] = 0U;
     }
     road_line->fork_road_count = 0U;
@@ -113,40 +109,40 @@ static DOMINO_CODE navFillRoadLinePath(DominoRoadLine* road_line, domino_nav_ver
         return CODE_OK;
     }
 
-    PathInfo shortest_path_info[MAX_FORK_ROAD_COUNT_PER_ROAD_LINE];
-    int shortest_path_info_count = 0;
-    DOMINO_CODE result = findShortestPath(shortest_path_info, MAX_FORK_ROAD_COUNT_PER_ROAD_LINE, &shortest_path_info_count, vertex_count, path_matrix,
-                                          start_vertex_index, target_vertex_index);
+    DominoNavPathCell step_list[DOMINO_MAX_FORK_ROAD_COUNT_PER_ROAD_LINE];
+    int step_count = 0;
+    DOMINO_CODE result = navFloydTracePath(step_list, DOMINO_MAX_FORK_ROAD_COUNT_PER_ROAD_LINE, &step_count, vertex_count, path_matrix,
+                                           start_vertex_index, target_vertex_index);
     if (result != CODE_OK) {
         return result;
     }
 
     road_line->remaining_distance = path_matrix[start_vertex_index][target_vertex_index].min_weight;
 
-    /* 回溯结果按终点到起点排列，只翻转中间节点，不包含起终点。 */
-    for (int index = 0; index < shortest_path_info_count; index++) {
-        domino_nav_vertex_index_t previous_vertex_index = shortest_path_info[shortest_path_info_count - 1 - index].pre_vertex_index;
+    // 回溯结果按终点到起点排列，翻转为行进顺序。
+    for (int index = 0; index < step_count; index++) {
+        domino_nav_vertex_index_t previous_vertex_index = step_list[step_count - 1 - index].pre_vertex_index;
         road_line->fork_road_id_list[index] = fork_road_list[previous_vertex_index]->id;
     }
-    road_line->fork_road_count = (uint16_t)shortest_path_info_count;
+    road_line->fork_road_count = (uint16_t)step_count;
     return CODE_OK;
 }
 
-DOMINO_CODE dominoNavigation(DominoRoadLine* road_line) {
+DOMINO_CODE dominoNavRouteRoadLine(DominoRoadLine* road_line) {
     if (!road_line) {
         return ERR_NULL_POINTER;
     }
     const uint8_t region_index = road_line->region_index;
     const uint8_t road_network_type = road_line->type;
-    const DominoNavDataSegment* segment = navStateFindSegment(&domino_all_fork_road_nav_data_segment_list, region_index, road_network_type);
+    const DominoNavSegment* segment = navStateFindSegment(&g_domino_fork_road_segment_list, region_index, road_network_type);
     if (!segment || segment->total_count == 0U) {
         return ERR_NOT_FOUND;
     }
 
     const DominoNavPathCache* cache = navStateGetPathCache(region_index, road_network_type);
     if (!cache) {
-        navPlanSegmentPaths(segment, nullptr);
-        /* 非空分段规划成功时已提交完整缓存，调用期间分段与缓存不会并发变化。 */
+        buildSegmentPathCache(segment, nullptr);
+        // 非空分段构建后缓存必然有效。
         cache = navStateGetPathCache(region_index, road_network_type);
     }
 
@@ -167,14 +163,14 @@ DOMINO_CODE dominoNavigation(DominoRoadLine* road_line) {
             return ERR_INVALID_PARAM;
         }
     } else if (!dominoLocationXYIsNull(road_line->current_location)) {
-        start_fork_road = navFindNearestForkRoad(vertex_count, fork_road_list, road_line->current_location);
+        start_fork_road = findNearestForkRoad(vertex_count, fork_road_list, road_line->current_location);
         road_line->current_fork_road_id = start_fork_road->id;
     } else {
         if (dominoLocationXYIsNull(road_line->start_location) || dominoLocationXYIsNull(road_line->target_location)) {
             return ERR_INVALID_PARAM;
         }
-        start_fork_road = navFindNearestForkRoad(vertex_count, fork_road_list, road_line->start_location);
-        target_fork_road = navFindNearestForkRoad(vertex_count, fork_road_list, road_line->target_location);
+        start_fork_road = findNearestForkRoad(vertex_count, fork_road_list, road_line->start_location);
+        target_fork_road = findNearestForkRoad(vertex_count, fork_road_list, road_line->target_location);
 
         road_line->target_fork_road_id = target_fork_road->id;
         road_line->start_fork_road_id = start_fork_road->id;
@@ -189,7 +185,7 @@ DOMINO_CODE dominoNavigation(DominoRoadLine* road_line) {
         (void)navStateFindForkRoadById(road_line->target_fork_road_id, &target_fork_road);
     }
     if (!target_fork_road && !dominoLocationXYIsNull(road_line->target_location)) {
-        target_fork_road = navFindNearestForkRoad(vertex_count, fork_road_list, road_line->target_location);
+        target_fork_road = findNearestForkRoad(vertex_count, fork_road_list, road_line->target_location);
         road_line->target_fork_road_id = target_fork_road->id;
     }
     if (!target_fork_road) {
@@ -202,24 +198,26 @@ DOMINO_CODE dominoNavigation(DominoRoadLine* road_line) {
         return ERR_INVALID_PARAM;
     }
 
-    PathInfo(*path_matrix)[vertex_count] = (PathInfo(*)[vertex_count])cache->path_matrix;
-    return navFillRoadLinePath(road_line, vertex_count, fork_road_list, path_matrix, start_fork_road->temp_index, target_fork_road->temp_index);
+    DominoNavPathCell(*path_matrix)[vertex_count] = (DominoNavPathCell(*)[vertex_count])cache->path_matrix;
+    return fillRoadLinePath(road_line, vertex_count, fork_road_list, path_matrix, start_fork_road->vertex_index, target_fork_road->vertex_index);
 }
 
-static void navPlanSegmentPaths(const DominoNavDataSegment* segment, FloydPathPlanningResult* out_stat) {
+/** @brief 收集顶点、按活跃可通行道路建立出边并运行 Floyd，提交为分组的新缓存；图数据不一致致命退出。 */
+static void buildSegmentPathCache(const DominoNavSegment* segment, DominoNavFloydStats* out_stat) {
     const uint8_t region_index = segment->region_index;
     const uint8_t road_network_type = segment->road_network_type;
     const uint32_t vertex_count_u32 = segment->total_count;
     if (vertex_count_u32 == 0U) {
         navStateInvalidatePathCache(region_index, road_network_type);
         if (out_stat) {
-            *out_stat = (FloydPathPlanningResult){0};
+            *out_stat = (DominoNavFloydStats){0};
         }
         return;
     }
-    if (vertex_count_u32 > MAX_FORK_ROAD_COUNT_PER_NETWORK) {
+    if (vertex_count_u32 > DOMINO_MAX_FORK_ROAD_COUNT_PER_NETWORK) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning network exceeds vertex capacity: region=%u type=%u count=%u limit=%u",
-                               (unsigned)region_index, (unsigned)road_network_type, vertex_count_u32, (unsigned)MAX_FORK_ROAD_COUNT_PER_NETWORK);
+                               (unsigned)region_index, (unsigned)road_network_type, vertex_count_u32,
+                               (unsigned)DOMINO_MAX_FORK_ROAD_COUNT_PER_NETWORK);
     }
     const domino_nav_vertex_index_t vertex_count = (domino_nav_vertex_index_t)vertex_count_u32;
 
@@ -229,74 +227,74 @@ static void navPlanSegmentPaths(const DominoNavDataSegment* segment, FloydPathPl
     if (!fork_road_list) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate path planning fork table: vertex_count=%u", (unsigned)vertex_count);
     }
-    navFillForkRoadListCache(segment, fork_road_list);
+    fillSegmentVertices(segment, fork_road_list);
 
-    VertexEdges* vertices = (VertexEdges*)calloc((size_t)vertex_count, sizeof(*vertices));
-    if (!vertices) {
+    DominoNavVertexEdges* vertex_list = (DominoNavVertexEdges*)calloc((size_t)vertex_count, sizeof(*vertex_list));
+    if (!vertex_list) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate path planning edges: vertex_count=%u", (unsigned)vertex_count);
     }
 
     for (size_t vertex_index = 0U; vertex_index < (size_t)vertex_count; vertex_index++) {
-        DominoForkRoad* from_fork_road = fork_road_list[vertex_index];
-        VertexEdges* vertex_edges = &vertices[vertex_index];
-        vertex_edges->road_fork_id = from_fork_road->id;
-        if (from_fork_road->to_fork_road_count > MAX_EDGES_PER_VERTEX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning fork has invalid outgoing edge count: id=%u count=%u", from_fork_road->id,
-                                   (unsigned)from_fork_road->to_fork_road_count);
+        DominoForkRoad* source_fork_road = fork_road_list[vertex_index];
+        DominoNavVertexEdges* vertex_ptr = &vertex_list[vertex_index];
+        vertex_ptr->fork_road_id = source_fork_road->id;
+        if (source_fork_road->to_fork_road_count > DOMINO_MAX_EDGE_COUNT_PER_VERTEX) {
+            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning fork has invalid outgoing edge count: id=%u count=%u", source_fork_road->id,
+                                   (unsigned)source_fork_road->to_fork_road_count);
         }
-        for (uint8_t edge_index = 0U; edge_index < from_fork_road->to_fork_road_count; edge_index++) {
-            const domino_fork_road_id_t target_id = from_fork_road->to_fork_road_id[edge_index];
-            if (target_id == 0U || target_id == from_fork_road->id) {
-                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning edge has null or identical endpoint: start=%u target=%u", from_fork_road->id,
-                                       target_id);
+        for (uint8_t edge_index = 0U; edge_index < source_fork_road->to_fork_road_count; edge_index++) {
+            const domino_fork_road_id_t target_id = source_fork_road->to_fork_road_id_list[edge_index];
+            if (target_id == 0U || target_id == source_fork_road->id) {
+                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning edge has null or identical endpoint: start=%u target=%u",
+                                       source_fork_road->id, target_id);
             }
             DominoForkRoad* target_fork_road = nullptr;
             (void)navStateFindForkRoadById(target_id, &target_fork_road);
             if (!target_fork_road || target_fork_road->status != 0U || target_fork_road->region_index != region_index ||
-                target_fork_road->type != road_network_type || target_fork_road->temp_index >= vertex_count ||
-                fork_road_list[target_fork_road->temp_index] != target_fork_road) {
+                target_fork_road->type != road_network_type || target_fork_road->vertex_index >= vertex_count ||
+                fork_road_list[target_fork_road->vertex_index] != target_fork_road) {
                 DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA,
                                        "path planning edge target is missing or inconsistent with network cache: start=%u target=%u",
-                                       from_fork_road->id, target_id);
+                                       source_fork_road->id, target_id);
             }
             DominoRoad* road = nullptr;
-            (void)navStateFindRoadById(navBuildRoadId(from_fork_road->id, target_id), &road);
+            (void)navStateFindRoadById(navBuildRoadId(source_fork_road->id, target_id), &road);
             if (!road || road->status != 0U || road->region_index != region_index || road->type != road_network_type ||
                 !dominoNavEdgeWeightIsPassable(road->weight[0])) {
                 DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "path planning edge has no matching active passable road: start=%u target=%u",
-                                       from_fork_road->id, target_id);
+                                       source_fork_road->id, target_id);
             }
-            vertex_edges->edges[vertex_edges->count].target_vertex_index = target_fork_road->temp_index;
-            vertex_edges->edges[vertex_edges->count].weight = road->weight[0];
-            vertex_edges->count++;
+            vertex_ptr->edge_list[vertex_ptr->edge_count].target_vertex_index = target_fork_road->vertex_index;
+            vertex_ptr->edge_list[vertex_ptr->edge_count].weight = road->weight[0];
+            vertex_ptr->edge_count++;
         }
     }
 
-    if ((size_t)vertex_count > SIZE_MAX / (size_t)vertex_count / sizeof(PathInfo)) {
+    if ((size_t)vertex_count > SIZE_MAX / (size_t)vertex_count / sizeof(DominoNavPathCell)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "Floyd path matrix allocation size overflows: vertex_count=%u", (unsigned)vertex_count);
     }
     const size_t matrix_element_count = (size_t)vertex_count * (size_t)vertex_count;
-    PathInfo* path_matrix = (PathInfo*)calloc(matrix_element_count, sizeof(*path_matrix));
+    DominoNavPathCell* path_matrix = (DominoNavPathCell*)calloc(matrix_element_count, sizeof(*path_matrix));
     if (!path_matrix) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate Floyd path matrix: elements=%zu element_size=%zu", matrix_element_count,
                                sizeof(*path_matrix));
     }
 
-    FloydPathPlanningResult stat = floydPathPlanning(vertex_count, vertices, (PathInfo(*)[vertex_count])path_matrix);
-    free(vertices);
+    DominoNavFloydStats stats = navFloydBuildPaths(vertex_count, vertex_list, (DominoNavPathCell(*)[vertex_count])path_matrix);
+    free(vertex_list);
 
     navStateCommitPathCache(cache, path_matrix, fork_road_list, vertex_count);
 
     if (out_stat) {
-        *out_stat = stat;
+        *out_stat = stats;
     }
 }
 
-DOMINO_CODE dominoNavPathPlanning(uint8_t region_index, uint8_t road_network_type, FloydPathPlanningResult* out_stat) {
-    const DominoNavDataSegment* segment = navStateFindSegment(&domino_all_fork_road_nav_data_segment_list, region_index, road_network_type);
+DOMINO_CODE dominoNavBuildPathCache(uint8_t region_index, uint8_t road_network_type, DominoNavFloydStats* out_stat) {
+    const DominoNavSegment* segment = navStateFindSegment(&g_domino_fork_road_segment_list, region_index, road_network_type);
     if (!segment) {
         return ERR_NOT_FOUND;
     }
-    navPlanSegmentPaths(segment, out_stat);
+    buildSegmentPathCache(segment, out_stat);
     return CODE_OK;
 }

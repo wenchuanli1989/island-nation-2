@@ -2,7 +2,7 @@
   "type": "building",
   "total_count": 1,
   "shard_count": 1,
-  "shard": [
+  "shards": [
     {
       "crc32c": 0,
       "size": 0

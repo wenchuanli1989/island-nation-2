@@ -4,7 +4,7 @@
 
 static_assert(DOMINO_HUMAN_NEED_MINUTE_MS == 60000U, "dominoHumanNextNeedTickMs assumes a one minute natural period");
 
-/** @brief 整数衰减：先比较可扣次数，避免乘法溢出及无符号下溢。 */
+/** @brief 衰减 tick_count 次，降到 0 为止；先比较可扣次数，避免乘法溢出和下溢。 */
 static inline uint8_t decayNeed(uint8_t value, uint32_t tick_count, uint32_t decay_per_tick) {
     if (decay_per_tick == 0U || tick_count == 0U) {
         return value;
@@ -53,5 +53,5 @@ uint64_t dominoHumanNaturalMsUntilEnergyAtMost(uint8_t energy, domino_runtime_ms
     }
     const uint32_t gap = (uint32_t)energy - threshold;
     const uint64_t tick_count = ((gap - 1U) / DOMINO_HUMAN_ENERGY_DECAY_PER_MINUTE) + 1U;
-    return (uint64_t)dominoHumanNextNeedTickMs(from_ms) + ((tick_count - 1U) * DOMINO_HUMAN_NEED_MINUTE_MS);
+    return (uint64_t)dominoHumanMsUntilNeedTick(from_ms) + ((tick_count - 1U) * DOMINO_HUMAN_NEED_MINUTE_MS);
 }

@@ -85,7 +85,7 @@ static yyjson_mut_val* serializeTask(yyjson_mut_doc* doc, const DominoTask* task
     }
     yyjson_mut_val* plan = yyjson_mut_obj_add_arr(doc, object, "plan_item_list");
     requireField(plan != nullptr);
-    for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+    for (uint8_t index = 0U; index < task_ptr->plan_item_count; index++) {
         const DominoBehaviorPlanItem* item_ptr = &task_ptr->plan_item_list[index];
         yyjson_mut_val* item = yyjson_mut_arr_add_obj(doc, plan);
         requireField(item != nullptr && yyjson_mut_obj_add_uint(doc, item, "step_seq", item_ptr->step_seq) &&
@@ -129,11 +129,11 @@ static uint8_t deserializeTask(yyjson_val* object, DominoTask* task_ptr, DominoB
         task_ptr->current_behavior_id_list[channel] = (domino_behavior_id_t)yyjson_get_uint(yyjson_arr_get(current, channel));
     }
     yyjson_val* plan = yyjson_obj_get(object, "plan_item_list");
-    const size_t plan_count = yyjson_arr_size(plan);
-    if (plan_count > DOMINO_TASK_STEP_COUNT_MAX) {
+    const size_t plan_item_count = yyjson_arr_size(plan);
+    if (plan_item_count > DOMINO_TASK_STEP_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task plan exceeds capacity: task_id=%u", task_ptr->task_id);
     }
-    for (size_t index = 0; index < plan_count; index++) {
+    for (size_t index = 0; index < plan_item_count; index++) {
         yyjson_val* item = yyjson_arr_get(plan, index);
         plan_list[index] = (DominoBehaviorPlanItem){
             .target_effective_ms = (domino_runtime_ms_t)yyjson_get_uint(yyjson_obj_get(item, "target_effective_ms")),
@@ -145,13 +145,13 @@ static uint8_t deserializeTask(yyjson_val* object, DominoTask* task_ptr, DominoB
         };
         readDependencyList(item, plan_list[index].dependency_list);
     }
-    return (uint8_t)plan_count;
+    return (uint8_t)plan_item_count;
 }
 
 #undef TASK_READ_UINT
 
 void serdeSaveHumanTask(const char* save_path) {
-    const size_t total_count = kv_size(domino_all_task_list);
+    const size_t total_count = kv_size(g_domino_task_list);
     if (total_count > UINT32_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human task count exceeds storage limit: count=%zu", total_count);
     }
@@ -174,8 +174,8 @@ void serdeSaveHumanTask(const char* save_path) {
         const size_t remaining_count = total_count - start;
         const size_t count = remaining_count < DOMINO_STORAGE_SHARD_HUMAN_TASK ? remaining_count : DOMINO_STORAGE_SHARD_HUMAN_TASK;
         for (size_t index = start; index < start + count; index++) {
-            if (!yyjson_mut_arr_append(entities, serializeTask(doc, &kv_A(domino_all_task_list, index)))) {
-                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human task record: task_id=%u", kv_A(domino_all_task_list, index).task_id);
+            if (!yyjson_mut_arr_append(entities, serializeTask(doc, &kv_A(g_domino_task_list, index)))) {
+                DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human task record: task_id=%u", kv_A(g_domino_task_list, index).task_id);
             }
         }
         storageWriteShardFile("human_task", shard, save_path, doc);
@@ -195,8 +195,8 @@ void serdeLoadHumanTask(const char* save_path, uint32_t total_count, uint32_t sh
         yyjson_arr_foreach(entities, index, count, object) {
             DominoTask task = {0};
             DominoBehaviorPlanItem plan_list[DOMINO_TASK_STEP_COUNT_MAX];
-            const uint8_t plan_count = deserializeTask(object, &task, plan_list);
-            const DOMINO_CODE code = dominoHumanStoreImportTask(&task, plan_list, plan_count);
+            const uint8_t plan_item_count = deserializeTask(object, &task, plan_list);
+            const DOMINO_CODE code = dominoHumanStoreImportTask(&task, plan_list, plan_item_count);
             if (code != CODE_OK) {
                 DOMINO_EXIT_WITH_ERROR(code, "Cannot import human task: task_id=%u", task.task_id);
             }

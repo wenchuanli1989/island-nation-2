@@ -6,94 +6,78 @@
 #include <stdint.h>
 
 #include "domino_shared_error_codes.h"
-#include "model_view.h"
-#include "storage_view.h"
+#include "types.h"
 
-/** @brief 创建 Nav ID map；分配失败直接打印到 stderr 并 exit。
- * @pre 引擎保证串行初始化；实体、分段和缓存容器由首次静态初始化或上次 Destroy 保持为空，压实标志处于初始状态。
+/** @file state.h
+ * @brief Nav 运行期状态：实体容器、分段、ID 映射表、路径缓存和压实标志。
+ * @note Nav 的查询与修改由调用方串行协调。数组扩容、排序或缓存替换后，之前取得的借用指针全部失效，须按 ID 重新查询。
  */
+
+extern DominoForkRoadVec g_domino_fork_road_list;
+extern DominoRoadVec g_domino_road_list;
+extern DominoRoadLineVec g_domino_road_line_list;
+extern DominoNavSegmentVec g_domino_fork_road_segment_list;
+extern DominoNavSegmentVec g_domino_road_segment_list;
+
+/** @brief 实体 ID 到数组下标的映射。 */
+extern DominoForkRoadIdMap* g_domino_fork_road_id_map;
+extern DominoRoadIdMap* g_domino_road_id_map;
+extern DominoRoadLineIdMap* g_domino_road_line_id_map;
+
+/** @brief 创建 ID 映射表；容器和缓存由首次静态初值或上次 Destroy 保持为空。 */
 void navStateInit(void);
 
-/**
- * @brief 释放并清空全部 Nav 状态。
- * @pre 引擎已完成 DestroyBefore 和 storage save，且不再有业务访问。
- * @note 先释放借用实体地址的缓存，再释放实体与分段容器。
- */
+/** @brief 先释放借用实体地址的路径缓存，再释放实体、分段和映射表并复位全部状态。 */
 void navStateDestroy(void);
 
-/** @brief 供独立公开的道路增删入口检查 Nav 资源是否存活，不维护额外生命周期状态。 */
+/** @brief Nav 资源是否已初始化，供独立公开的道路增删入口检查。 */
 bool navStateIsReady(void);
 
-/** @brief 实体增删后置 dirty；保存前完成排序与分段重建后清除。 */
+/** @brief 布局是否需要在保存前压实；实体增删后为真，压实为 canonical 布局后为假。 */
 bool navStateNeedsCompaction(void);
 
 void navStateMarkDirty(void);
 
 void navStateMarkCanonical(void);
 
-/**
- * @brief 检查 Nav 实体和路网容量，超限时直接打印到 stderr 并 exit。
- * @pre Storage 已恢复正确 canonical 数据及唯一 ID map，并检查实际加载分配的字节大小。
- * @note Nav 的实体上限独立于 Storage 的通用哈希容量；全局下一候选 ID 已按完整存档恢复，不扫描或修复。
- */
+/** @brief 检查加载的实体数和分组路口数在 Nav 上限内，超限致命退出。 */
 void navStateValidateLoadedCapacity(void);
 
-/** @brief 刷新 fork road 与 road ID map 的数组下标；仅在保存前实体 canonical 排序后调用。
- * @pre 可信加载与增删入口保证实体身份、ID map 完整及数量在 Nav 上限内；调用期间无并发修改。
- */
+/** @brief canonical 排序后刷新 fork road 与 road 映射表中的数组下标。 */
 void navStateRefreshIdMapIndices(void);
 
-/**
- * @brief 按 ID 查找路口；成功输出借用指针，失败输出 nullptr。
- * @pre Nav 已初始化且无并发销毁，out_fork_road 非空；生命周期由引擎保证。
- *      已登记实体 ID 不可改写，ID map 只由加载、新增和排序入口维护。
- * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；找到时返回 CODE_OK。
- * @note 缺失不记录错误日志；索引一致性由加载、增删与排序入口维护，并以内部断言检查。数组扩容或排序后须重新查询。
+/** @brief 按 ID 查找路口，输出借用指针。
+ * @return 找到返回 CODE_OK；ID 为 0 或不存在返回 ERR_NOT_FOUND 并输出空指针。
  */
 DOMINO_CODE navStateFindForkRoadById(domino_fork_road_id_t fork_road_id, DominoForkRoad** out_fork_road);
 
-/**
- * @brief 按 ID 查找道路；成功输出借用指针，失败输出 nullptr。
- * @pre Nav 已初始化且无并发销毁，out_road 非空；生命周期由引擎保证。
- *      已登记实体 ID 不可改写，ID map 只由加载、新增和排序入口维护。
- * @return ID 为 0 或缺失返回 ERR_NOT_FOUND；找到时返回 CODE_OK。
- * @note 缺失不记录错误日志；索引一致性由加载、增删与排序入口维护，并以内部断言检查。数组扩容或排序后须重新查询。
- */
+/** @brief 按 ID 查找道路，输出借用指针；返回值约定同 navStateFindForkRoadById。 */
 DOMINO_CODE navStateFindRoadById(domino_road_id_t road_id, DominoRoad** out_road);
 
-/** @brief 按 ID 查找路线并返回借用指针；缺失时返回 nullptr，数组扩容或排序后需重新按 ID 查找。
- * @pre Nav 已初始化且无并发销毁，已登记实体 ID 不可改写；生命周期由引擎保证。
- */
-DominoRoadLine* dominoGetRoadLineByID(domino_road_line_id_t road_line_id);
+/** @brief 按 ID 查找路线，不存在返回空指针。 */
+DominoRoadLine* dominoGetRoadLineById(domino_road_line_id_t road_line_id);
 
-/** @brief 按地域和路网类型查找分段下标，未找到时返回 -1；调用方保证 segment_list 非空。 */
-int navStateFindSegmentIndex(const DominoNavDataSegmentVec* segment_list, uint8_t region_index, uint8_t network_type);
+/** @brief 按分组键查找分段下标，未找到返回 -1。 */
+int navStateFindSegmentIndex(const DominoNavSegmentVec* segment_list, uint8_t region_index, uint8_t network_type);
 
-/** @brief 取得分段借用指针；segment_list 须非空，缺失时返回 nullptr，分段数组扩容或重建后失效。 */
-const DominoNavDataSegment* navStateFindSegment(const DominoNavDataSegmentVec* segment_list, uint8_t region_index, uint8_t network_type);
+/** @brief 按分组键取得分段借用指针，未找到返回空指针。 */
+const DominoNavSegment* navStateFindSegment(const DominoNavSegmentVec* segment_list, uint8_t region_index, uint8_t network_type);
 
-/** @brief 释放全部路径矩阵和实体指针表，保留缓存槽供后续复用。 */
+/** @brief 释放全部路径矩阵和指针表，保留缓存槽供复用。 */
 void navStateInvalidateAllPathCaches(void);
 
-/** @brief 释放指定路网的路径矩阵和实体指针表。 */
 void navStateInvalidatePathCache(uint8_t region_index, uint8_t road_network_type);
 
-/**
- * @brief 取得指定路网的完整路径缓存借用指针。
- * @return 缓存完整可用时返回指针，缺失或已失效时返回 nullptr。
- * @note 缓存失效、替换或 Nav 状态销毁后须重新获取；调用方不得修改或释放缓存及其数组。
- */
+/** @brief 取得分组的有效路径缓存，缺失或已失效返回空指针；调用方只读。 */
 [[nodiscard]] const DominoNavPathCache* navStateGetPathCache(uint8_t region_index, uint8_t road_network_type);
 
-/** @brief 取得或分配指定路网缓存槽；分配失败直接打印到 stderr 并 exit。 */
+/** @brief 取得或分配分组的缓存槽。 */
 DominoNavPathCache* navStatePreparePathCache(uint8_t region_index, uint8_t road_network_type);
 
-/**
- * @brief 替换已准备的缓存槽并接管两个数组，无失败提交。
- * @note cache 来自 navStatePreparePathCache；两个数组非空且与旧缓存不重叠，vertex_count 在有效路网上限内且非零。
- *       调用方已完成图数据校验与规划；实体数组和分段在准备、规划、提交期间不得发生并发修改。
+/** @brief 用新构建的矩阵和指针表替换缓存槽内容，接管两个数组的所有权。
+ * @pre cache 来自 navStatePreparePathCache；vertex_count 非零，两个数组非空且不与旧缓存重叠。
  */
-void navStateCommitPathCache(DominoNavPathCache* cache, PathInfo* path_matrix, DominoForkRoad** fork_road_list,
+void navStateCommitPathCache(DominoNavPathCache* cache, DominoNavPathCell* path_matrix, DominoForkRoad** fork_road_list,
                              domino_nav_vertex_index_t vertex_count);
 
 #endif

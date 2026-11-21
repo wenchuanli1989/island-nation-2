@@ -20,18 +20,20 @@
 #include "storage/entry.h"
 #include "time/entry.h"
 
-char g_domino_storage_account_id[DOMINO_STORAGE_ACCOUNT_ID_MAX] = "";
-char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX] = "local";
+char g_domino_account_id[DOMINO_ACCOUNT_ID_SIZE] = "";
+char g_domino_run_mode[DOMINO_RUN_MODE_SIZE] = "local";
 
-static char g_domino_storage_path[DOMINO_STORAGE_PATH_MAX] = "";
+static char g_storage_path[DOMINO_STORAGE_PATH_MAX] = "";
 
-static thrd_t g_domino_client_thread;
-static thrd_t g_domino_main_loop_thread;
+static thrd_t g_client_thread;
+static thrd_t g_main_loop_thread;
 
-static DominoThreadQueue g_domino_to_main_loop_queue;
-static DominoThreadQueue g_domino_from_main_loop_queue;
+static DominoThreadQueue g_main_loop_inbox;  ///< 客户端 → 主循环。
+static DominoThreadQueue g_client_inbox;     ///< 引擎 → 客户端。
 
-typedef enum DominoEngineLifecycleState {
+enum { MAIN_LOOP_BATCH_MAX = 32U };
+
+typedef enum DOMINO_ENGINE_LIFECYCLE_STATE {
     DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED = 0,
     DOMINO_ENGINE_LIFECYCLE_INITIALIZING,
     DOMINO_ENGINE_LIFECYCLE_INITIALIZED,
@@ -40,23 +42,23 @@ typedef enum DominoEngineLifecycleState {
     DOMINO_ENGINE_LIFECYCLE_STOPPING,
     DOMINO_ENGINE_LIFECYCLE_STOPPED,
     DOMINO_ENGINE_LIFECYCLE_DESTROYING,
-} DominoEngineLifecycleState;
+} DOMINO_ENGINE_LIFECYCLE_STATE;
 
-static _Atomic DominoEngineLifecycleState g_domino_engine_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED;
+static _Atomic DOMINO_ENGINE_LIFECYCLE_STATE g_lifecycle_state = DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED;
 
 DominoEngineLaunchConfig g_domino_engine_launch_config = {};
 
 bool dominoEngineIsClientThread(void) {
-    return thrd_equal(thrd_current(), g_domino_client_thread) != 0;
+    return thrd_equal(thrd_current(), g_client_thread) != 0;
 }
 
 bool dominoEngineIsStopping(void) {
-    return atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_STOPPING;
+    return atomic_load(&g_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_STOPPING;
 }
 
-/** @brief 只校验访问资格；请求边界负责记录一次拒绝结果。 */
-static DOMINO_CODE checkClientWorldAccess(void) {
-    const DominoEngineLifecycleState state = atomic_load(&g_domino_engine_lifecycle_state);
+/** @brief 客户端消息接口的访问资格：RUNNING 且为客户端线程；拒绝结果由调用方记录。 */
+static DOMINO_CODE checkClientAccess(void) {
+    const DOMINO_ENGINE_LIFECYCLE_STATE state = atomic_load(&g_lifecycle_state);
     if (state == DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED) {
         return ERR_NOT_INITIALIZED;
     }
@@ -67,39 +69,40 @@ static DOMINO_CODE checkClientWorldAccess(void) {
 }
 
 void dominoEngineFreezeTime(void) {
-    if (atomic_load(&g_domino_engine_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING || !dominoEngineIsClientThread()) {
+    if (atomic_load(&g_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING || !dominoEngineIsClientThread()) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "freeze requires the running engine's client thread");
     }
-    /* 普通冻结不等待当前业务批次，日志线程始终保持运行。 */
+    // 普通冻结不通知也不等待业务线程。读取一次业务时间，校验冻结时刻仍在 32 位毫秒范围内。
     dominoTimeModuleFreeze();
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
 }
 
-/** @brief 恢复或退出状态先发布，再经模块入口通知业务等待者；普通冻结不需要通知。 */
+/** @brief 解冻或退出状态发布后通知业务线程重新检查；普通冻结不需要通知。 */
 static void notifyBusinessThreads(void) {
     dominoHumanModuleNotifyTimeChanged();
     dominoGameTimerNotifyTimeChanged();
 }
 
 void dominoEngineThawTime(void) {
-    if (atomic_load(&g_domino_engine_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING || !dominoEngineIsClientThread()) {
+    if (atomic_load(&g_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_RUNNING || !dominoEngineIsClientThread()) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "thaw requires the running engine's client thread");
     }
+    // 解冻前校验冻结基准仍在 32 位业务毫秒范围内。
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
     dominoTimeModuleThaw();
-    dominoThreadQueueWakeAll(&g_domino_to_main_loop_queue);
+    dominoThreadQueueWakeAll(&g_main_loop_inbox);
     notifyBusinessThreads();
 }
 
-DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
-    DOMINO_CODE code = checkClientWorldAccess();
+DOMINO_CODE dominoEngineSendMessage(DominoEngineMessage* message_ptr) {
+    DOMINO_CODE code = checkClientAccess();
     if (code == CODE_OK && message_ptr == nullptr) {
         code = ERR_NULL_POINTER;
     }
     if (code != CODE_OK) {
-        if (atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
+        if (atomic_load(&g_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "message submission rejected (%s, code=%d)",
                               dominoErrorCodeToString(code), (int)code);
         } else {
@@ -107,20 +110,20 @@ DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr) {
         }
         return code;
     }
-    const DOMINO_CODE result = dominoThreadQueueProduce(&g_domino_to_main_loop_queue, message_ptr, false);
+    const DOMINO_CODE result = dominoThreadQueueProduce(&g_main_loop_inbox, message_ptr, false);
     if (result != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(result, "failed to enqueue an engine message");
     }
     return CODE_OK;
 }
 
-DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocking) {
-    DOMINO_CODE code = checkClientWorldAccess();
+DOMINO_CODE dominoEngineReceiveMessage(DominoEngineMessage* message_out_ptr, bool blocking) {
+    DOMINO_CODE code = checkClientAccess();
     if (code == CODE_OK && message_out_ptr == nullptr) {
         code = ERR_NULL_POINTER;
     }
     if (code != CODE_OK) {
-        if (atomic_load(&g_domino_engine_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
+        if (atomic_load(&g_lifecycle_state) == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
             DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_CORE, DOMINO_LOG_LEVEL_ERROR, "message consumption rejected (%s, code=%d)",
                               dominoErrorCodeToString(code), (int)code);
         } else {
@@ -128,20 +131,19 @@ DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocki
         }
         return code;
     }
-    return dominoThreadQueueConsume(&g_domino_from_main_loop_queue, message_out_ptr, blocking);
+    return dominoThreadQueueConsume(&g_client_inbox, message_out_ptr, blocking);
 }
 
-void dominoLoopProduceToMain(DominoEngineMessage* message_ptr) {
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_from_main_loop_queue, message_ptr, false);
+void dominoEngineSendToClient(DominoEngineMessage* message_ptr) {
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_client_inbox, message_ptr, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "failed to enqueue a client message");
     }
 }
 
 void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
-    /* 入口一次完成重复调用检查及状态切换；参数错误直接退出，不返回半初始化实例。 */
-    DominoEngineLifecycleState expected_state = DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED;
-    if (!atomic_compare_exchange_strong(&g_domino_engine_lifecycle_state, &expected_state, DOMINO_ENGINE_LIFECYCLE_INITIALIZING)) {
+    DOMINO_ENGINE_LIFECYCLE_STATE expected_state = DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED;
+    if (!atomic_compare_exchange_strong(&g_lifecycle_state, &expected_state, DOMINO_ENGINE_LIFECYCLE_INITIALIZING)) {
         DOMINO_EXIT_WITH_ERROR(ERR_ALREADY_INITIALIZED, "engine initialization requires an uninitialized instance");
     }
     if (launch_config.storage_path == nullptr) {
@@ -157,10 +159,10 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
     if (storage_path_len == 0U) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "storage path must name a non-root directory other than dot or dot-dot");
     }
-    if (storage_path_len >= sizeof(g_domino_storage_path)) {
+    if (storage_path_len >= sizeof(g_storage_path)) {
         DOMINO_EXIT_WITH_ERROR(ERR_BUFFER_TOO_SMALL, "storage path exceeds the engine path buffer");
     }
-    /* 事务保存会重命名整个目录，末级必须是具体目录名。 */
+    // 事务保存要重命名整个存档目录，末级必须是具体目录名。
     size_t base_index = storage_path_len;
     while (base_index > 0U && launch_config.storage_path[base_index - 1U] != '/') {
         base_index--;
@@ -171,16 +173,14 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "storage path must name a non-root directory other than dot or dot-dot");
     }
 
-    memcpy(g_domino_storage_path, launch_config.storage_path, storage_path_len);
-    g_domino_storage_path[storage_path_len] = '\0';
+    memcpy(g_storage_path, launch_config.storage_path, storage_path_len);
+    g_storage_path[storage_path_len] = '\0';
     g_domino_engine_launch_config = launch_config;
-    g_domino_engine_launch_config.storage_path = g_domino_storage_path;
+    g_domino_engine_launch_config.storage_path = g_storage_path;
 
     dominoLoggerModuleInit();
-    dominoThreadQueueInit(&g_domino_to_main_loop_queue, sizeof(DominoEngineMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
-                          DOMINO_THREAD_QUEUE_MAX_CAPACITY);
-    dominoThreadQueueInit(&g_domino_from_main_loop_queue, sizeof(DominoEngineMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
-                          DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+    dominoThreadQueueInit(&g_main_loop_inbox, sizeof(DominoEngineMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+    dominoThreadQueueInit(&g_client_inbox, sizeof(DominoEngineMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
     dominoCommonModuleInit();
     dominoTimeModuleInit();
     dominoHostModuleInit();
@@ -191,15 +191,16 @@ void dominoEngineInit(DominoEngineLaunchConfig launch_config) {
     dominoStorageModuleInit();
     dominoNavModuleInitAfter();
     dominoHumanModuleInitAfter();
-    g_domino_client_thread = thrd_current();
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_INITIALIZED);
+    g_client_thread = thrd_current();
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_INITIALIZED);
 }
 
-static int dominoMainLoopThread(void* arg_ptr) {
+/** @brief Snapshot → 退出／冻结检查 → 至多处理一批客户端消息 → 没有更多消息时按快照等待。 */
+static int mainLoopThreadMain(void* arg_ptr) {
     (void)arg_ptr;
     for (;;) {
         uint64_t epoch;
-        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_domino_to_main_loop_queue, &epoch);
+        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_main_loop_inbox, &epoch);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "failed to snapshot the main loop queue");
         }
@@ -212,9 +213,9 @@ static int dominoMainLoopThread(void* arg_ptr) {
             continue;
         }
         uint32_t consumed_count = 0U;
-        while (consumed_count < 32U) {
+        while (consumed_count < MAIN_LOOP_BATCH_MAX) {
             DominoEngineMessage message;
-            code = dominoThreadQueueConsume(&g_domino_to_main_loop_queue, &message, false);
+            code = dominoThreadQueueConsume(&g_main_loop_inbox, &message, false);
             if (code == ERR_QUEUE_EMPTY) {
                 break;
             }
@@ -222,13 +223,13 @@ static int dominoMainLoopThread(void* arg_ptr) {
                 DOMINO_EXIT_WITH_ERROR(code, "failed to consume a main loop message");
             }
             consumed_count++;
-            /* 分发入口记录并拒绝非法业务消息，继续处理下一条。 */
-            (void)dominoDispatchMessage(&message);
+            // 非法消息由分派入口记录并拒绝，继续处理下一条。
+            (void)dominoDispatchClientMessage(&message);
         }
-        if (consumed_count == 32U) {
+        if (consumed_count == MAIN_LOOP_BATCH_MAX) {
             continue;
         }
-        code = dominoThreadQueueWait(&g_domino_to_main_loop_queue, epoch);
+        code = dominoThreadQueueWait(&g_main_loop_inbox, epoch);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "failed to wait for main loop work");
         }
@@ -236,58 +237,57 @@ static int dominoMainLoopThread(void* arg_ptr) {
 }
 
 void dominoEngineStart(DominoEngineClientData* client_data_out_ptr) {
-    const DominoEngineLifecycleState state = atomic_load(&g_domino_engine_lifecycle_state);
+    const DOMINO_ENGINE_LIFECYCLE_STATE state = atomic_load(&g_lifecycle_state);
     if (state != DOMINO_ENGINE_LIFECYCLE_INITIALIZED || !dominoEngineIsClientThread()) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "start requires an initialized engine and its client thread");
     }
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STARTING);
-    /* 时钟保持冻结，等所有消费者就绪后再恢复。 */
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STARTING);
+    // 时钟保持冻结，全部线程就绪后再解冻。
     dominoLoggerModuleStart();
     dominoHumanModuleStart();
     dominoGameTimerModuleStart();
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_domino_main_loop_thread, dominoMainLoopThread, nullptr), ERR_THREAD_CREATE,
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_main_loop_thread, mainLoopThreadMain, nullptr), ERR_THREAD_CREATE,
                                   "failed to create the main loop thread");
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_RUNNING);
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_RUNNING);
     dominoEngineThawTime();
     if (client_data_out_ptr != nullptr) {
-        client_data_out_ptr->game_date_time_ns = dominoGetRuntimeDateTimeBase();
+        client_data_out_ptr->runtime_base_ns = dominoTimeGetRuntimeBaseNs();
     }
-    DOMINO_PRINT_MESSAGE("engine started at runtime_ns=%" PRIu64, dominoGetRuntimeDateTimeBase());
+    DOMINO_PRINT_MESSAGE("engine started at runtime_ns=%" PRIu64, dominoTimeGetRuntimeBaseNs());
 }
 
 void dominoEngineStop(void) {
-    const DominoEngineLifecycleState state = atomic_load(&g_domino_engine_lifecycle_state);
+    const DOMINO_ENGINE_LIFECYCLE_STATE state = atomic_load(&g_lifecycle_state);
     if ((state != DOMINO_ENGINE_LIFECYCLE_INITIALIZED && state != DOMINO_ENGINE_LIFECYCLE_RUNNING) || !dominoEngineIsClientThread()) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "stop requires an initialized or running engine and its client thread");
     }
-    /* STOPPING 同时发布退出请求，保持到业务线程 join、人物结算和日志排空完成。 */
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STOPPING);
+    // STOPPING 同时是业务线程的退出请求。
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STOPPING);
     if (state == DOMINO_ENGINE_LIFECYCLE_RUNNING) {
         dominoTimeModuleFreeze();
         domino_runtime_ms_t now_ms;
         dominoTimeGetRuntimeMs(&now_ms);
         dominoTimeModuleWakeAll();
-        dominoThreadQueueWakeAll(&g_domino_to_main_loop_queue);
+        dominoThreadQueueWakeAll(&g_main_loop_inbox);
         notifyBusinessThreads();
-        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_domino_main_loop_thread, nullptr), ERR_THREAD_JOIN, "failed to join the main loop thread");
+        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_main_loop_thread, nullptr), ERR_THREAD_JOIN, "failed to join the main loop thread");
         dominoHumanModuleStop();
         dominoGameTimerModuleStop();
-        /* 全部业务线程已结束；通过 human 模块结算到停钟时刻，logger 仍可接收结算日志。 */
+        // 业务线程全部结束后按停钟时刻统一结算；logger 仍在运行，可记录结算日志。
         dominoHumanModuleSettle(now_ms);
     }
-    /* 仅 Init 时不调用业务线程 Stop，不结算人物；logger 仍关闭入队并刷新输出。 */
     dominoLoggerModuleStop();
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STOPPED);
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_STOPPED);
 }
 
 void dominoEngineDestroy(void) {
-    if (atomic_load(&g_domino_engine_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_STOPPED || !dominoEngineIsClientThread()) {
+    if (atomic_load(&g_lifecycle_state) != DOMINO_ENGINE_LIFECYCLE_STOPPED || !dominoEngineIsClientThread()) {
         DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "destroy requires a stopped engine and its client thread");
     }
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_DESTROYING);
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_DESTROYING);
     dominoGameTimerModuleDestroy();
-    dominoThreadQueueDestroy(&g_domino_to_main_loop_queue);
-    dominoThreadQueueDestroy(&g_domino_from_main_loop_queue);
+    dominoThreadQueueDestroy(&g_main_loop_inbox);
+    dominoThreadQueueDestroy(&g_client_inbox);
     dominoNavModuleDestroyBefore();
     dominoStorageModuleDestroy();
     dominoHumanModuleDestroy();
@@ -295,15 +295,15 @@ void dominoEngineDestroy(void) {
     dominoNavModuleDestroy();
     dominoHostModuleDestroy();
     dominoCommonModuleDestroy();
-    /* 存档已保留退出时刻；现在才清空本实例的内存时钟。 */
+    // 存档已保存累计时间，此时才清空内存时钟。
     dominoTimeModuleDestroy();
     dominoLoggerModuleDestroy();
-    memset(&g_domino_client_thread, 0, sizeof(g_domino_client_thread));
-    memset(&g_domino_main_loop_thread, 0, sizeof(g_domino_main_loop_thread));
+    memset(&g_client_thread, 0, sizeof(g_client_thread));
+    memset(&g_main_loop_thread, 0, sizeof(g_main_loop_thread));
     memset(&g_domino_engine_launch_config, 0, sizeof(g_domino_engine_launch_config));
-    memset(g_domino_storage_path, 0, sizeof(g_domino_storage_path));
-    memset(g_domino_storage_account_id, 0, sizeof(g_domino_storage_account_id));
-    memset(g_domino_storage_run_mode, 0, sizeof(g_domino_storage_run_mode));
-    memcpy(g_domino_storage_run_mode, "local", sizeof("local"));
-    atomic_store(&g_domino_engine_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED);
+    memset(g_storage_path, 0, sizeof(g_storage_path));
+    memset(g_domino_account_id, 0, sizeof(g_domino_account_id));
+    memset(g_domino_run_mode, 0, sizeof(g_domino_run_mode));
+    memcpy(g_domino_run_mode, "local", sizeof("local"));
+    atomic_store(&g_lifecycle_state, DOMINO_ENGINE_LIFECYCLE_UNINITIALIZED);
 }

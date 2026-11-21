@@ -194,7 +194,7 @@ typedef struct DominoMotivationHistory {
  * need_round 是睡眠工作身份的需求轮次：首次接受睡眠任务计划时建立第一轮，重试、替换、回收和读档都不自动增加。
  */
 typedef struct DominoMotivation {
-    DominoMotivationHistory history_list[DOMINO_MOTIVATION_HISTORY_COUNT_MAX];  ///< 环形历史，history_head 指向最早一条。
+    DominoMotivationHistory history_list[DOMINO_MOTIVATION_HISTORY_COUNT_MAX];  ///< 环形历史，history_head_index 指向最早一条。
     uint32_t success_count;                                                     ///< 累计成功实施次数；已实施由其大于 0 推导。
     domino_motivation_id_t motivation_id;                                       ///< 非零正式 ID。
     domino_human_id_t owner_human_id;
@@ -203,7 +203,7 @@ typedef struct DominoMotivation {
     uint8_t type;                    ///< DOMINO_MOTIVATION_TYPE。
     uint8_t status;                  ///< DOMINO_MOTIVATION_STATUS。
     uint8_t history_count;           ///< 有效明细数，0..10。
-    uint8_t history_head;            ///< 最早一条明细的位置。
+    uint8_t history_head_index;      ///< 最早一条明细的位置。
     uint8_t last_failure_reason;     ///< 最近一次失败或取消归并的原因，DOMINO_END_REASON。
 } DominoMotivation;
 
@@ -222,13 +222,13 @@ typedef struct DominoBehaviorPlanItem {
 } DominoBehaviorPlanItem;
 
 /** @brief 统一任务记录：接受计划时建立，拥有稳定 task_id；首次启动在同一记录上附加执行部分。
- * @note plan_item_list 是本任务独占的未来行为计划连续块（plan_count 项），替换、消费或回收时由 human store 释放；
+ * @note plan_item_list 是本任务独占的未来行为计划连续块（plan_item_count 项），替换、消费或回收时由 human store 释放；
  * 结构体按值复制时只复制指针，调用方不得据此建立第二份所有权。
  * plan_version 只用于本会话的异步依赖核对，在本次 Init 内全局唯一、不复用，不持久化。
  * 执行部分字段（started_at_ms 起）仅在 exec_status 非 NONE 时有效；累计事实在主行为终态提交时同次归并。
  */
 typedef struct DominoTask {
-    DominoBehaviorPlanItem* plan_item_list;  ///< 独占未来步骤，plan_count 为 0 时为空指针。
+    DominoBehaviorPlanItem* plan_item_list;  ///< 独占未来步骤，plan_item_count 为 0 时为空指针。
     uint64_t plan_version;                   ///< 运行态：非零计划版本。
     domino_task_id_t task_id;
     domino_human_id_t owner_human_id;
@@ -247,14 +247,14 @@ typedef struct DominoTask {
     uint16_t main_succeeded_count;                                                 ///< 成功证明：本任务已成功结束的主行为数。
     uint16_t main_failed_count;
     uint16_t main_cancelled_count;
-    uint8_t type;              ///< DOMINO_TASK_TYPE。
-    uint8_t stimulus_kind;     ///< 回应外部信息的任务所回应的类别；其他任务为 NONE。
-    uint8_t exec_status;       ///< DOMINO_TASK_EXEC_STATUS。
-    uint8_t plan_count;        ///< 未来行为计划项数。
-    uint8_t record_count;      ///< 运行态：仍在池中的本任务行为记录数，加载后由行为记录重建。
-    uint8_t work_source_kind;  ///< 工作身份：DOMINO_TASK_SOURCE。
-    uint8_t target_value;      ///< 类型完成指标；睡眠为目标精力。
-    uint8_t end_reason;        ///< 任务终态或撤销原因，DOMINO_END_REASON。
+    uint8_t type;                   ///< DOMINO_TASK_TYPE。
+    uint8_t stimulus_kind;          ///< 回应外部信息的任务所回应的类别；其他任务为 NONE。
+    uint8_t exec_status;            ///< DOMINO_TASK_EXEC_STATUS。
+    uint8_t plan_item_count;        ///< 未来行为计划项数。
+    uint8_t behavior_record_count;  ///< 运行态：仍在池中的本任务行为记录数，加载后由行为记录重建。
+    uint8_t work_source_kind;       ///< 工作身份：DOMINO_TASK_SOURCE。
+    uint8_t target_value;           ///< 类型完成指标；睡眠为目标精力。
+    uint8_t end_reason;             ///< 任务终态或撤销原因，DOMINO_END_REASON。
     uint8_t last_behavior_end_reason;
     uint8_t flags;  ///< DOMINO_TASK_FLAG_*。
 } DominoTask;

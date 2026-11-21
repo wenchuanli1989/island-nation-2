@@ -1,12 +1,11 @@
-#include "persistence.h"
+#include "layout.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "model_view.h"
 #include "state.h"
-#include "storage_view.h"
+#include "types.h"
 
 static int compareForkRoadByCanonicalOrder(const void* left_ptr, const void* right_ptr) {
     const DominoForkRoad* left = (const DominoForkRoad*)left_ptr;
@@ -68,17 +67,17 @@ static uint8_t roadGetNetworkType(const void* element) {
     return ((const DominoRoad*)element)->type;
 }
 
-/** @brief 调用方保证实体数可由 uint32_t 表示、字段读取函数有效，且没有借用实体地址的缓存。 */
+/** @brief 按 canonical 顺序排序实体，再为活跃实体按分组键重建分段；排序后增量尾为空。 */
 static void rebuildCanonicalSegments(void* array_ptr, size_t element_count, size_t element_size, int (*compare_fn)(const void*, const void*),
                                      DominoNavGetU8Fn get_status, DominoNavGetU8Fn get_region, DominoNavGetU8Fn get_network_type,
-                                     DominoNavDataSegmentVec* out_segment_list) {
+                                     DominoNavSegmentVec* out_segment_list) {
     out_segment_list->n = 0U;
     if (element_count > 1U) {
         qsort(array_ptr, element_count, element_size, compare_fn);
     }
 
     uint32_t alive_count = 0U;
-    DominoNavDataSegment* current_segment = nullptr;
+    DominoNavSegment* current_segment = nullptr;
     for (; alive_count < (uint32_t)element_count; alive_count++) {
         const void* element = (const uint8_t*)array_ptr + ((size_t)alive_count * element_size);
         if (get_status(element) != 0U) {
@@ -87,29 +86,29 @@ static void rebuildCanonicalSegments(void* array_ptr, size_t element_count, size
         const uint8_t region_index = get_region(element);
         const uint8_t network_type = get_network_type(element);
         if (!current_segment || current_segment->region_index != region_index || current_segment->road_network_type != network_type) {
-            kv_push(DominoNavDataSegment, *out_segment_list,
-                    ((DominoNavDataSegment){
-                        .init_index = alive_count,
+            kv_push(DominoNavSegment, *out_segment_list,
+                    ((DominoNavSegment){
+                        .base_index = alive_count,
                         .region_index = region_index,
                         .road_network_type = network_type,
                     }));
-            /* kv_push 可能扩容；此前保存的 segment 指针不能继续使用。 */
+            // kv_push 可能扩容，须重新取分段指针。
             current_segment = &kv_A(*out_segment_list, kv_size(*out_segment_list) - 1U);
         }
-        current_segment->init_count++;
+        current_segment->base_count++;
     }
 
     for (size_t segment_index = 0U; segment_index < kv_size(*out_segment_list); segment_index++) {
-        DominoNavDataSegment* segment = &kv_A(*out_segment_list, segment_index);
-        segment->increment_index = alive_count;
-        segment->total_count = segment->init_count;
+        DominoNavSegment* segment = &kv_A(*out_segment_list, segment_index);
+        segment->tail_index = alive_count;
+        segment->total_count = segment->base_count;
     }
 }
 
-void navPersistenceCompact(void) {
-    rebuildCanonicalSegments(domino_all_fork_road_list.a, kv_size(domino_all_fork_road_list), sizeof(DominoForkRoad), compareForkRoadByCanonicalOrder,
-                             forkRoadGetStatus, forkRoadGetRegion, forkRoadGetNetworkType, &domino_all_fork_road_nav_data_segment_list);
-    rebuildCanonicalSegments(domino_all_road_list.a, kv_size(domino_all_road_list), sizeof(DominoRoad), compareRoadByCanonicalOrder, roadGetStatus,
-                             roadGetRegion, roadGetNetworkType, &domino_all_road_nav_data_segment_list);
+void navLayoutCompact(void) {
+    rebuildCanonicalSegments(g_domino_fork_road_list.a, kv_size(g_domino_fork_road_list), sizeof(DominoForkRoad), compareForkRoadByCanonicalOrder,
+                             forkRoadGetStatus, forkRoadGetRegion, forkRoadGetNetworkType, &g_domino_fork_road_segment_list);
+    rebuildCanonicalSegments(g_domino_road_list.a, kv_size(g_domino_road_list), sizeof(DominoRoad), compareRoadByCanonicalOrder, roadGetStatus,
+                             roadGetRegion, roadGetNetworkType, &g_domino_road_segment_list);
     navStateRefreshIdMapIndices();
 }

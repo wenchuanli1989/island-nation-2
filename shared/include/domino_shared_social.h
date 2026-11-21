@@ -17,13 +17,13 @@
 #define DOMINO_MAX_CITY_COUNT_PER_COUNTRY 128
 
 #define DOMINO_MAX_MEMBER_COUNT_PER_ORG 300
-#define DOMINO_MAX_MICRO_MEMBER_COUNT_PER_ORG 10
-#define DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG 4  // 组织主要成员数量上限，高管，董事，排除领导者
+#define DOMINO_MAX_INLINE_MEMBER_COUNT_PER_ORG 10
+#define DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG 4  ///< 组织主要成员（高管、董事，不含 boss）上限。
 #define DOMINO_MAX_ASSET_COUNT_PER_ORG 128
 #define DOMINO_MAX_MAIN_LEADER_COUNT_PER_COUNTRY 8
 
 #define DOMINO_MAX_MEMBER_COUNT_PER_BUILDING 300
-#define DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING 10
+#define DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING 10
 
 #define DOMINO_MAX_ORG_COUNT_PER_CITY 128
 #define DOMINO_MAX_MOVING_HUMAN_COUNT_PER_CITY 380
@@ -54,18 +54,17 @@ typedef struct DominoBuilding {
     domino_country_id_t country_id;
     domino_wealth_value_t wealth;
 
-    // 除owner之外的成员列表
-    domino_human_id_t micro_member_id_list[DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING];
+    domino_human_id_t inline_member_id_list[DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING];  ///< 内联成员（不含拥有者），更多成员放在 data。
 
     int32_t position_x;
     int32_t position_y;
     int32_t position_z;
 
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
 
-    domino_fork_road_id_t address_id;
+    domino_fork_road_id_t fork_road_id;
 
-    uint16_t total_member_count;  // 不包括拥有者
+    uint16_t member_count;  ///< 成员总数，不含拥有者。
 
     domino_status_t status;
     domino_type_t type;
@@ -75,7 +74,7 @@ typedef struct DominoBuilding {
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;
 
-    uint8_t micro_member_type_list[DOMINO_MAX_MICRO_MEMBER_COUNT_PER_BUILDING];
+    uint8_t inline_member_type_list[DOMINO_MAX_INLINE_MEMBER_COUNT_PER_BUILDING];
 
     uint8_t other_info[14];  ///< 预留，不持久化。
 
@@ -104,7 +103,7 @@ static_assert(sizeof(DominoCityData) == 4096, "DominoCityData must be exactly 40
 typedef struct DominoCity {
     DominoCityData* data;
     domino_data_id_t data_id;
-    domino_org_id_t manager_id;
+    domino_org_id_t manager_org_id;
 
     domino_city_id_t id;
     domino_country_id_t country_id;
@@ -116,13 +115,13 @@ typedef struct DominoCity {
     int32_t position_y;
     int32_t position_z;
 
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
 
     uint16_t human_count;
     uint16_t org_count;
     uint16_t building_count;
-    uint16_t movable_human_count;
-    uint16_t movable_asset_count;
+    uint16_t moving_human_count;
+    uint16_t moving_asset_count;
 
     domino_status_t status;
     domino_type_t type;
@@ -164,14 +163,14 @@ typedef struct DominoOrg {
     domino_wealth_value_t wealth;
 
     domino_human_id_t founder_id;
-    domino_human_id_t key_member_id_list[DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG];      // 主要成员列表，高管，董事，排除领导者
-    domino_human_id_t micro_member_id_list[DOMINO_MAX_MICRO_MEMBER_COUNT_PER_ORG];  // 成员列表,排除主要成员和boss
+    domino_human_id_t key_member_id_list[DOMINO_MAX_KEY_MEMBER_COUNT_PER_ORG];        ///< 主要成员（高管、董事），不含 boss。
+    domino_human_id_t inline_member_id_list[DOMINO_MAX_INLINE_MEMBER_COUNT_PER_ORG];  ///< 内联成员，不含主要成员和 boss。
 
-    domino_fork_road_id_t address_id;
+    domino_fork_road_id_t fork_road_id;
 
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
 
-    uint16_t total_member_count;  // 总成员数量，不包括boss
+    uint16_t member_count;  ///< 成员总数，不含 boss。
 
     domino_status_t status;
     domino_type_t type;
@@ -179,7 +178,7 @@ typedef struct DominoOrg {
     domino_space_id_t space_id;
     domino_space_area_id_t space_area_id;
     uint8_t region_index;
-    uint8_t own_asset_list_count;
+    uint8_t own_asset_count;
 
     uint8_t other_info[12];  ///< 预留，不持久化。
 
@@ -207,9 +206,8 @@ typedef struct DominoCountry {
     domino_country_id_t id;
     domino_wealth_value_t wealth;
 
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
 
-    // 主要负责人列表
     domino_human_id_t main_leader_id_list[DOMINO_MAX_MAIN_LEADER_COUNT_PER_COUNTRY];
 
     uint16_t human_count;
@@ -256,24 +254,25 @@ typedef struct DominoAsset {
             int32_t x;
             int32_t y;
             int32_t z;
-        } position_info;
+        } position;
     };
 
-    domino_movable_object_id_t movable_object_id;  // 运动物体ID，为0表示无
+    domino_movable_object_id_t movable_object_id;  ///< 运动物体 ID，0 表示无。
 
-    uint32_t production_time;
-    uint32_t expiration_time;
-    uint32_t sales_time;
-    uint32_t dealer_time;
-    uint32_t trade_time;
+    /* 各环节发生的业务时刻。 */
+    domino_runtime_ms_t production_at_ms;
+    domino_runtime_ms_t expiration_at_ms;
+    domino_runtime_ms_t sales_at_ms;
+    domino_runtime_ms_t dealer_at_ms;
+    domino_runtime_ms_t trade_at_ms;
 
     domino_country_id_t country_id;
     domino_island_id_t island_id;
     domino_city_id_t city_id;
     domino_building_id_t building_id;
-    domino_fork_road_id_t address_id;
+    domino_fork_road_id_t fork_road_id;
 
-    uint32_t outer_host_country_id;  // 在外宿主世界的国家ID
+    uint32_t outer_host_country_id;  ///< 在外部宿主世界中的国家 ID。
 
     uint16_t count;
     uint16_t idle;

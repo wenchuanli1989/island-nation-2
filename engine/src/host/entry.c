@@ -4,36 +4,36 @@
 
 #include "domino_shared_common.h"
 
-DominoGlobalIncrementID g_domino_global_increment_id;
+DominoIdCounters g_domino_id_counters;
 DominoRegion g_domino_region_list[DOMINO_MAX_REGION_COUNT];
 
-DominoIslandVec domino_all_island_list;
-DominoMovableObjectVec domino_all_movable_object_list;
+DominoIslandVec g_domino_island_list;
+DominoMovableObjectVec g_domino_movable_object_list;
 
-DominoIslandIDMap* dominoIslandIdMap;
-DominoMovableObjectIDMap* dominoMovableObjectIdMap;
+DominoIslandIdMap* g_domino_island_id_map;
+DominoMovableObjectIdMap* g_domino_movable_object_id_map;
 
 uint32_t g_domino_region_count = 0;
 
-/** @brief 销毁时清空世界固定状态，原子成员逐项复位。 */
-static void dominoHostResetWorldState(void) {
+/** @brief 清零全局 ID 计数器和地域状态；原子成员须逐项写入。 */
+static void resetWorldState(void) {
     g_domino_region_count = 0;
 
-    atomic_store_explicit(&g_domino_global_increment_id.human_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.motivation_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.task_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.behavior_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.org_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.country_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.city_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.island_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.building_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.fork_road_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.asset_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.movable_object_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.name_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.description_increment_id, 0U, memory_order_relaxed);
-    atomic_store_explicit(&g_domino_global_increment_id.road_line_increment_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_human_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.last_motivation_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.last_task_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.last_behavior_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_org_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_country_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_city_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_island_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_building_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_fork_road_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_asset_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_movable_object_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_name_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_description_id, 0U, memory_order_relaxed);
+    atomic_store_explicit(&g_domino_id_counters.next_road_line_id, 0U, memory_order_relaxed);
 
     for (uint32_t region_index = 0; region_index < (uint32_t)DOMINO_MAX_REGION_COUNT; region_index++) {
         DominoRegion* region_ptr = &g_domino_region_list[region_index];
@@ -51,41 +51,41 @@ static void dominoHostResetWorldState(void) {
     }
 }
 
-DominoIsland* dominoGetIslandByID(domino_island_id_t island_id) {
-    khint_t key = dominoIslandIdMap_get(dominoIslandIdMap, island_id);
-    if (kh_exist(dominoIslandIdMap, key)) {
-        return &kv_A(domino_all_island_list, kh_val(dominoIslandIdMap, key));
+DominoIsland* dominoGetIslandById(domino_island_id_t island_id) {
+    khint_t key = dominoIslandIdMap_get(g_domino_island_id_map, island_id);
+    if (kh_exist(g_domino_island_id_map, key)) {
+        return &kv_A(g_domino_island_list, kh_val(g_domino_island_id_map, key));
     }
     return nullptr;
 }
 
-DominoMovableObject* dominoGetMovableObjectByID(domino_movable_object_id_t movable_object_id) {
-    khint_t key = dominoMovableObjectIdMap_get(dominoMovableObjectIdMap, movable_object_id);
-    if (kh_exist(dominoMovableObjectIdMap, key)) {
-        return &kv_A(domino_all_movable_object_list, kh_val(dominoMovableObjectIdMap, key));
+DominoMovableObject* dominoGetMovableObjectById(domino_movable_object_id_t movable_object_id) {
+    khint_t key = dominoMovableObjectIdMap_get(g_domino_movable_object_id_map, movable_object_id);
+    if (kh_exist(g_domino_movable_object_id_map, key)) {
+        return &kv_A(g_domino_movable_object_list, kh_val(g_domino_movable_object_id_map, key));
     }
     return nullptr;
 }
 
 void dominoHostModuleInit(void) {
-    dominoIslandIdMap = dominoIslandIdMap_init();
-    if (!dominoIslandIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoIslandIdMap");
+    g_domino_island_id_map = dominoIslandIdMap_init();
+    if (!g_domino_island_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate island ID map");
     }
-    dominoMovableObjectIdMap = dominoMovableObjectIdMap_init();
-    if (!dominoMovableObjectIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoMovableObjectIdMap");
+    g_domino_movable_object_id_map = dominoMovableObjectIdMap_init();
+    if (!g_domino_movable_object_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate movable object ID map");
     }
 }
 
 void dominoHostModuleDestroy(void) {
-    dominoMovableObjectIdMap_destroy(dominoMovableObjectIdMap);
-    dominoMovableObjectIdMap = nullptr;
-    dominoIslandIdMap_destroy(dominoIslandIdMap);
-    dominoIslandIdMap = nullptr;
-    kv_destroy(domino_all_movable_object_list);
-    kv_init(domino_all_movable_object_list);
-    kv_destroy(domino_all_island_list);
-    kv_init(domino_all_island_list);
-    dominoHostResetWorldState();
+    dominoMovableObjectIdMap_destroy(g_domino_movable_object_id_map);
+    g_domino_movable_object_id_map = nullptr;
+    dominoIslandIdMap_destroy(g_domino_island_id_map);
+    g_domino_island_id_map = nullptr;
+    kv_destroy(g_domino_movable_object_list);
+    kv_init(g_domino_movable_object_list);
+    kv_destroy(g_domino_island_list);
+    kv_init(g_domino_island_list);
+    resetWorldState();
 }

@@ -64,7 +64,7 @@ void dominoFlushAndCloseFile(FILE* file_ptr) {
     }
 }
 
-int dominoFlushFile(FILE* file_ptr) {
+int dominoSyncFile(FILE* file_ptr) {
     int result = fflush(file_ptr);
     if (result != 0) {
         return result;
@@ -72,11 +72,11 @@ int dominoFlushFile(FILE* file_ptr) {
     return fsync(fileno(file_ptr));
 }
 
-int dominoRename(const char* tmp_path, const char* final_path) {
-    return rename(tmp_path, final_path);
+int dominoRename(const char* source_path, const char* target_path) {
+    return rename(source_path, target_path);
 }
 
-DOMINO_CODE dominoAtomicWriteFile(const char* path, const void* data, size_t len) {
+DOMINO_CODE dominoWriteFileAtomic(const char* path, const void* data, size_t len) {
     if (!path || !data) {
         return ERR_NULL_POINTER;
     }
@@ -108,7 +108,7 @@ DOMINO_CODE dominoAtomicWriteFile(const char* path, const void* data, size_t len
         code = ERR_FILE_WRITE;
         goto close_file;
     }
-    if (dominoFlushFile(file_ptr) != 0) {
+    if (dominoSyncFile(file_ptr) != 0) {
         code = ERR_FILE_FLUSH;
         goto close_file;
     }
@@ -140,8 +140,7 @@ DOMINO_CODE dominoPathSplitParentBase(const char* path, char* parent, size_t par
 
     size_t sep_index = len;
     for (size_t i = len; i > 0U; i--) {
-        char chr = path[i - 1U];
-        if (chr == '/') {
+        if (path[i - 1U] == '/') {
             sep_index = i - 1U;
             break;
         }
@@ -202,7 +201,6 @@ DOMINO_CODE dominoMkdirRecursive(const char* path) {
         }
         char saved_char = path_buffer[char_index];
         path_buffer[char_index] = '\0';
-        // 非空路径且 char_index >= 1，当前前缀一定非空。
         if (mkdir(path_buffer, 0755) != 0 && errno != EEXIST) {
             return ERR_DIRECTORY_CREATE;
         }
@@ -218,7 +216,7 @@ DOMINO_CODE dominoMkdirRecursive(const char* path) {
     return CODE_OK;
 }
 
-uint64_t dominoWallTimeMs(void) {
+uint64_t dominoGetWallTimeMs(void) {
     struct timespec wall_time;
     if (timespec_get(&wall_time, TIME_UTC) != TIME_UTC) {
         DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "UTC clock sampling failed");
@@ -226,7 +224,7 @@ uint64_t dominoWallTimeMs(void) {
     return ((uint64_t)wall_time.tv_sec * 1000ULL) + ((uint64_t)wall_time.tv_nsec / 1000000ULL);
 }
 
-uint64_t dominoMonotonicTimeNs(void) {
+uint64_t dominoGetMonotonicTimeNs(void) {
     struct timespec time_spec;
     if (timespec_get(&time_spec, TIME_MONOTONIC) != TIME_MONOTONIC) {
         DOMINO_EXIT_WITH_ERROR(ERR_CLOCK_READ, "monotonic clock sampling failed");
@@ -259,9 +257,9 @@ __attribute__((hot)) DOMINO_CODE dominoFormatUtcTimestampNow(char* out_ptr, size
         return ERR_OUT_OF_RANGE;
     }
 
-    long millisecond_ms = time_spec.tv_nsec / 1000000L;
+    long milliseconds = time_spec.tv_nsec / 1000000L;
     int written = snprintf(out_ptr, out_len, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ", tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
-                           tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, millisecond_ms);
+                           tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, milliseconds);
     if (written < 0) {
         out_ptr[0] = '\0';
         return ERR_STRING_FORMAT;

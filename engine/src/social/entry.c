@@ -2,182 +2,182 @@
 
 #include "domino_shared_common.h"
 
-DominoOrgVec domino_all_org_list;
-DominoBuildingVec domino_all_building_list;
-DominoAssetVec domino_all_asset_list;
-DominoCountryVec domino_all_country_list;
-DominoCityVec domino_all_city_list;
+DominoOrgVec g_domino_org_list;
+DominoBuildingVec g_domino_building_list;
+DominoAssetVec g_domino_asset_list;
+DominoCountryVec g_domino_country_list;
+DominoCityVec g_domino_city_list;
 
-DominoOrgDataVec domino_all_org_data_list;
-DominoBuildingDataVec domino_all_building_data_list;
-DominoCityDataVec domino_all_city_data_list;
-DominoCountryDataVec domino_all_country_data_list;
+DominoOrgDataVec g_domino_org_data_list;
+DominoBuildingDataVec g_domino_building_data_list;
+DominoCityDataVec g_domino_city_data_list;
+DominoCountryDataVec g_domino_country_data_list;
 
-DominoBuildingIDMap* dominoBuildingIdMap;
+DominoBuildingIdMap* g_domino_building_id_map;
 
-DominoAssetIDMap* dominoAssetIdMap;
-DominoCountryIDMap* dominoCountryIdMap;
-DominoCityIDMap* dominoCityIdMap;
-DominoOrgIDMap* dominoOrgIdMap;
+DominoAssetIdMap* g_domino_asset_id_map;
+DominoCountryIdMap* g_domino_country_id_map;
+DominoCityIdMap* g_domino_city_id_map;
+DominoOrgIdMap* g_domino_org_id_map;
 
-DominoOrgDataIDMap* dominoOrgDataIdMap;
-DominoBuildingDataIDMap* dominoBuildingDataIdMap;
-DominoCityDataIDMap* dominoCityDataIdMap;
-DominoCountryDataIDMap* dominoCountryDataIdMap;
+DominoOrgDataIdMap* g_domino_org_data_id_map;
+DominoBuildingDataIdMap* g_domino_building_data_id_map;
+DominoCityDataIdMap* g_domino_city_data_id_map;
+DominoCountryDataIdMap* g_domino_country_data_id_map;
 
-DominoAsset* dominoGetAssetByID(domino_asset_id_t asset_id) {
-    khint_t key = dominoAssetIdMap_get(dominoAssetIdMap, asset_id);
-    if (kh_exist(dominoAssetIdMap, key)) {
-        return &kv_A(domino_all_asset_list, kh_val(dominoAssetIdMap, key));
+DominoAsset* dominoGetAssetById(domino_asset_id_t asset_id) {
+    khint_t key = dominoAssetIdMap_get(g_domino_asset_id_map, asset_id);
+    if (kh_exist(g_domino_asset_id_map, key)) {
+        return &kv_A(g_domino_asset_list, kh_val(g_domino_asset_id_map, key));
     }
     return nullptr;
 }
 
-DominoOrg* dominoGetOrgByID(domino_org_id_t org_id) {
-    khint_t key = dominoOrgIdMap_get(dominoOrgIdMap, org_id);
-    if (kh_exist(dominoOrgIdMap, key)) {
-        return &kv_A(domino_all_org_list, kh_val(dominoOrgIdMap, key));
+DominoOrg* dominoGetOrgById(domino_org_id_t org_id) {
+    khint_t key = dominoOrgIdMap_get(g_domino_org_id_map, org_id);
+    if (kh_exist(g_domino_org_id_map, key)) {
+        return &kv_A(g_domino_org_list, kh_val(g_domino_org_id_map, key));
     }
     return nullptr;
 }
 
-DominoBuilding* dominoGetBuildingByID(domino_building_id_t building_id) {
-    khint_t key = dominoBuildingIdMap_get(dominoBuildingIdMap, building_id);
-    if (kh_exist(dominoBuildingIdMap, key)) {
-        return &kv_A(domino_all_building_list, kh_val(dominoBuildingIdMap, key));
+DominoBuilding* dominoGetBuildingById(domino_building_id_t building_id) {
+    khint_t key = dominoBuildingIdMap_get(g_domino_building_id_map, building_id);
+    if (kh_exist(g_domino_building_id_map, key)) {
+        return &kv_A(g_domino_building_list, kh_val(g_domino_building_id_map, key));
     }
     return nullptr;
 }
 
-DominoCity* dominoGetCityByID(domino_city_id_t city_id) {
-    khint_t key = dominoCityIdMap_get(dominoCityIdMap, city_id);
-    if (kh_exist(dominoCityIdMap, key)) {
-        return &kv_A(domino_all_city_list, kh_val(dominoCityIdMap, key));
+DominoCity* dominoGetCityById(domino_city_id_t city_id) {
+    khint_t key = dominoCityIdMap_get(g_domino_city_id_map, city_id);
+    if (kh_exist(g_domino_city_id_map, key)) {
+        return &kv_A(g_domino_city_list, kh_val(g_domino_city_id_map, key));
     }
     return nullptr;
 }
 
-DominoCountry* dominoGetCountryByID(domino_country_id_t country_id) {
-    khint_t key = dominoCountryIdMap_get(dominoCountryIdMap, country_id);
-    if (kh_exist(dominoCountryIdMap, key)) {
-        return &kv_A(domino_all_country_list, kh_val(dominoCountryIdMap, key));
+DominoCountry* dominoGetCountryById(domino_country_id_t country_id) {
+    khint_t key = dominoCountryIdMap_get(g_domino_country_id_map, country_id);
+    if (kh_exist(g_domino_country_id_map, key)) {
+        return &kv_A(g_domino_country_list, kh_val(g_domino_country_id_map, key));
     }
     return nullptr;
 }
 
-DominoOrgData* dominoGetOrgDataByID(domino_data_id_t data_id) {
-    khint_t key = dominoOrgDataIdMap_get(dominoOrgDataIdMap, data_id);
-    if (!kh_exist(dominoOrgDataIdMap, key)) {
+DominoOrgData* dominoGetOrgDataById(domino_data_id_t data_id) {
+    khint_t key = dominoOrgDataIdMap_get(g_domino_org_data_id_map, data_id);
+    if (!kh_exist(g_domino_org_data_id_map, key)) {
         return nullptr;
     }
-    return &kv_A(domino_all_org_data_list, kh_val(dominoOrgDataIdMap, key));
+    return &kv_A(g_domino_org_data_list, kh_val(g_domino_org_data_id_map, key));
 }
 
-DominoBuildingData* dominoGetBuildingDataByID(domino_data_id_t data_id) {
-    khint_t key = dominoBuildingDataIdMap_get(dominoBuildingDataIdMap, data_id);
-    if (!kh_exist(dominoBuildingDataIdMap, key)) {
+DominoBuildingData* dominoGetBuildingDataById(domino_data_id_t data_id) {
+    khint_t key = dominoBuildingDataIdMap_get(g_domino_building_data_id_map, data_id);
+    if (!kh_exist(g_domino_building_data_id_map, key)) {
         return nullptr;
     }
-    return &kv_A(domino_all_building_data_list, kh_val(dominoBuildingDataIdMap, key));
+    return &kv_A(g_domino_building_data_list, kh_val(g_domino_building_data_id_map, key));
 }
 
-DominoCityData* dominoGetCityDataByID(domino_data_id_t data_id) {
-    khint_t key = dominoCityDataIdMap_get(dominoCityDataIdMap, data_id);
-    if (!kh_exist(dominoCityDataIdMap, key)) {
+DominoCityData* dominoGetCityDataById(domino_data_id_t data_id) {
+    khint_t key = dominoCityDataIdMap_get(g_domino_city_data_id_map, data_id);
+    if (!kh_exist(g_domino_city_data_id_map, key)) {
         return nullptr;
     }
-    return &kv_A(domino_all_city_data_list, kh_val(dominoCityDataIdMap, key));
+    return &kv_A(g_domino_city_data_list, kh_val(g_domino_city_data_id_map, key));
 }
 
-DominoCountryData* dominoGetCountryDataByID(domino_data_id_t data_id) {
-    khint_t key = dominoCountryDataIdMap_get(dominoCountryDataIdMap, data_id);
-    if (!kh_exist(dominoCountryDataIdMap, key)) {
+DominoCountryData* dominoGetCountryDataById(domino_data_id_t data_id) {
+    khint_t key = dominoCountryDataIdMap_get(g_domino_country_data_id_map, data_id);
+    if (!kh_exist(g_domino_country_data_id_map, key)) {
         return nullptr;
     }
-    return &kv_A(domino_all_country_data_list, kh_val(dominoCountryDataIdMap, key));
+    return &kv_A(g_domino_country_data_list, kh_val(g_domino_country_data_id_map, key));
 }
 
 void dominoSocialModuleInit(void) {
-    dominoOrgIdMap = dominoOrgIdMap_init();
-    if (!dominoOrgIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoOrgIdMap");
+    g_domino_org_id_map = dominoOrgIdMap_init();
+    if (!g_domino_org_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate org ID map");
     }
-    dominoCountryIdMap = dominoCountryIdMap_init();
-    if (!dominoCountryIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoCountryIdMap");
+    g_domino_country_id_map = dominoCountryIdMap_init();
+    if (!g_domino_country_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate country ID map");
     }
-    dominoCityIdMap = dominoCityIdMap_init();
-    if (!dominoCityIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoCityIdMap");
+    g_domino_city_id_map = dominoCityIdMap_init();
+    if (!g_domino_city_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate city ID map");
     }
-    dominoBuildingIdMap = dominoBuildingIdMap_init();
-    if (!dominoBuildingIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoBuildingIdMap");
-    }
-
-    dominoAssetIdMap = dominoAssetIdMap_init();
-    if (!dominoAssetIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoAssetIdMap");
+    g_domino_building_id_map = dominoBuildingIdMap_init();
+    if (!g_domino_building_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate building ID map");
     }
 
-    dominoOrgDataIdMap = dominoOrgDataIdMap_init();
-    if (!dominoOrgDataIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoOrgDataIdMap");
+    g_domino_asset_id_map = dominoAssetIdMap_init();
+    if (!g_domino_asset_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate asset ID map");
     }
-    dominoBuildingDataIdMap = dominoBuildingDataIdMap_init();
-    if (!dominoBuildingDataIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoBuildingDataIdMap");
+
+    g_domino_org_data_id_map = dominoOrgDataIdMap_init();
+    if (!g_domino_org_data_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate org data ID map");
     }
-    dominoCityDataIdMap = dominoCityDataIdMap_init();
-    if (!dominoCityDataIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoCityDataIdMap");
+    g_domino_building_data_id_map = dominoBuildingDataIdMap_init();
+    if (!g_domino_building_data_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate building data ID map");
     }
-    dominoCountryDataIdMap = dominoCountryDataIdMap_init();
-    if (!dominoCountryDataIdMap) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate dominoCountryDataIdMap");
+    g_domino_city_data_id_map = dominoCityDataIdMap_init();
+    if (!g_domino_city_data_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate city data ID map");
+    }
+    g_domino_country_data_id_map = dominoCountryDataIdMap_init();
+    if (!g_domino_country_data_id_map) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate country data ID map");
     }
 }
 
 void dominoSocialModuleDestroy(void) {
-    dominoAssetIdMap_destroy(dominoAssetIdMap);
-    dominoAssetIdMap = nullptr;
+    dominoAssetIdMap_destroy(g_domino_asset_id_map);
+    g_domino_asset_id_map = nullptr;
 
-    dominoBuildingIdMap_destroy(dominoBuildingIdMap);
-    dominoBuildingIdMap = nullptr;
-    dominoCityIdMap_destroy(dominoCityIdMap);
-    dominoCityIdMap = nullptr;
-    dominoCountryIdMap_destroy(dominoCountryIdMap);
-    dominoCountryIdMap = nullptr;
-    dominoOrgIdMap_destroy(dominoOrgIdMap);
-    dominoOrgIdMap = nullptr;
+    dominoBuildingIdMap_destroy(g_domino_building_id_map);
+    g_domino_building_id_map = nullptr;
+    dominoCityIdMap_destroy(g_domino_city_id_map);
+    g_domino_city_id_map = nullptr;
+    dominoCountryIdMap_destroy(g_domino_country_id_map);
+    g_domino_country_id_map = nullptr;
+    dominoOrgIdMap_destroy(g_domino_org_id_map);
+    g_domino_org_id_map = nullptr;
 
-    dominoCountryDataIdMap_destroy(dominoCountryDataIdMap);
-    dominoCountryDataIdMap = nullptr;
-    dominoCityDataIdMap_destroy(dominoCityDataIdMap);
-    dominoCityDataIdMap = nullptr;
-    dominoBuildingDataIdMap_destroy(dominoBuildingDataIdMap);
-    dominoBuildingDataIdMap = nullptr;
-    dominoOrgDataIdMap_destroy(dominoOrgDataIdMap);
-    dominoOrgDataIdMap = nullptr;
+    dominoCountryDataIdMap_destroy(g_domino_country_data_id_map);
+    g_domino_country_data_id_map = nullptr;
+    dominoCityDataIdMap_destroy(g_domino_city_data_id_map);
+    g_domino_city_data_id_map = nullptr;
+    dominoBuildingDataIdMap_destroy(g_domino_building_data_id_map);
+    g_domino_building_data_id_map = nullptr;
+    dominoOrgDataIdMap_destroy(g_domino_org_data_id_map);
+    g_domino_org_data_id_map = nullptr;
 
-    kv_destroy(domino_all_country_data_list);
-    kv_init(domino_all_country_data_list);
-    kv_destroy(domino_all_city_data_list);
-    kv_init(domino_all_city_data_list);
-    kv_destroy(domino_all_building_data_list);
-    kv_init(domino_all_building_data_list);
-    kv_destroy(domino_all_org_data_list);
-    kv_init(domino_all_org_data_list);
+    kv_destroy(g_domino_country_data_list);
+    kv_init(g_domino_country_data_list);
+    kv_destroy(g_domino_city_data_list);
+    kv_init(g_domino_city_data_list);
+    kv_destroy(g_domino_building_data_list);
+    kv_init(g_domino_building_data_list);
+    kv_destroy(g_domino_org_data_list);
+    kv_init(g_domino_org_data_list);
 
-    kv_destroy(domino_all_asset_list);
-    kv_init(domino_all_asset_list);
+    kv_destroy(g_domino_asset_list);
+    kv_init(g_domino_asset_list);
 
-    kv_destroy(domino_all_building_list);
-    kv_init(domino_all_building_list);
-    kv_destroy(domino_all_city_list);
-    kv_init(domino_all_city_list);
-    kv_destroy(domino_all_country_list);
-    kv_init(domino_all_country_list);
-    kv_destroy(domino_all_org_list);
-    kv_init(domino_all_org_list);
+    kv_destroy(g_domino_building_list);
+    kv_init(g_domino_building_list);
+    kv_destroy(g_domino_city_list);
+    kv_init(g_domino_city_list);
+    kv_destroy(g_domino_country_list);
+    kv_init(g_domino_country_list);
+    kv_destroy(g_domino_org_list);
+    kv_init(g_domino_org_list);
 }

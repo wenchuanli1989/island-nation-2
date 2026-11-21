@@ -8,13 +8,12 @@
 #include "domino_shared_human_task.h"
 
 /** @file entry.h
- * @brief 任务统一接口：只读决策、计划缺口、应激选择、外部输入处理及计划查询辅助；具体任务类型实现本类型规则。
- * @note 定时推进、外部条件变化、行为依赖变化、候选提交后的检查和 Stop 都调用同一个只读决策入口；
- * 决策只返回选择，由推进层协调并通过统一应用入口写入，任务规则不自行启动后继、递归推进或收发消息。
- * 同一时间只有一个运行任务；运行任务的三个通道各至多一个当前行为，任务成功证明只取主通道行为。
+ * @brief 任务规则接口：每种任务类型实现只读决策、计划缺口、应激选择和外部输入处理。
+ * @note 所有边界检查（定时推进、条件变化、依赖变化、候选提交、Stop）都调用同一个只读决策；决策只返回选择，
+ * 由推进层统一应用，规则本身不写世界、不启动任务。任务的成功证明只取主通道行为。
  */
 
-/** @brief 任务决策的只读输入；行为可以是局部副本，便于预测复用同一决策。 */
+/** @brief 任务决策的只读输入；行为可以是局部副本，预测与结算复用同一决策。 */
 typedef struct DominoTaskDecisionInput {
     const DominoTask* task_ptr;
     const DominoBehavior* behavior_list[DOMINO_BEHAVIOR_CHANNEL_COUNT];  ///< 各通道当前未终结行为，没有时为空指针。
@@ -34,7 +33,7 @@ typedef enum {
     DOMINO_TASK_DECISION_COUNT,
 } DOMINO_TASK_DECISION_KIND;
 
-/** @brief 决策结果：选择、REPAIR 终结的通道及终态、原因。 */
+/** @brief 决策结果。 */
 typedef struct DominoTaskDecision {
     uint8_t kind;                 ///< DOMINO_TASK_DECISION_KIND。
     uint8_t behavior_end_status;  ///< REPAIR 时当前行为的终态：CANCELLED 或 FAILED。
@@ -49,33 +48,33 @@ typedef enum {
     DOMINO_TASK_REACTION_COUNT,
 } DOMINO_TASK_REACTION;
 
-/** @brief 每种任务类型的规则；全部函数指针必须非空。 */
+/** @brief 每种任务类型的规则；函数指针都不能为空。 */
 typedef struct DominoTaskRules {
-    /** @brief 统一只读决策；成功必须同时满足类型完成条件与本任务已归并的主行为成功证明。 */
+    /** @brief 只读决策；成功须同时满足类型的完成条件和主行为成功证明。 */
     DominoTaskDecision (*decide)(const DominoTaskDecisionInput* input_ptr);
-    /** @brief 自身剩余工作是否缺少可行安排（需要行为规划）；只读，不考虑插入的辅助步骤。 */
+    /** @brief 自身剩余工作是否缺少安排（需要行为规划）；不计插入的辅助步骤。 */
     bool (*has_plan_gap)(const DominoTaskDecisionInput* input_ptr);
-    /** @brief 当前条件下是否值得发起行为规划；条件明确受阻时等待事件。 */
+    /** @brief 当前条件下是否值得发起行为规划；条件明确受阻时返回 false，等条件变化。 */
     bool (*can_plan_behavior)(const DominoTaskDecisionInput* input_ptr);
-    /** @brief 应激：作为运行任务遇到待处理外部信息时选择完全让位或接受插入；只读，返回 DOMINO_TASK_REACTION。 */
+    /** @brief 应激：作为运行任务遇到外部信息时选择完全让位或接受插入，返回 DOMINO_TASK_REACTION。 */
     uint8_t (*react)(const DominoTaskDecisionInput* input_ptr, uint8_t stimulus_kind);
-    /** @brief 外部精力输入写入后调用，可记录本类型需要的输入事实；在决策之前执行。 */
+    /** @brief 外部精力输入写入后、决策之前调用，记录本类型需要的输入事实。 */
     void (*on_energy_input)(DominoTask* task_ptr, uint8_t energy);
 } DominoTaskRules;
 
-/** @brief 查询任务类型规则；未实现返回空指针。 */
+/** @brief 任务类型的规则，未实现返回空指针。 */
 const DominoTaskRules* dominoHumanGetTaskRules(uint8_t type);
 
-/** @brief 截止点检查：返回 now 是否仍在允许完成的范围内（包含或不包含截止时刻按任务标志）。 */
-bool dominoHumanTaskWithinDeadline(const DominoTask* task_ptr, domino_runtime_ms_t now_ms);
+/** @brief now_ms 是否仍在截止点之内（截止时刻本身是否算按时由任务标志决定）。 */
+bool dominoHumanTaskIsWithinDeadline(const DominoTask* task_ptr, domino_runtime_ms_t now_ms);
 
-/** @brief 任务自身（非插入）在 channel_mask 所列通道上是否仍有当前行为或未来步骤。 */
+/** @brief 任务自身（非插入）在 channel_mask 通道上是否还有当前行为或未来步骤。 */
 bool dominoHumanTaskHasOwnWork(const DominoTaskDecisionInput* input_ptr, uint8_t channel_mask);
 
-/** @brief 是否仍有插入的辅助行为在运行或插入的辅助步骤尚未启动。 */
+/** @brief 是否还有插入的辅助行为在运行，或插入的辅助步骤尚未启动。 */
 bool dominoHumanTaskHasInsertedWork(const DominoTaskDecisionInput* input_ptr);
 
-/** @brief 未来步骤中是否有依赖已确定不可满足、永远不能启动的步骤。 */
+/** @brief 未来步骤中是否有依赖已失效、永远不能启动的步骤。 */
 bool dominoHumanTaskHasBrokenStep(const DominoTask* task_ptr);
 
 /** @brief 全部通道的位集合。 */

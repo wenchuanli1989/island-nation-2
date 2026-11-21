@@ -35,7 +35,7 @@ domino/
 
 - **引擎生命周期：** 对外只允许 `Init → Start → Stop → Destroy`；只调用过 Init 的实例也须先 Stop 再 Destroy。销毁后可在同一进程重新 Init 并切换存档。非法顺序或错误线程调用直接报错退出。详见宪法第一章和 AGENTS.md 的「生命周期实现」。
 - **骨架模块：** client-hub、engine-remote/local 目前只管理各自的日志资源，提供四阶段入口（如 `dominoClientHubInit()`），尚未代管引擎。
-- **客户端通道：** `dominoEnginePushMsg()`／`dominoEnginePopMsg()` 只有通道骨架，尚未定义任何业务场景，主循环会丢弃收到的消息。
+- **客户端通道：** `dominoEngineSendMessage()`／`dominoEngineReceiveMessage()` 只有通道骨架，尚未定义任何业务场景，主循环会丢弃收到的消息。
 - **NPC AI：** 第一阶段只实现恢复精力动机与自主睡眠。
 - **存档：** JSON 格式，不兼容旧格式；同一存档目录不允许多个进程同时使用。样例存档位于 `playground/sandbox/domino`。
 
@@ -81,7 +81,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ./scripts/build.sh playground-build playground/算法/路径规划/弗洛伊德/main.c debug  # 只构建
 ```
 
-默认 Playground 会完成一次引擎生命周期后退出，例如 `(cd build-debug && ./bin/domino-playground)`。存档写在 `build-debug/runtime/sandbox/`，再次运行会加载该存档。
+默认 Playground 会完成一次引擎生命周期后退出，例如 `./build-debug/bin/domino-playground`。存档写在可执行文件所在构建目录的 `runtime/sandbox/`（如 `build-debug/runtime/sandbox/`），与工作目录无关，再次运行会加载该存档。
 
 ### NPC AI 验证
 

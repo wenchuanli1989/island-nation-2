@@ -6,7 +6,7 @@ static DominoTaskDecision decideSleepTask(const DominoTaskDecisionInput* input_p
     const bool target_reached = input_ptr->energy >= task_ptr->target_value;
     const bool externally_satisfied = (task_ptr->flags & DOMINO_TASK_FLAG_NEED_SATISFIED_EXTERNALLY) != 0U;
     if (task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE) {
-        /* 未启动工作没有成功行为；需求已被满足时撤销计划并结束本轮。 */
+        // 未启动的任务没有成功行为；需求已满足时撤销，结束本轮。
         if (externally_satisfied || target_reached) {
             return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_REVOKE, .reason = DOMINO_END_REASON_NEED_SATISFIED};
         }
@@ -25,7 +25,7 @@ static DominoTaskDecision decideSleepTask(const DominoTaskDecisionInput* input_p
         if (externally_satisfied && task_ptr->main_succeeded_count == 0U) {
             return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_CANCEL, .reason = DOMINO_END_REASON_NEED_SATISFIED};
         }
-        /* 自身睡眠恢复的精力可能早于行为目标时长达到指标；主行为结束后再判定任务成功。 */
+        // 精力可能早于行为目标时长达标；等主行为结束后再判定成功。
         return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_CONTINUE};
     }
     if (target_reached && task_ptr->main_succeeded_count == 0U) {
@@ -34,7 +34,7 @@ static DominoTaskDecision decideSleepTask(const DominoTaskDecisionInput* input_p
     return (DominoTaskDecision){.kind = DOMINO_TASK_DECISION_CONTINUE};
 }
 
-/** @brief 主通道既没有当前行为也没有自身步骤，或有依赖失效的步骤，就缺少安排。 */
+/** @brief 有依赖失效的步骤，或主通道既无当前行为也无自身步骤时，缺少安排。 */
 static bool hasSleepPlanGap(const DominoTaskDecisionInput* input_ptr) {
     return dominoHumanTaskHasBrokenStep(input_ptr->task_ptr) || !dominoHumanTaskHasOwnWork(input_ptr, 1U << DOMINO_BEHAVIOR_CHANNEL_MAIN);
 }
@@ -43,7 +43,7 @@ static bool canPlanSleepBehavior(const DominoTaskDecisionInput* input_ptr) {
     return !input_ptr->condition.sleep_forbidden_flag;
 }
 
-/** @brief 睡眠中不能同时回应联系：完全让位，回应完成后再修复剩余睡眠。 */
+/** @brief 睡眠中不能同时回应联系：完全让位，回应结束后再修复剩余睡眠。 */
 static uint8_t reactSleep(const DominoTaskDecisionInput* input_ptr, uint8_t stimulus_kind) {
     (void)input_ptr;
     (void)stimulus_kind;
@@ -56,7 +56,7 @@ static void onSleepEnergyInput(DominoTask* task_ptr, uint8_t energy) {
     }
 }
 
-const DominoTaskRules domino_sleep_task_rules = {
+const DominoTaskRules g_domino_sleep_task_rules = {
     .decide = decideSleepTask,
     .has_plan_gap = hasSleepPlanGap,
     .can_plan_behavior = canPlanSleepBehavior,

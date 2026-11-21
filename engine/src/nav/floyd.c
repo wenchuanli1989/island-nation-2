@@ -3,113 +3,104 @@
 #include <assert.h>
 #include <time.h>
 
-static void initPathMatrix(domino_nav_vertex_index_t vertex_num, const VertexEdges* vertices, PathInfo (*path_matrix)[vertex_num]) {
-    for (uint16_t source_vertex_index = 0; source_vertex_index < vertex_num; source_vertex_index++) {
-        PathInfo* const source_info = path_matrix[source_vertex_index];
-        for (uint16_t target_vertex_index = 0; target_vertex_index < vertex_num; target_vertex_index++) {
-            PathInfo* const path_info = &(source_info[target_vertex_index]);
-            path_info->min_weight = WEIGHT_INFINITY;
-            path_info->pre_vertex_index = PRE_VERTEX_NULL;
-            path_info->pre_road_fork_id = 0;
+/** @brief 自身距离为 0，直接出边取边权并以起点为前驱，其余不可达。 */
+static void initPathMatrix(domino_nav_vertex_index_t vertex_count, const DominoNavVertexEdges* vertex_list,
+                           DominoNavPathCell (*path_matrix)[vertex_count]) {
+    for (domino_nav_vertex_index_t source_index = 0; source_index < vertex_count; source_index++) {
+        DominoNavPathCell* const source_row = path_matrix[source_index];
+        for (domino_nav_vertex_index_t target_index = 0; target_index < vertex_count; target_index++) {
+            DominoNavPathCell* const cell_ptr = &source_row[target_index];
+            cell_ptr->min_weight = DOMINO_NAV_WEIGHT_INFINITY;
+            cell_ptr->pre_vertex_index = DOMINO_NAV_VERTEX_NONE;
+            cell_ptr->pre_fork_road_id = 0;
         }
-        PathInfo* const self_path_info = &(source_info[source_vertex_index]);
-        self_path_info->min_weight = 0;
+        source_row[source_index].min_weight = 0;
 
-        const VertexEdges* const vert_edges = &vertices[source_vertex_index];
-        for (int i = 0; i < vert_edges->count; i++) {
-            const Edge* const edge = &(vert_edges->edges[i]);
-            PathInfo* const target_path_info = &(source_info[edge->target_vertex_index]);
-            target_path_info->min_weight = edge->weight;
-            target_path_info->pre_vertex_index = source_vertex_index;
-            target_path_info->pre_road_fork_id = vert_edges->road_fork_id;
+        const DominoNavVertexEdges* const vertex_ptr = &vertex_list[source_index];
+        for (uint8_t edge_index = 0; edge_index < vertex_ptr->edge_count; edge_index++) {
+            const DominoNavEdge* const edge_ptr = &vertex_ptr->edge_list[edge_index];
+            DominoNavPathCell* const cell_ptr = &source_row[edge_ptr->target_vertex_index];
+            cell_ptr->min_weight = edge_ptr->weight;
+            cell_ptr->pre_vertex_index = source_index;
+            cell_ptr->pre_fork_road_id = vertex_ptr->fork_road_id;
         }
     }
 }
 
-static void floydCore(domino_nav_vertex_index_t vertex_num, PathInfo (*path_matrix)[vertex_num], FloydPathPlanningResult* result) {
-    /* 中间顶点必须位于最外层，逐轮扩大允许经过的顶点集合。 */
-    for (domino_nav_vertex_index_t middle_vertex_index = 0; middle_vertex_index < vertex_num; middle_vertex_index++) {
-        PathInfo* const middle_info = path_matrix[middle_vertex_index];
-
-        for (domino_nav_vertex_index_t source_vertex_index = 0; source_vertex_index < vertex_num; source_vertex_index++) {
-            if (source_vertex_index == middle_vertex_index) {
+static void relaxAllPairs(domino_nav_vertex_index_t vertex_count, DominoNavPathCell (*path_matrix)[vertex_count], DominoNavFloydStats* stats_ptr) {
+    // 中间顶点必须在最外层循环：第 k 轮允许经过前 k 个顶点。
+    for (domino_nav_vertex_index_t middle_index = 0; middle_index < vertex_count; middle_index++) {
+        DominoNavPathCell* const middle_row = path_matrix[middle_index];
+        for (domino_nav_vertex_index_t source_index = 0; source_index < vertex_count; source_index++) {
+            if (source_index == middle_index) {
                 continue;
             }
-
-            PathInfo* const source_info = path_matrix[source_vertex_index];
-            const domino_nav_weight_t source_to_middle = source_info[middle_vertex_index].min_weight;
-
-            if (source_to_middle >= WEIGHT_INFINITY) {
-                result->null_weight_count++;
+            DominoNavPathCell* const source_row = path_matrix[source_index];
+            const domino_nav_weight_t source_to_middle = source_row[middle_index].min_weight;
+            if (source_to_middle >= DOMINO_NAV_WEIGHT_INFINITY) {
+                stats_ptr->unreachable_source_count++;
                 continue;
             }
-
-            for (domino_nav_vertex_index_t target_vertex_index = 0; target_vertex_index < vertex_num; target_vertex_index++) {
-                result->total_tick++;
-                if (source_vertex_index == target_vertex_index || target_vertex_index == middle_vertex_index) {
+            for (domino_nav_vertex_index_t target_index = 0; target_index < vertex_count; target_index++) {
+                stats_ptr->relax_check_count++;
+                if (source_index == target_index || target_index == middle_index) {
                     continue;
                 }
-
-                const PathInfo* const middle_to_target_info = &(middle_info[target_vertex_index]);
-                const domino_nav_weight_t middle_to_target = middle_to_target_info->min_weight;
-
-                if (middle_to_target >= WEIGHT_INFINITY) {
-                    result->null_weight_count_inner++;
+                const DominoNavPathCell* const middle_to_target_ptr = &middle_row[target_index];
+                if (middle_to_target_ptr->min_weight >= DOMINO_NAV_WEIGHT_INFINITY) {
+                    stats_ptr->unreachable_target_count++;
                     continue;
                 }
-
-                const domino_nav_weight_t new_weight = source_to_middle + middle_to_target;
-                PathInfo* const source_to_target_info = &(source_info[target_vertex_index]);
-
-                if (new_weight < source_to_target_info->min_weight) {
-                    result->hit_tick++;
-                    source_to_target_info->min_weight = new_weight;
-                    source_to_target_info->pre_vertex_index = middle_to_target_info->pre_vertex_index;
-                    source_to_target_info->pre_road_fork_id = middle_to_target_info->pre_road_fork_id;
+                const domino_nav_weight_t new_weight = source_to_middle + middle_to_target_ptr->min_weight;
+                DominoNavPathCell* const source_to_target_ptr = &source_row[target_index];
+                if (new_weight < source_to_target_ptr->min_weight) {
+                    // 经过中间顶点更短：终点的前驱沿用“中间点 → 终点”路径上的前驱。
+                    stats_ptr->relax_hit_count++;
+                    source_to_target_ptr->min_weight = new_weight;
+                    source_to_target_ptr->pre_vertex_index = middle_to_target_ptr->pre_vertex_index;
+                    source_to_target_ptr->pre_fork_road_id = middle_to_target_ptr->pre_fork_road_id;
                 }
             }
         }
     }
 }
 
-DOMINO_CODE findShortestPath(PathInfo* shortest_path_info, int max_shortest_path_info_count, int* shortest_path_info_count,
-                             domino_nav_vertex_index_t vertex_num, PathInfo (*path_matrix)[vertex_num], domino_nav_vertex_index_t start_vertex_index,
-                             domino_nav_vertex_index_t end_vertex_index) {
-    if (path_matrix[start_vertex_index][end_vertex_index].pre_vertex_index == PRE_VERTEX_NULL) {
+DOMINO_CODE navFloydTracePath(DominoNavPathCell* out_step_list, int step_capacity, int* out_step_count, domino_nav_vertex_index_t vertex_count,
+                              DominoNavPathCell (*path_matrix)[vertex_count], domino_nav_vertex_index_t start_vertex_index,
+                              domino_nav_vertex_index_t end_vertex_index) {
+    if (path_matrix[start_vertex_index][end_vertex_index].pre_vertex_index == DOMINO_NAV_VERTEX_NONE) {
         return ERR_NOT_FOUND;
     }
-    /* 沿起点所在行反向回溯；每项的前驱是一个中间节点。 */
-    domino_nav_vertex_index_t stack_top = 0;
-    domino_nav_vertex_index_t current = end_vertex_index;
-    do {
-        PathInfo* current_info = &(path_matrix[start_vertex_index][current]);
-        assert(current_info->pre_vertex_index < vertex_num && current_info->pre_vertex_index != current && stack_top < vertex_num);
-        if (current_info->pre_vertex_index == start_vertex_index) {
+    // 沿起点所在行从终点反向回溯，每一步的前驱都是一个中间顶点，回到起点为止。
+    int step_count = 0;
+    domino_nav_vertex_index_t current_index = end_vertex_index;
+    while (true) {
+        const DominoNavPathCell* cell_ptr = &path_matrix[start_vertex_index][current_index];
+        assert(cell_ptr->pre_vertex_index < vertex_count && cell_ptr->pre_vertex_index != current_index && step_count < vertex_count);
+        if (cell_ptr->pre_vertex_index == start_vertex_index) {
             break;
         }
-        if (stack_top >= max_shortest_path_info_count) {
+        if (step_count >= step_capacity) {
             return ERR_BUFFER_TOO_SMALL;
         }
-        shortest_path_info[stack_top] = *current_info;
-
-        current = current_info->pre_vertex_index;
-        stack_top++;
-    } while (true);
-
-    *shortest_path_info_count = stack_top;
+        out_step_list[step_count++] = *cell_ptr;
+        current_index = cell_ptr->pre_vertex_index;
+    }
+    *out_step_count = step_count;
     return CODE_OK;
 }
 
-FloydPathPlanningResult floydPathPlanning(domino_nav_vertex_index_t vertex_num, const VertexEdges* vertices, PathInfo (*path_matrix)[vertex_num]) {
-    FloydPathPlanningResult result = {0};
+DominoNavFloydStats navFloydBuildPaths(domino_nav_vertex_index_t vertex_count, const DominoNavVertexEdges* vertex_list,
+                                       DominoNavPathCell (*path_matrix)[vertex_count]) {
+    DominoNavFloydStats stats = {0};
 
-    clock_t start = clock();
-    initPathMatrix(vertex_num, vertices, path_matrix);
-    result.init_time_used = ((double)(clock() - start)) / CLOCKS_PER_SEC;
+    clock_t start_clock = clock();
+    initPathMatrix(vertex_count, vertex_list, path_matrix);
+    stats.init_time_s = ((double)(clock() - start_clock)) / CLOCKS_PER_SEC;
 
-    start = clock();
-    floydCore(vertex_num, path_matrix, &result);
-    result.core_time_used = ((double)(clock() - start)) / CLOCKS_PER_SEC;
+    start_clock = clock();
+    relaxAllPairs(vertex_count, path_matrix, &stats);
+    stats.core_time_s = ((double)(clock() - start_clock)) / CLOCKS_PER_SEC;
 
-    return result;
+    return stats;
 }

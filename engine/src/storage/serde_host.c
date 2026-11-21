@@ -129,15 +129,15 @@ static yyjson_mut_val* serializeMovableObject(yyjson_mut_doc* doc, const DominoM
 
 static void deserializeMovableObject(yyjson_val* obj, DominoMovableObject* out_movable_object) {
     out_movable_object->id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
-    serdeReadSintVec3FromJson(obj, "position", &out_movable_object->position_x, &out_movable_object->position_y, &out_movable_object->position_z);
-    serdeReadFloatVec3FromJson(obj, "direction", out_movable_object->direction);
+    serdeReadSintVec3(obj, "position", &out_movable_object->position_x, &out_movable_object->position_y, &out_movable_object->position_z);
+    serdeReadFloatVec3(obj, "direction", out_movable_object->direction);
     out_movable_object->speed = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "speed"));
     out_movable_object->acceleration = (int8_t)yyjson_get_sint(yyjson_obj_get(obj, "acceleration"));
     out_movable_object->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_movable_object->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
 }
 
-STORAGE_DEFINE_SHARDED_SIMPLE(MovableObject, "movable_object", DominoMovableObject, domino_all_movable_object_list, dominoMovableObjectIdMap,
+STORAGE_DEFINE_SHARDED_SIMPLE(MovableObject, "movable_object", DominoMovableObject, g_domino_movable_object_list, g_domino_movable_object_id_map,
                               dominoMovableObjectIdMap_put, serializeMovableObject, deserializeMovableObject, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)
 
 static yyjson_mut_val* serializeIsland(yyjson_mut_doc* doc, const DominoIsland* island) {
@@ -159,5 +159,5 @@ static void deserializeIsland(yyjson_val* obj, DominoIsland* out_island) {
     out_island->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
 }
 
-STORAGE_DEFINE_SHARDED_SIMPLE(Island, "island", DominoIsland, domino_all_island_list, dominoIslandIdMap, dominoIslandIdMap_put, serializeIsland,
+STORAGE_DEFINE_SHARDED_SIMPLE(Island, "island", DominoIsland, g_domino_island_list, g_domino_island_id_map, dominoIslandIdMap_put, serializeIsland,
                               deserializeIsland, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)

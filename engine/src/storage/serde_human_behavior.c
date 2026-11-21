@@ -80,7 +80,7 @@ static yyjson_mut_val* serializeBehavior(yyjson_mut_doc* doc, const DominoBehavi
 }
 
 void serdeSaveHumanBehavior(const char* save_path) {
-    const size_t total_count = kv_size(domino_all_behavior_list);
+    const size_t total_count = kv_size(g_domino_behavior_list);
     if (total_count > UINT32_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human behavior count exceeds storage limit: count=%zu", total_count);
     }
@@ -103,9 +103,9 @@ void serdeSaveHumanBehavior(const char* save_path) {
         const size_t remaining_count = total_count - start;
         const size_t count = remaining_count < DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA ? remaining_count : DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA;
         for (size_t index = start; index < start + count; index++) {
-            if (!yyjson_mut_arr_append(entities, serializeBehavior(doc, &kv_A(domino_all_behavior_list, index)))) {
+            if (!yyjson_mut_arr_append(entities, serializeBehavior(doc, &kv_A(g_domino_behavior_list, index)))) {
                 DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human behavior record: behavior_id=%u",
-                                       kv_A(domino_all_behavior_list, index).behavior_id);
+                                       kv_A(g_domino_behavior_list, index).behavior_id);
             }
         }
         storageWriteShardFile("human_behavior", shard, save_path, doc);

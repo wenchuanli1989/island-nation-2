@@ -5,7 +5,7 @@
 
 DominoMotivation* dominoHumanFindActiveMotivation(const DominoHumanData* data_ptr, uint8_t type) {
     for (uint8_t index = 0U; index < data_ptr->motivation_count; index++) {
-        DominoMotivation* motivation_ptr = dominoGetMotivationByID(data_ptr->motivation_id_list[index]);
+        DominoMotivation* motivation_ptr = dominoGetMotivationById(data_ptr->motivation_id_list[index]);
         if (motivation_ptr->type == type && motivation_ptr->status == DOMINO_MOTIVATION_STATUS_ACTIVE) {
             return motivation_ptr;
         }
@@ -15,7 +15,7 @@ DominoMotivation* dominoHumanFindActiveMotivation(const DominoHumanData* data_pt
 
 bool dominoHumanHasActiveMotivation(const DominoHumanData* data_ptr) {
     for (uint8_t index = 0U; index < data_ptr->motivation_count; index++) {
-        if (dominoGetMotivationByID(data_ptr->motivation_id_list[index])->status == DOMINO_MOTIVATION_STATUS_ACTIVE) {
+        if (dominoGetMotivationById(data_ptr->motivation_id_list[index])->status == DOMINO_MOTIVATION_STATUS_ACTIVE) {
             return true;
         }
     }
@@ -37,16 +37,16 @@ void dominoHumanMotivationRecordTaskEnded(DominoMotivation* motivation_ptr, cons
     const DominoMotivationHistory entry = {
         .task_id = task_ptr->task_id, .started_at_ms = task_ptr->started_at_ms, .ended_at_ms = task_ptr->ended_at_ms};
     if (motivation_ptr->history_count < DOMINO_MOTIVATION_HISTORY_COUNT_MAX) {
-        const uint8_t slot = (uint8_t)((motivation_ptr->history_head + motivation_ptr->history_count) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX);
+        const uint8_t slot = (uint8_t)((motivation_ptr->history_head_index + motivation_ptr->history_count) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX);
         motivation_ptr->history_list[slot] = entry;
         motivation_ptr->history_count++;
     } else {
-        /* 第 11 条覆盖最早一条，最早位置后移。 */
-        motivation_ptr->history_list[motivation_ptr->history_head] = entry;
-        motivation_ptr->history_head = (uint8_t)((motivation_ptr->history_head + 1U) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX);
+        // 已满：覆盖最早一条，最早位置后移。
+        motivation_ptr->history_list[motivation_ptr->history_head_index] = entry;
+        motivation_ptr->history_head_index = (uint8_t)((motivation_ptr->history_head_index + 1U) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX);
     }
 }
 
 DominoMotivationHistory dominoHumanMotivationHistoryAt(const DominoMotivation* motivation_ptr, uint8_t index) {
-    return motivation_ptr->history_list[(motivation_ptr->history_head + index) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX];
+    return motivation_ptr->history_list[(motivation_ptr->history_head_index + index) % DOMINO_MOTIVATION_HISTORY_COUNT_MAX];
 }

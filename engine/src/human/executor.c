@@ -23,12 +23,12 @@
 #include "task/entry.h"
 
 /** @file executor.c
- * @brief human 世界的唯一运行期写入者。
- * @note 每条消息的处理顺序：出队 → 取写锁 → 共同结算到本次时刻 → 调用业务接口 → 启动／规划／唤醒调度 → 解锁 → 交付结果、释放载荷。
- * 同一时刻由执行事实确定的判定和收尾当场完成；新增的检查或规划机会留到下一批。
+ * @brief human 世界运行期的唯一写入者。
+ * @note 每条消息的处理顺序：出队 → 取写锁 → 结算到当前时刻 → 写入业务变化 → 回收、启动、规划和唤醒调度 → 解锁。
+ * 同一时刻能确定的判定当场完成；新产生的规划机会留到下一批。
  */
 
-typedef struct HumanExecution {
+typedef struct HumanExecutor {
     DominoThreadQueue inbox;
     thrd_t thread;
     uint32_t* todo_ring;  ///< 本地待办：人物下标 FIFO，每人至多一项。
@@ -37,10 +37,10 @@ typedef struct HumanExecution {
     uint32_t todo_count;
     uint64_t batch_seq;
     DominoHumanExecutorStats stats;
-} HumanExecution;
+} HumanExecutor;
 
-DominoHumanRuntime* domino_human_runtime_list;
-static HumanExecution g_execution;
+DominoHumanRuntime* g_domino_human_runtime_list;
+static HumanExecutor g_executor;
 
 enum {
     HUMAN_WAKEUP_EVENT_TYPE = 1U,
@@ -52,20 +52,20 @@ enum {
 
 static void pushTodo(DominoHuman* human_ptr) {
     DominoHumanRuntime* runtime_ptr = dominoHumanRuntimeOf(human_ptr);
-    if (runtime_ptr->todo_flag) {
+    if (runtime_ptr->todo_queued_flag) {
         return;
     }
-    runtime_ptr->todo_flag = true;
-    g_execution.todo_ring[(g_execution.todo_head + g_execution.todo_count) % g_execution.todo_capacity] = dominoHumanIndexOf(human_ptr);
-    g_execution.todo_count++;
+    runtime_ptr->todo_queued_flag = true;
+    g_executor.todo_ring[(g_executor.todo_head + g_executor.todo_count) % g_executor.todo_capacity] = dominoHumanIndexOf(human_ptr);
+    g_executor.todo_count++;
 }
 
 static DominoHuman* popTodo(void) {
-    const uint32_t human_index = g_execution.todo_ring[g_execution.todo_head];
-    g_execution.todo_head = (g_execution.todo_head + 1U) % g_execution.todo_capacity;
-    g_execution.todo_count--;
-    domino_human_runtime_list[human_index].todo_flag = false;
-    return &kv_A(domino_all_human_list, human_index);
+    const uint32_t human_index = g_executor.todo_ring[g_executor.todo_head];
+    g_executor.todo_head = (g_executor.todo_head + 1U) % g_executor.todo_capacity;
+    g_executor.todo_count--;
+    g_domino_human_runtime_list[human_index].todo_queued_flag = false;
+    return &kv_A(g_domino_human_list, human_index);
 }
 
 /** @brief 先撤销当前唤醒身份，再标记取消；已出队的旧通知由消费端按身份忽略。 */
@@ -77,7 +77,7 @@ static void cancelWakeup(DominoHuman* human_ptr) {
     }
     runtime_ptr->wakeup_game_timer_id = 0U;
     runtime_ptr->wakeup_due_ms = 0U;
-    const DOMINO_CODE code = dominoGameTimerCancel(game_timer_id, &g_execution.inbox);
+    const DOMINO_CODE code = dominoGameTimerCancel(game_timer_id, &g_executor.inbox);
     if (code != CODE_OK && code != ERR_NOT_FOUND) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot cancel human=%" PRIu32 " wakeup game_timer=%" PRIu64, human_ptr->human_id, game_timer_id);
     }
@@ -91,7 +91,7 @@ static void scheduleWakeup(DominoHuman* human_ptr, domino_runtime_ms_t due_ms) {
     }
     cancelWakeup(human_ptr);
     const DOMINO_CODE code =
-        dominoGameTimerScheduleAt(&g_execution.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &runtime_ptr->wakeup_game_timer_id);
+        dominoGameTimerScheduleAt(&g_executor.inbox, due_ms, HUMAN_WAKEUP_EVENT_TYPE, human_ptr->human_id, &runtime_ptr->wakeup_game_timer_id);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot schedule human=%" PRIu32 " wakeup due_ms=%" PRIu32, human_ptr->human_id, due_ms);
     }
@@ -103,7 +103,7 @@ static DominoHuman* consumeWakeup(const DominoGameTimerRequestMessage* game_time
     if (game_timer_ptr->cancelled_flag) {
         return nullptr;
     }
-    DominoHuman* human_ptr = dominoGetHumanByID((domino_human_id_t)game_timer_ptr->data_id);
+    DominoHuman* human_ptr = dominoGetHumanById((domino_human_id_t)game_timer_ptr->target_id);
     if (!human_ptr) {
         return nullptr;
     }
@@ -120,7 +120,7 @@ static DominoHuman* consumeWakeup(const DominoGameTimerRequestMessage* game_time
 /* ---------------------------------------------------------------------------------------------------------------- */
 
 /** @brief 重试时刻未到返回 true；已到期时先消费旧时刻，不反复登记过去时刻。 */
-static bool retryPending(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_ms_t retry_at_ms, domino_runtime_ms_t now_ms) {
+static bool isRetryPending(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_ms_t retry_at_ms, domino_runtime_ms_t now_ms) {
     if ((*flags_ptr & valid_flag) == 0U) {
         return false;
     }
@@ -131,18 +131,18 @@ static bool retryPending(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_
     return false;
 }
 
-static domino_runtime_ms_t retryAt(domino_runtime_ms_t now_ms) {
+static domino_runtime_ms_t calcRetryAt(domino_runtime_ms_t now_ms) {
     if (g_domino_human_ai_config.retry_delay_ms > UINT32_MAX - now_ms) {
         DOMINO_EXIT_WITH_ERROR(ERR_OUT_OF_RANGE, "plan retry time overflows now_ms=%" PRIu32, now_ms);
     }
     return now_ms + g_domino_human_ai_config.retry_delay_ms;
 }
 
-/** @brief 行为规划无方案、候选被拒或处理后任务仍需行为规划时，在任务上保留正延迟重试，避免在空结果与新请求之间忙循环。 */
+/** @brief 在任务上记下行为规划的重试时刻（当前时刻 + retry_delay_ms），避免在空结果与新请求之间忙循环。 */
 static void setBehaviorRetry(const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms) {
-    DominoTask* task_ptr = dominoGetTaskByID(slot_ptr->scope_id);
+    DominoTask* task_ptr = dominoGetTaskById(slot_ptr->scope_id);
     if (task_ptr != nullptr) {
-        task_ptr->behavior_retry_at_ms = retryAt(now_ms);
+        task_ptr->behavior_retry_at_ms = calcRetryAt(now_ms);
         task_ptr->flags |= DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID;
     }
 }
@@ -159,43 +159,43 @@ static void setNextPlan(DominoHumanRuntime* runtime_ptr, uint8_t planner_kind, b
     }
 }
 
-static uint8_t urgencyPriority(const DominoHuman* human_ptr) {
+static uint8_t selectUrgencyPriority(const DominoHuman* human_ptr) {
     return human_ptr->data->energy <= g_domino_human_ai_config.urgent_energy ? DOMINO_HUMAN_PLAN_PRIORITY_HIGH : DOMINO_HUMAN_PLAN_PRIORITY_NORMAL;
 }
 
-/** @brief 同一次写锁内：非阻塞入队取得请求 ID → 发布完整资格。请求不设期限，投递不改变人物唤醒。
- * @return 是否已投递；本批已投递过同类请求时留到下一批，返回 false。
+/** @brief 投递规划请求并在同一次写锁内登记到请求槽。
+ * @return 是否已投递；本批已投递过同类请求时排入待办留到下一批，返回 false。
  */
 static bool postRequest(DominoHuman* human_ptr, uint8_t planner_kind, uint8_t priority, uint8_t scope_kind, uint32_t scope_id) {
     DominoHumanRuntime* runtime_ptr = dominoHumanRuntimeOf(human_ptr);
-    if (runtime_ptr->posted_batch_seq_list[planner_kind] == g_execution.batch_seq) {
+    if (runtime_ptr->posted_batch_seq_list[planner_kind] == g_executor.batch_seq) {
         /* 每人物每批每类至多新投递一次，留到下一批。 */
         pushTodo(human_ptr);
         return false;
     }
-    const uint64_t request_id = dominoHumanPlannerPost(planner_kind, priority, human_ptr->human_id);
-    runtime_ptr->slot_list[planner_kind] = (DominoHumanPlanSlot){
+    const uint64_t request_id = dominoHumanPlannerPostRequest(planner_kind, priority, human_ptr->human_id);
+    runtime_ptr->plan_slot_list[planner_kind] = (DominoHumanPlanSlot){
         .request_id = request_id,
         .scope_id = scope_id,
         .priority = priority,
         .scope_kind = scope_kind,
     };
-    runtime_ptr->posted_batch_seq_list[planner_kind] = g_execution.batch_seq;
-    g_execution.stats.posted_request_count_list[planner_kind]++;
+    runtime_ptr->posted_batch_seq_list[planner_kind] = g_executor.batch_seq;
+    g_executor.stats.posted_request_count_list[planner_kind]++;
     return true;
 }
 
 enum {
-    BEHAVIOR_SCOPE_CANDIDATE_MAX = 2U,
+    BEHAVIOR_PLAN_TASK_MAX = 2U,
 };
 
 /** @brief 行为规划只看运行任务和待执行队首，按询问次序写入 task_list 并返回个数。
  * @note 队首带让位请求时先看队首：回应任务首批步骤就绪，运行任务才能让位；否则先看运行任务，再为队首提前规划。
  * 队首之后的任务启动不了（普通推进不越过队首），轮到队首时再规划。
  */
-static uint8_t behaviorScopeCandidates(const DominoHumanData* data_ptr, DominoTask* task_list[BEHAVIOR_SCOPE_CANDIDATE_MAX]) {
-    DominoTask* active_ptr = data_ptr->active_task_id != 0U ? dominoGetTaskByID(data_ptr->active_task_id) : nullptr;
-    DominoTask* head_ptr = data_ptr->task_queue_count != 0U ? dominoGetTaskByID(data_ptr->task_queue_list[0]) : nullptr;
+static uint8_t collectBehaviorPlanTasks(const DominoHumanData* data_ptr, DominoTask* task_list[BEHAVIOR_PLAN_TASK_MAX]) {
+    DominoTask* active_ptr = data_ptr->active_task_id != 0U ? dominoGetTaskById(data_ptr->active_task_id) : nullptr;
+    DominoTask* head_ptr = data_ptr->task_queue_count != 0U ? dominoGetTaskById(data_ptr->task_queue_list[0]) : nullptr;
     if (head_ptr != nullptr && (head_ptr->flags & DOMINO_TASK_FLAG_PREEMPT) != 0U) {
         DominoTask* swap_ptr = active_ptr;
         active_ptr = head_ptr;
@@ -211,9 +211,9 @@ static uint8_t behaviorScopeCandidates(const DominoHumanData* data_ptr, DominoTa
     return count;
 }
 
-/** @brief 规划发起只看廉价信号：动机和任务先把已到的下次规划时刻转为待规划标志，标志置位且请求槽空闲时以人物为范围投递，
- * 投递时清除标志；行为按运行任务和队首任务的计划缺口触发，并受任务上的重试时刻约束。
- * @note 执行器不复评动机、不判断动机是否需要新工作，人物没有有效动机本身也不发起规划。
+/** @brief 发起规划：动机和任务把已到期的下次规划时刻转为待规划标志，标志置位且请求槽空闲时投递（并清除标志）；
+ * 行为按运行任务和队首任务的计划缺口投递，受任务上的重试时刻约束。
+ * @note 执行器不复评动机，人物没有有效动机本身也不触发规划。
  */
 static void schedulePlanning(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
     DominoHumanRuntime* runtime_ptr = dominoHumanRuntimeOf(human_ptr);
@@ -223,31 +223,32 @@ static void schedulePlanning(DominoHuman* human_ptr, domino_runtime_ms_t now_ms)
             setNextPlan(runtime_ptr, kind, false, 0U);
             runtime_ptr->pending_mask |= mask;
         }
-        if ((runtime_ptr->pending_mask & mask) != 0U && runtime_ptr->slot_list[kind].request_id == 0U &&
-            postRequest(human_ptr, kind, urgencyPriority(human_ptr), DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U)) {
+        if ((runtime_ptr->pending_mask & mask) != 0U && runtime_ptr->plan_slot_list[kind].request_id == 0U &&
+            postRequest(human_ptr, kind, selectUrgencyPriority(human_ptr), DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U)) {
             runtime_ptr->pending_mask = (uint8_t)(runtime_ptr->pending_mask & ~mask);
         }
     }
-    if (runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U) {
+    if (runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U) {
         return;
     }
-    DominoTask* task_list[BEHAVIOR_SCOPE_CANDIDATE_MAX];
-    const uint8_t task_count = behaviorScopeCandidates(human_ptr->data, task_list);
+    DominoTask* task_list[BEHAVIOR_PLAN_TASK_MAX];
+    const uint8_t task_count = collectBehaviorPlanTasks(human_ptr->data, task_list);
     for (uint8_t index = 0U; index < task_count; index++) {
         DominoTask* task_ptr = task_list[index];
-        if (retryPending(&task_ptr->flags, DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID, task_ptr->behavior_retry_at_ms, now_ms) ||
+        if (isRetryPending(&task_ptr->flags, DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID, task_ptr->behavior_retry_at_ms, now_ms) ||
             !dominoHumanTaskNeedsBehaviorPlan(human_ptr, task_ptr)) {
             continue;
         }
         /* 已运行任务的修复及插入使用高优先级；高优先级不授予抢占运行任务的权限。 */
-        const uint8_t priority = task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN ? DOMINO_HUMAN_PLAN_PRIORITY_HIGH : urgencyPriority(human_ptr);
+        const uint8_t priority =
+            task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN ? DOMINO_HUMAN_PLAN_PRIORITY_HIGH : selectUrgencyPriority(human_ptr);
         postRequest(human_ptr, DOMINO_HUMAN_PLANNER_BEHAVIOR, priority, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_ptr->task_id);
         return;
     }
 }
 
 /** @brief 未来重试时刻参与唤醒汇总；已到期的旧时刻先消费，不反复登记当前或过去时刻。 */
-static void mergeRetry(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_ms_t retry_at_ms, domino_runtime_ms_t now_ms, uint64_t* due_ms_ptr) {
+static void mergeRetryDue(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_ms_t retry_at_ms, domino_runtime_ms_t now_ms, uint64_t* due_ms_ptr) {
     if ((*flags_ptr & valid_flag) == 0U) {
         return;
     }
@@ -260,8 +261,8 @@ static void mergeRetry(uint8_t* flags_ptr, uint8_t valid_flag, domino_runtime_ms
     }
 }
 
-/** @brief 汇总动机和任务的下次规划时刻、运行任务和队首任务的行为规划重试时刻及预测检查时刻，人物只保留最早的一个有效登记。
- * @note 其他任务上的重试暂不参与；任务成为队首时由该次处理重新汇总。
+/** @brief 取下次规划时刻、行为规划重试时刻和预测检查时刻中最早的一个，作为人物唯一的唤醒登记。
+ * @note 只汇总运行任务和队首任务的重试；其他任务成为队首时再汇总。
  */
 static void updateWakeup(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
     const DominoHumanRuntime* runtime_ptr = dominoHumanRuntimeOf(human_ptr);
@@ -271,10 +272,10 @@ static void updateWakeup(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
             due_ms = runtime_ptr->next_plan_at_ms_list[kind];
         }
     }
-    DominoTask* task_list[BEHAVIOR_SCOPE_CANDIDATE_MAX];
-    const uint8_t task_count = behaviorScopeCandidates(human_ptr->data, task_list);
+    DominoTask* task_list[BEHAVIOR_PLAN_TASK_MAX];
+    const uint8_t task_count = collectBehaviorPlanTasks(human_ptr->data, task_list);
     for (uint8_t index = 0U; index < task_count; index++) {
-        mergeRetry(&task_list[index]->flags, DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID, task_list[index]->behavior_retry_at_ms, now_ms, &due_ms);
+        mergeRetryDue(&task_list[index]->flags, DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID, task_list[index]->behavior_retry_at_ms, now_ms, &due_ms);
     }
     domino_runtime_ms_t predicted_ms;
     if (dominoHumanPredictNextCheck(human_ptr, &predicted_ms) && predicted_ms < due_ms) {
@@ -292,21 +293,20 @@ static void updateWakeup(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
 }
 
 /** @brief 结算之后的运行期调度：回收 → 启动 → 状态 → 规划机会 → 唤醒。 */
-static void finishHuman(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
-    dominoHumanRecycleEnded(human_ptr);
-    if (dominoHumanStartReadyWork(human_ptr, now_ms)) {
-        /* 启动不改变本边界的判定；状态和唤醒基于启动后的事实。 */
-    }
+static void followUpHuman(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
+    dominoHumanReclaimEnded(human_ptr);
+    // 启动不改变本边界的判定结果；之后的状态、规划和唤醒都基于启动后的事实。
+    (void)dominoHumanStartReadyWork(human_ptr, now_ms);
     human_ptr->state = dominoHumanComputeState(human_ptr);
     schedulePlanning(human_ptr, now_ms);
     updateWakeup(human_ptr, now_ms);
 }
 
-static void advanceHumanNow(DominoHuman* human_ptr) {
+static void advanceHumanToNow(DominoHuman* human_ptr) {
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
     dominoHumanSettle(human_ptr, now_ms);
-    finishHuman(human_ptr, now_ms);
+    followUpHuman(human_ptr, now_ms);
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */
@@ -323,7 +323,7 @@ typedef struct MotivationReview {
     uint8_t terminated_count;
 } MotivationReview;
 
-static bool terminatedEarlier(const MotivationReview* review_ptr, domino_motivation_id_t motivation_id) {
+static bool isTerminatedEarlier(const MotivationReview* review_ptr, domino_motivation_id_t motivation_id) {
     for (uint8_t index = 0U; index < review_ptr->terminated_count; index++) {
         if (review_ptr->terminated_list[index] == motivation_id) {
             return true;
@@ -343,7 +343,7 @@ static bool checkMotivationEntry(const DominoHuman* human_ptr, const DominoMotiv
             }
             /* 同类型已有有效动机（且未被本份候选更早终结），或本份候选已新建同类型：复用原动机，不新建。 */
             const DominoMotivation* active_ptr = dominoHumanFindActiveMotivation(data_ptr, entry_ptr->type);
-            if ((active_ptr != nullptr && !terminatedEarlier(review_ptr, active_ptr->motivation_id)) ||
+            if ((active_ptr != nullptr && !isTerminatedEarlier(review_ptr, active_ptr->motivation_id)) ||
                 (review_ptr->new_type_mask & (1U << entry_ptr->type)) != 0U) {
                 return true;
             }
@@ -360,9 +360,9 @@ static bool checkMotivationEntry(const DominoHuman* human_ptr, const DominoMotiv
                 entry_ptr->terminal_status != DOMINO_MOTIVATION_STATUS_REVOKED) {
                 return false;
             }
-            const DominoMotivation* motivation_ptr = dominoGetMotivationByID(entry_ptr->motivation_id);
+            const DominoMotivation* motivation_ptr = dominoGetMotivationById(entry_ptr->motivation_id);
             if (motivation_ptr == nullptr || motivation_ptr->owner_human_id != human_ptr->human_id ||
-                motivation_ptr->status != DOMINO_MOTIVATION_STATUS_ACTIVE || terminatedEarlier(review_ptr, entry_ptr->motivation_id)) {
+                motivation_ptr->status != DOMINO_MOTIVATION_STATUS_ACTIVE || isTerminatedEarlier(review_ptr, entry_ptr->motivation_id)) {
                 /* 目标已回收、不属于该人物、已终结或本份候选已终结：忽略，重复终结没有副作用。 */
                 review_ptr->ignored_list[index] = true;
                 return true;
@@ -375,14 +375,12 @@ static bool checkMotivationEntry(const DominoHuman* human_ptr, const DominoMotiv
     }
 }
 
-/** @brief 提交终结：写入终态；尚未启动的关联任务依法撤销（不制造执行记录），已启动的任务继续执行到自身结束，以后成功仍给原动机计次。
- * @note 撤销的任务与没有关联任务的已终结动机由随后的回收在同一次写锁内释放；动机自身来源的去重依据随动机回收丢弃。
- */
+/** @brief 终结动机：写入终态，撤销尚未启动的关联任务；已启动的任务继续执行，日后成功仍给本动机计次。 */
 static void terminateMotivation(DominoHuman* human_ptr, domino_motivation_id_t motivation_id, uint8_t terminal_status, domino_runtime_ms_t now_ms) {
-    dominoGetMotivationByID(motivation_id)->status = terminal_status;
+    dominoGetMotivationById(motivation_id)->status = terminal_status;
     DominoHumanData* data_ptr = human_ptr->data;
     for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
+        DominoTask* task_ptr = dominoGetTaskById(data_ptr->task_id_list[index]);
         if (task_ptr->motivation_id == motivation_id && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE && dominoTaskIsLive(task_ptr)) {
             const DominoTaskDecision decision = {.kind = DOMINO_TASK_DECISION_REVOKE, .reason = DOMINO_END_REASON_MOTIVATION_ENDED};
             dominoHumanApplyTaskDecision(human_ptr, task_ptr, decision, now_ms);
@@ -402,8 +400,8 @@ static bool applyMotivationEntry(DominoHuman* human_ptr, const DominoMotivationC
         if (dominoHumanFindActiveMotivation(human_ptr->data, entry_ptr->type) != nullptr) {
             return false;
         }
-        const DominoMotivation init = {.type = entry_ptr->type, .status = DOMINO_MOTIVATION_STATUS_ACTIVE};
-        dominoHumanStoreAddMotivation(human_ptr->data, &init);
+        const DominoMotivation motivation_init = {.type = entry_ptr->type, .status = DOMINO_MOTIVATION_STATUS_ACTIVE};
+        dominoHumanStoreAddMotivation(human_ptr->data, &motivation_init);
         return true;
     }
     if (ignored_flag) {
@@ -413,11 +411,11 @@ static bool applyMotivationEntry(DominoHuman* human_ptr, const DominoMotivationC
     return true;
 }
 
-/** @brief 先检查不含可选项的必要部分，再按次序逐项尝试可选项；全部预检通过后提交，不再返回可恢复失败。
- * @note 实际新建或终结了动机时，同一次写锁内置任务待规划标志，让任务规划器看到新的动机集合。
+/** @brief 先预检必要条目（任一不通过则整份拒绝），再按顺序尝试可选条目，最后统一提交。
+ * @return 是否接受；实际新建或终结了动机时置任务待规划标志。
  */
 static bool commitMotivationCandidate(DominoHuman* human_ptr, const void* candidate_ptr, domino_runtime_ms_t now_ms) {
-    if (!dominoHumanCandidateWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_MOTIVATION)) {
+    if (!dominoHumanCandidateIsWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_MOTIVATION)) {
         return false;
     }
     const DominoPlanCandidateHeader* header_ptr = dominoHumanCandidateHeader(candidate_ptr);
@@ -442,18 +440,18 @@ static bool commitMotivationCandidate(DominoHuman* human_ptr, const void* candid
 }
 
 /** @brief 任务候选预检的累积上下文：已采用内容加当前项。 */
-typedef struct TaskReviewContext {
+typedef struct TaskReview {
     bool adopted_list[DOMINO_PLAN_CANDIDATE_ENTRY_COUNT_MAX];
     bool reuse_list[DOMINO_PLAN_CANDIDATE_ENTRY_COUNT_MAX];  ///< 同次工作已有任务，复用原 task_id。
     domino_task_id_t resolved_id_list[DOMINO_PLAN_CANDIDATE_ENTRY_COUNT_MAX];
     uint8_t new_task_count;
     bool stimulus_taken_flag;  ///< 本份候选已有新任务承接待处理外部信息。
-} TaskReviewContext;
+} TaskReview;
 
 /** @brief 已接受任务中是否存在同一工作身份；同一人物的同一次工作只承接一次。 */
-static domino_task_id_t findSameWork(const DominoHumanData* data_ptr, const DominoTaskCandidateEntry* entry_ptr) {
+static domino_task_id_t findSameWorkTask(const DominoHumanData* data_ptr, const DominoTaskCandidateEntry* entry_ptr) {
     for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        const DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
+        const DominoTask* task_ptr = dominoGetTaskById(data_ptr->task_id_list[index]);
         if (dominoTaskIsLive(task_ptr) && task_ptr->type == entry_ptr->type && task_ptr->work_source_kind == entry_ptr->work_source_kind &&
             task_ptr->work_source_id == entry_ptr->work_source_id && task_ptr->work_round == entry_ptr->work_round) {
             return task_ptr->task_id;
@@ -466,7 +464,7 @@ static domino_task_id_t findSameWork(const DominoHumanData* data_ptr, const Domi
  * 且同份候选只承接一次。回应任务挂在哪个有效动机下、运行任务的应激选择都是规划判断，不复核。
  */
 static bool checkTaskSource(const DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_ptr, const DominoMotivation* motivation_ptr,
-                            const TaskReviewContext* context_ptr) {
+                            const TaskReview* context_ptr) {
     const DominoHumanData* data_ptr = human_ptr->data;
     switch (entry_ptr->work_source_kind) {
         case DOMINO_TASK_SOURCE_MOTIVATION:
@@ -479,19 +477,19 @@ static bool checkTaskSource(const DominoHuman* human_ptr, const DominoTaskCandid
     }
 }
 
-static bool checkTaskCreate(const DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_list, uint8_t index, TaskReviewContext* context_ptr) {
+static bool checkTaskCreate(const DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_list, uint8_t index, TaskReview* context_ptr) {
     const DominoTaskCandidateEntry* entry_ptr = &entry_list[index];
     const DominoHumanData* data_ptr = human_ptr->data;
     if (dominoHumanGetTaskRules(entry_ptr->type) == nullptr || entry_ptr->target_value > DOMINO_HUMAN_NEED_MAX) {
         return false;
     }
-    const DominoMotivation* motivation_ptr = dominoGetMotivationByID(entry_ptr->motivation_id);
+    const DominoMotivation* motivation_ptr = dominoGetMotivationById(entry_ptr->motivation_id);
     if (motivation_ptr == nullptr || motivation_ptr->owner_human_id != human_ptr->human_id ||
         motivation_ptr->status != DOMINO_MOTIVATION_STATUS_ACTIVE) {
         return false;
     }
     /* 同次工作已有任务：复用原 task_id，不新建、不改变原归属。 */
-    const domino_task_id_t same_id = findSameWork(data_ptr, entry_ptr);
+    const domino_task_id_t same_id = findSameWorkTask(data_ptr, entry_ptr);
     if (same_id != 0U) {
         context_ptr->reuse_list[index] = true;
         context_ptr->resolved_id_list[index] = same_id;
@@ -533,13 +531,13 @@ static bool checkTaskCreate(const DominoHuman* human_ptr, const DominoTaskCandid
     return true;
 }
 
-static bool checkTaskEntry(const DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_list, uint8_t index, TaskReviewContext* context_ptr) {
+static bool checkTaskEntry(const DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_list, uint8_t index, TaskReview* context_ptr) {
     const DominoTaskCandidateEntry* entry_ptr = &entry_list[index];
     switch (entry_ptr->op) {
         case DOMINO_TASK_CANDIDATE_CREATE:
             return checkTaskCreate(human_ptr, entry_list, index, context_ptr);
         case DOMINO_TASK_CANDIDATE_CANCEL: {
-            const DominoTask* task_ptr = dominoGetTaskByID(entry_ptr->task_id);
+            const DominoTask* task_ptr = dominoGetTaskById(entry_ptr->task_id);
             if (task_ptr == nullptr || task_ptr->owner_human_id != human_ptr->human_id || !dominoTaskIsLive(task_ptr)) {
                 return false;
             }
@@ -557,11 +555,11 @@ static bool checkTaskEntry(const DominoHuman* human_ptr, const DominoTaskCandida
 }
 
 /** @brief 建立任务记录并进入待执行队列：回应外部信息的任务放在队首并带让位请求，同次写入中承接外部信息。 */
-static void applyTaskCreate(DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_ptr, TaskReviewContext* context_ptr, uint8_t index,
+static void applyTaskCreate(DominoHuman* human_ptr, const DominoTaskCandidateEntry* entry_ptr, TaskReview* context_ptr, uint8_t index,
                             domino_runtime_ms_t now_ms) {
     DominoHumanData* data_ptr = human_ptr->data;
     const bool stimulus_flag = entry_ptr->work_source_kind == DOMINO_TASK_SOURCE_STIMULUS;
-    DominoTask init = {
+    DominoTask task_init = {
         .motivation_id = entry_ptr->motivation_id,
         .work_source_id = entry_ptr->work_source_id,
         .work_round = entry_ptr->work_round,
@@ -574,16 +572,16 @@ static void applyTaskCreate(DominoHuman* human_ptr, const DominoTaskCandidateEnt
         .flags = (uint8_t)((entry_ptr->task_flags & (DOMINO_TASK_FLAG_DEADLINE_VALID | DOMINO_TASK_FLAG_DEADLINE_INCLUSIVE)) |
                            (stimulus_flag ? DOMINO_TASK_FLAG_PREEMPT : 0U)),
     };
-    const domino_task_id_t task_id = dominoHumanStoreAddTask(data_ptr, &init)->task_id;
+    const domino_task_id_t task_id = dominoHumanStoreAddTask(data_ptr, &task_init)->task_id;
     uint8_t insert_index = entry_ptr->insert_index == DOMINO_PLAN_CANDIDATE_INSERT_APPEND ? data_ptr->task_queue_count : entry_ptr->insert_index;
     if (stimulus_flag) {
         insert_index = 0U;
         data_ptr->stimulus_kind = DOMINO_HUMAN_STIMULUS_NONE;
     }
-    dominoHumanQueueInsert(data_ptr, insert_index, task_id);
+    dominoHumanTaskQueueInsert(data_ptr, insert_index, task_id);
     dominoHumanRuntimeOf(human_ptr)->queue_version++;
     if (entry_ptr->type == DOMINO_TASK_TYPE_SLEEP) {
-        DominoMotivation* motivation_ptr = dominoGetMotivationByID(entry_ptr->motivation_id);
+        DominoMotivation* motivation_ptr = dominoGetMotivationById(entry_ptr->motivation_id);
         motivation_ptr->need_round = entry_ptr->work_round;
         motivation_ptr->round_task_id = task_id;
     }
@@ -591,12 +589,12 @@ static void applyTaskCreate(DominoHuman* human_ptr, const DominoTaskCandidateEnt
 }
 
 static bool commitTaskCandidate(DominoHuman* human_ptr, const void* candidate_ptr, domino_runtime_ms_t now_ms) {
-    if (!dominoHumanCandidateWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_TASK)) {
+    if (!dominoHumanCandidateIsWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_TASK)) {
         return false;
     }
     const DominoPlanCandidateHeader* header_ptr = dominoHumanCandidateHeader(candidate_ptr);
     const DominoTaskCandidateEntry* entry_list = dominoHumanCandidateEntries((void*)candidate_ptr);
-    TaskReviewContext context = {0};
+    TaskReview context = {0};
     for (uint8_t index = 0U; index < header_ptr->entry_count; index++) {
         context.adopted_list[index] = checkTaskEntry(human_ptr, entry_list, index, &context);
         if (!context.adopted_list[index] && index < header_ptr->required_count) {
@@ -627,7 +625,7 @@ static bool commitTaskCandidate(DominoHuman* human_ptr, const void* candidate_pt
             applyTaskCreate(human_ptr, entry_ptr, &context, index, now_ms);
             continue;
         }
-        DominoTask* task_ptr = dominoGetTaskByID(entry_ptr->task_id);
+        DominoTask* task_ptr = dominoGetTaskById(entry_ptr->task_id);
         const DominoTaskDecision decision = {
             .kind = task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE ? DOMINO_TASK_DECISION_REVOKE : DOMINO_TASK_DECISION_CANCEL,
             .reason = DOMINO_END_REASON_PLANNER_CANCELLED,
@@ -645,11 +643,11 @@ typedef struct BehaviorReview {
 } BehaviorReview;
 
 /** @brief 本任务当前行为中步骤序号为 step_seq 的记录；没有返回空指针。 */
-static const DominoBehavior* currentStepOf(const DominoTask* task_ptr, uint32_t step_seq) {
+static const DominoBehavior* findCurrentStep(const DominoTask* task_ptr, uint32_t step_seq) {
     for (uint8_t channel = 0U; channel < DOMINO_BEHAVIOR_CHANNEL_COUNT; channel++) {
         const domino_behavior_id_t behavior_id = task_ptr->current_behavior_id_list[channel];
-        if (behavior_id != 0U && dominoGetBehaviorByID(behavior_id)->step_seq == step_seq) {
-            return dominoGetBehaviorByID(behavior_id);
+        if (behavior_id != 0U && dominoGetBehaviorById(behavior_id)->step_seq == step_seq) {
+            return dominoGetBehaviorById(behavior_id);
         }
     }
     return nullptr;
@@ -666,8 +664,8 @@ static bool checkReplaceSteps(const DominoTask* task_ptr, const DominoBehaviorPl
             item_ptr->flags != 0U) {
             return false;
         }
-        for (uint8_t dep = 0U; dep < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dep++) {
-            const DominoBehaviorDependency* dependency_ptr = &item_ptr->dependency_list[dep];
+        for (uint8_t dependency_index = 0U; dependency_index < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dependency_index++) {
+            const DominoBehaviorDependency* dependency_ptr = &item_ptr->dependency_list[dependency_index];
             if (dependency_ptr->kind == DOMINO_BEHAVIOR_DEPENDENCY_NONE) {
                 if (dependency_ptr->step_seq != 0U) {
                     return false;
@@ -685,7 +683,7 @@ static bool checkReplaceSteps(const DominoTask* task_ptr, const DominoBehaviorPl
                 }
                 source_channel = step_list[local].channel_index;
             } else {
-                const DominoBehavior* source_ptr = currentStepOf(task_ptr, dependency_ptr->step_seq);
+                const DominoBehavior* source_ptr = findCurrentStep(task_ptr, dependency_ptr->step_seq);
                 if (source_ptr == nullptr || (source_ptr->flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U) {
                     return false;
                 }
@@ -708,8 +706,9 @@ static bool checkInsertSteps(const DominoBehaviorPlanItem* step_list, uint16_t s
             item_ptr->channel_index >= DOMINO_BEHAVIOR_CHANNEL_COUNT) {
             return false;
         }
-        for (uint8_t dep = 0U; dep < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dep++) {
-            if (item_ptr->dependency_list[dep].kind != DOMINO_BEHAVIOR_DEPENDENCY_NONE || item_ptr->dependency_list[dep].step_seq != 0U) {
+        for (uint8_t dependency_index = 0U; dependency_index < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dependency_index++) {
+            if (item_ptr->dependency_list[dependency_index].kind != DOMINO_BEHAVIOR_DEPENDENCY_NONE ||
+                item_ptr->dependency_list[dependency_index].step_seq != 0U) {
                 return false;
             }
         }
@@ -718,9 +717,9 @@ static bool checkInsertSteps(const DominoBehaviorPlanItem* step_list, uint16_t s
 }
 
 /** @brief 本任务未来步骤中插入的辅助步骤数。 */
-static uint8_t insertedPlanCount(const DominoTask* task_ptr) {
+static uint8_t countInsertedSteps(const DominoTask* task_ptr) {
     uint8_t count = 0U;
-    for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+    for (uint8_t index = 0U; index < task_ptr->plan_item_count; index++) {
         count = (uint8_t)(count + ((task_ptr->plan_item_list[index].flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U ? 1U : 0U));
     }
     return count;
@@ -730,7 +729,7 @@ static bool checkBehaviorEntry(const DominoHuman* human_ptr, const DominoBehavio
                                const DominoPlanCandidateHeader* header_ptr, const DominoBehaviorPlanItem* step_list, BehaviorReview* review_ptr,
                                int64_t* entry_delta_ptr) {
     const DominoBehaviorCandidateEntry* entry_ptr = &entry_list[index];
-    const DominoTask* task_ptr = dominoGetTaskByID(entry_ptr->task_id);
+    const DominoTask* task_ptr = dominoGetTaskById(entry_ptr->task_id);
     if (task_ptr == nullptr || task_ptr->owner_human_id != human_ptr->human_id || !dominoTaskIsLive(task_ptr) ||
         (uint32_t)entry_ptr->step_index + entry_ptr->step_count > header_ptr->step_count) {
         return false;
@@ -756,7 +755,7 @@ static bool checkBehaviorEntry(const DominoHuman* human_ptr, const DominoBehavio
             if (!checkReplaceSteps(task_ptr, own_list, entry_ptr->step_count)) {
                 return false;
             }
-            kept_count = insertedPlanCount(task_ptr);
+            kept_count = countInsertedSteps(task_ptr);
             break;
         case DOMINO_BEHAVIOR_CANDIDATE_INSERT:
             /* 只能为运行任务插入；外部信息须尚未承接且轮次未变，这是插入回应哪条外部信息的身份锚点，也让回应任务与插入互斥。
@@ -766,16 +765,16 @@ static bool checkBehaviorEntry(const DominoHuman* human_ptr, const DominoBehavio
                 entry_ptr->expected_stimulus_round != human_ptr->data->stimulus_round || !checkInsertSteps(own_list, entry_ptr->step_count)) {
                 return false;
             }
-            kept_count = task_ptr->plan_count;
+            kept_count = task_ptr->plan_item_count;
             break;
         default:
             return false;
     }
-    const uint32_t new_plan_count = kept_count + entry_ptr->step_count;
-    if (new_plan_count + task_ptr->record_count > DOMINO_TASK_STEP_COUNT_MAX) {
+    const uint32_t new_plan_item_count = kept_count + entry_ptr->step_count;
+    if (new_plan_item_count + task_ptr->behavior_record_count > DOMINO_TASK_STEP_COUNT_MAX) {
         return false;
     }
-    const int64_t entry_delta = (int64_t)new_plan_count - task_ptr->plan_count;
+    const int64_t entry_delta = (int64_t)new_plan_item_count - task_ptr->plan_item_count;
     if ((int64_t)dominoHumanStorePlanItemCount() + review_ptr->plan_delta + entry_delta > (int64_t)DOMINO_HUMAN_PLAN_ITEM_POOL_MAX) {
         return false;
     }
@@ -794,8 +793,8 @@ static void assignSteps(DominoTask* task_ptr, const DominoBehaviorPlanItem* step
         DominoBehaviorPlanItem item = step_list[step];
         item.step_seq = base_seq + step + 1U;
         item.flags = flags;
-        for (uint8_t dep = 0U; dep < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dep++) {
-            DominoBehaviorDependency* dependency_ptr = &item.dependency_list[dep];
+        for (uint8_t dependency_index = 0U; dependency_index < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; dependency_index++) {
+            DominoBehaviorDependency* dependency_ptr = &item.dependency_list[dependency_index];
             if ((dependency_ptr->step_seq & DOMINO_PLAN_CANDIDATE_LOCAL_REF) != 0U) {
                 dependency_ptr->step_seq = base_seq + (dependency_ptr->step_seq & ~DOMINO_PLAN_CANDIDATE_LOCAL_REF) + 1U;
             }
@@ -808,34 +807,34 @@ static void assignSteps(DominoTask* task_ptr, const DominoBehaviorPlanItem* step
 
 /** @brief REPLACE：保留已插入的辅助步骤在前（各自通道的先后不变），其后为新的自身步骤；INSERT：新插入步骤排在各自通道最前。 */
 static void applyBehaviorEntry(DominoHuman* human_ptr, const DominoBehaviorCandidateEntry* entry_ptr, const DominoBehaviorPlanItem* step_list) {
-    DominoTask* task_ptr = dominoGetTaskByID(entry_ptr->task_id);
+    DominoTask* task_ptr = dominoGetTaskById(entry_ptr->task_id);
     DominoBehaviorPlanItem plan_list[DOMINO_TASK_STEP_COUNT_MAX];
-    uint8_t plan_count = 0U;
+    uint8_t plan_item_count = 0U;
     const DominoBehaviorPlanItem* own_list = &step_list[entry_ptr->step_index];
     if (entry_ptr->op == DOMINO_BEHAVIOR_CANDIDATE_REPLACE) {
-        for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
+        for (uint8_t index = 0U; index < task_ptr->plan_item_count; index++) {
             if ((task_ptr->plan_item_list[index].flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U) {
-                plan_list[plan_count++] = task_ptr->plan_item_list[index];
+                plan_list[plan_item_count++] = task_ptr->plan_item_list[index];
             }
         }
-        assignSteps(task_ptr, own_list, entry_ptr->step_count, 0U, &plan_list[plan_count]);
-        plan_count = (uint8_t)(plan_count + entry_ptr->step_count);
+        assignSteps(task_ptr, own_list, entry_ptr->step_count, 0U, &plan_list[plan_item_count]);
+        plan_item_count = (uint8_t)(plan_item_count + entry_ptr->step_count);
         task_ptr->flags = (uint8_t)(task_ptr->flags & ~DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID);
     } else {
         assignSteps(task_ptr, own_list, entry_ptr->step_count, DOMINO_BEHAVIOR_FLAG_INSERTED, plan_list);
-        plan_count = (uint8_t)entry_ptr->step_count;
-        for (uint8_t index = 0U; index < task_ptr->plan_count; index++) {
-            plan_list[plan_count++] = task_ptr->plan_item_list[index];
+        plan_item_count = (uint8_t)entry_ptr->step_count;
+        for (uint8_t index = 0U; index < task_ptr->plan_item_count; index++) {
+            plan_list[plan_item_count++] = task_ptr->plan_item_list[index];
         }
         /* 插入步骤承接待处理外部信息。 */
         human_ptr->data->stimulus_kind = DOMINO_HUMAN_STIMULUS_NONE;
     }
     /* 每个任务的未来步骤整体替换；正式记录复制值，不借用候选内存。 */
-    dominoHumanStoreReplacePlan(task_ptr, plan_list, plan_count);
+    dominoHumanStoreReplacePlan(task_ptr, plan_list, plan_item_count);
 }
 
 static bool commitBehaviorCandidate(DominoHuman* human_ptr, const void* candidate_ptr) {
-    if (!dominoHumanCandidateWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_BEHAVIOR)) {
+    if (!dominoHumanCandidateIsWithinLimits(candidate_ptr, DOMINO_HUMAN_PLANNER_BEHAVIOR)) {
         return false;
     }
     const DominoPlanCandidateHeader* header_ptr = dominoHumanCandidateHeader(candidate_ptr);
@@ -863,34 +862,33 @@ static bool commitBehaviorCandidate(DominoHuman* human_ptr, const void* candidat
 }
 
 /** @brief 处理后该任务是否仍满足行为规划触发条件；任务已不存在时为否。 */
-static bool behaviorScopeStillNeeded(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr) {
-    const DominoTask* task_ptr = dominoGetTaskByID(slot_ptr->scope_id);
+static bool isBehaviorPlanStillNeeded(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr) {
+    const DominoTask* task_ptr = dominoGetTaskById(slot_ptr->scope_id);
     return task_ptr != nullptr && task_ptr->owner_human_id == human_ptr->human_id && dominoHumanTaskNeedsBehaviorPlan(human_ptr, task_ptr);
 }
 
-/** @brief 核对完整请求身份 → 共同结算 → 复核并提交或拒绝 → 动机和任务覆盖下次规划时刻、行为按结果设重试 → 边界判定 → 后续调度；
- * 载荷整块释放一次。
- * @note 只保留请求身份、结构性条件和身份锚点三类复核（宪法第六章），不复核判断依据、不按时间拒收结果；结果不改变待规划标志，
- * 请求在途期间新置位的标志在处理后再发起一次请求。
+/** @brief 处理一条规划结果：核对请求身份 → 结算到当前时刻 → 复核并提交或拒绝候选 → 更新下次规划时刻或行为重试 →
+ * 边界判定和后续调度；候选整块释放一次。
+ * @note 只做请求身份、结构性条件和身份锚点三类复核（宪法第六章），不按时间拒收结果，结果也不改变待规划标志。
  */
 static void processResult(uint8_t planner_kind, uint8_t priority, DominoHumanPlanResultMessage* result_ptr) {
-    g_execution.stats.result_count_list[planner_kind][priority]++;
-    const uint64_t wait_ns = dominoMonotonicTimeNs() - result_ptr->enqueued_mono_ns;
-    if (wait_ns > g_execution.stats.max_result_wait_ns) {
-        g_execution.stats.max_result_wait_ns = wait_ns;
+    g_executor.stats.result_count_list[planner_kind][priority]++;
+    const uint64_t wait_ns = dominoGetMonotonicTimeNs() - result_ptr->enqueued_monotonic_ns;
+    if (wait_ns > g_executor.stats.max_result_wait_ns) {
+        g_executor.stats.max_result_wait_ns = wait_ns;
     }
-    DominoHuman* human_ptr = dominoGetHumanByID(result_ptr->human_id);
-    DominoHumanPlanSlot* slot_ptr = human_ptr ? &dominoHumanRuntimeOf(human_ptr)->slot_list[planner_kind] : nullptr;
+    DominoHuman* human_ptr = dominoGetHumanById(result_ptr->human_id);
+    DominoHumanPlanSlot* slot_ptr = human_ptr ? &dominoHumanRuntimeOf(human_ptr)->plan_slot_list[planner_kind] : nullptr;
     if (!slot_ptr || slot_ptr->request_id != result_ptr->request_id || slot_ptr->priority != priority) {
         /* 旧或重复结果只释放自身载荷，不清除另一优先级或后续请求，也不改变下次规划时刻。 */
-        g_execution.stats.stale_result_count++;
+        g_executor.stats.stale_result_count++;
         dominoHumanCandidateFree(result_ptr->candidate_ptr);
         return;
     }
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
     const DominoHumanPlanSlot matched = *slot_ptr;
-    /* 结算到本次时刻是写入的前提，不是时效性检查。 */
+    // 先结算到当前时刻再写入；这不是时效检查。
     dominoHumanSettle(human_ptr, now_ms);
     bool rejected_flag = false;
     if (result_ptr->outcome == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE) {
@@ -907,9 +905,9 @@ static void processResult(uint8_t planner_kind, uint8_t priority, DominoHumanPla
                 break;
         }
         if (accepted_flag) {
-            g_execution.stats.accepted_candidate_count++;
+            g_executor.stats.accepted_candidate_count++;
         } else {
-            g_execution.stats.rejected_candidate_count++;
+            g_executor.stats.rejected_candidate_count++;
         }
         rejected_flag = !accepted_flag;
         DOMINO_ENGINE_LOG(DOMINO_ENGINE_LOG_MODULE_HUMAN, DOMINO_LOG_LEVEL_DEBUG, "plan human=%" PRIu32 " kind=%u request=%" PRIu64 " %s",
@@ -917,8 +915,8 @@ static void processResult(uint8_t planner_kind, uint8_t priority, DominoHumanPla
     }
     DominoHumanRuntime* runtime_ptr = dominoHumanRuntimeOf(human_ptr);
     if (planner_kind == DOMINO_HUMAN_PLANNER_BEHAVIOR) {
-        /* 行为仍按扫描触发：无方案、被拒或处理后任务仍需行为规划时保留正延迟重试，避免在空结果与新请求之间忙循环。 */
-        if (result_ptr->outcome == DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN || rejected_flag || behaviorScopeStillNeeded(human_ptr, &matched)) {
+        // 无方案、被拒或处理后仍需规划时设重试，避免空结果与新请求之间忙循环。
+        if (result_ptr->outcome == DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN || rejected_flag || isBehaviorPlanStillNeeded(human_ptr, &matched)) {
             setBehaviorRetry(&matched, now_ms);
         }
     } else if (rejected_flag) {
@@ -927,16 +925,16 @@ static void processResult(uint8_t planner_kind, uint8_t priority, DominoHumanPla
         const bool valid_flag = g_domino_human_ai_config.retry_delay_ms <= UINT32_MAX - now_ms;
         setNextPlan(runtime_ptr, planner_kind, valid_flag, valid_flag ? now_ms + g_domino_human_ai_config.retry_delay_ms : 0U);
     } else {
-        /* 包括 NO_CHANGE 和 NO_PLAN 在内，都用规划器给出的下次规划时刻覆盖当前值；“无”时清除。 */
+        // 包括 NO_CHANGE 和 NO_PLAN：用规划器给出的下次规划时刻覆盖，“无”则清除。
         setNextPlan(runtime_ptr, planner_kind, result_ptr->next_plan_valid_flag, result_ptr->next_plan_at_ms);
     }
-    /* 消费本次请求资格。 */
+    // 清空请求槽：本次请求已得到结果。
     *slot_ptr = (DominoHumanPlanSlot){0};
     dominoHumanCandidateFree(result_ptr->candidate_ptr);
     result_ptr->candidate_ptr = nullptr;
-    /* 候选提交引起的变化先在本边界检查完，再让位、启动或恢复行为。 */
+    // 先在本边界检查候选带来的变化，再让位、启动或恢复行为。
     dominoHumanResolveBoundary(human_ptr);
-    finishHuman(human_ptr, now_ms);
+    followUpHuman(human_ptr, now_ms);
 }
 
 #ifdef DOMINO_PLAYGROUND_MODE
@@ -968,7 +966,7 @@ static bool applyTestEnergy(DominoHumanData* data_ptr, uint8_t energy) {
     }
     data_ptr->energy = energy;
     for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        DominoTask* task_ptr = dominoGetTaskByID(data_ptr->task_id_list[index]);
+        DominoTask* task_ptr = dominoGetTaskById(data_ptr->task_id_list[index]);
         if (dominoTaskIsLive(task_ptr)) {
             dominoHumanGetTaskRules(task_ptr->type)->on_energy_input(task_ptr, energy);
         }
@@ -1000,22 +998,22 @@ static bool applyTestStimulus(DominoHuman* human_ptr, const DominoHumanTestStimu
 /** @brief 测试验收专用：人物输入先按旧值结算到本次时刻，再写入实际变化、置相应待规划标志，并在同一边界判定和收尾；人物不存在时忽略。
  * @pre 执行器持写锁，或 playground 串行直访。
  */
-static void processTestInput(const DominoHumanExecutionMessage* message_ptr) {
+static void processTestInput(const DominoHumanInboxMessage* message_ptr) {
     domino_human_id_t human_id;
     switch (message_ptr->type) {
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_SLEEP_CONDITION:
+        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
             human_id = message_ptr->payload.test_sleep_condition.human_id;
             break;
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_ENERGY:
+        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
             human_id = message_ptr->payload.test_energy.human_id;
             break;
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_STIMULUS:
+        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS:
             human_id = message_ptr->payload.test_stimulus.human_id;
             break;
         default:
             DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human test input type=%d", (int)message_ptr->type);
     }
-    DominoHuman* human_ptr = dominoGetHumanByID(human_id);
+    DominoHuman* human_ptr = dominoGetHumanById(human_id);
     if (!human_ptr) {
         return;
     }
@@ -1025,11 +1023,11 @@ static void processTestInput(const DominoHumanExecutionMessage* message_ptr) {
     bool changed_flag;
     uint8_t plan_mask;
     switch (message_ptr->type) {
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_SLEEP_CONDITION:
+        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
             changed_flag = applyTestSleepCondition(human_ptr->data, message_ptr->payload.test_sleep_condition.forbidden_flag);
             plan_mask = DOMINO_HUMAN_PLAN_MASK_TASK;
             break;
-        case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_ENERGY:
+        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
             changed_flag = applyTestEnergy(human_ptr->data, message_ptr->payload.test_energy.energy);
             plan_mask = DOMINO_HUMAN_PLAN_MASK_TASK;
             break;
@@ -1043,7 +1041,7 @@ static void processTestInput(const DominoHumanExecutionMessage* message_ptr) {
         dominoHumanMarkPlanPending(human_ptr, plan_mask);
         dominoHumanResolveBoundary(human_ptr);
     }
-    finishHuman(human_ptr, now_ms);
+    followUpHuman(human_ptr, now_ms);
 }
 #endif
 
@@ -1051,14 +1049,14 @@ static void processTestInput(const DominoHumanExecutionMessage* message_ptr) {
 /* 执行线程                                                                                                           */
 /* ---------------------------------------------------------------------------------------------------------------- */
 
-static uint64_t writeLock(void) {
-    dominoRWLockWriteLock(&domino_human_data_lock);
-    return dominoMonotonicTimeNs();
+static uint64_t lockForWrite(void) {
+    dominoRWLockWriteLock(&g_domino_human_lock);
+    return dominoGetMonotonicTimeNs();
 }
 
-static void writeUnlock(uint64_t locked_at_ns) {
-    g_execution.stats.write_lock_ns += dominoMonotonicTimeNs() - locked_at_ns;
-    dominoRWLockWriteUnlock(&domino_human_data_lock);
+static void unlockForWrite(uint64_t locked_at_ns) {
+    g_executor.stats.write_lock_ns += dominoGetMonotonicTimeNs() - locked_at_ns;
+    dominoRWLockWriteUnlock(&g_domino_human_lock);
 }
 
 /** @brief 依次检查动机、任务、行为：每类先处理有限高优先级结果，再处理有限普通结果。
@@ -1070,18 +1068,19 @@ static bool processResultQueues(DominoHumanPlanResultMessage* batch_list) {
     for (uint8_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
         for (uint8_t priority = 0U; priority < DOMINO_HUMAN_PLAN_PRIORITY_COUNT; priority++) {
             uint32_t count = 0U;
-            const DOMINO_CODE code = dominoThreadQueueConsumeBatch(dominoHumanPlannerResultQueue(kind, priority), batch_list, quota, &count, false);
+            const DOMINO_CODE code =
+                dominoThreadQueueConsumeBatch(dominoHumanPlannerGetResultQueue(kind, priority), batch_list, quota, &count, false);
             if (code != CODE_OK && code != ERR_QUEUE_EMPTY) {
                 DOMINO_EXIT_WITH_ERROR(code, "cannot consume plan results kind=%u", kind);
             }
             if (count == 0U) {
                 continue;
             }
-            const uint64_t locked_at_ns = writeLock();
+            const uint64_t locked_at_ns = lockForWrite();
             for (uint32_t index = 0U; index < count; index++) {
                 processResult(kind, priority, &batch_list[index]);
             }
-            writeUnlock(locked_at_ns);
+            unlockForWrite(locked_at_ns);
             more_flag = more_flag || count == quota;
         }
     }
@@ -1091,31 +1090,31 @@ static bool processResultQueues(DominoHumanPlanResultMessage* batch_list) {
 /** @brief 按 FIFO 处理有限业务收件。
  * @return 是否用尽本批配额。
  */
-static bool processInbox(DominoHumanExecutionMessage* batch_list) {
+static bool processInbox(DominoHumanInboxMessage* batch_list) {
     const uint32_t quota = g_domino_human_ai_config.inbox_quota;
     uint32_t count = 0U;
-    const DOMINO_CODE code = dominoThreadQueueConsumeBatch(&g_execution.inbox, batch_list, quota, &count, false);
+    const DOMINO_CODE code = dominoThreadQueueConsumeBatch(&g_executor.inbox, batch_list, quota, &count, false);
     if (code != CODE_OK && code != ERR_QUEUE_EMPTY) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot consume human executor inbox");
     }
     if (count == 0U) {
         return false;
     }
-    const uint64_t locked_at_ns = writeLock();
+    const uint64_t locked_at_ns = lockForWrite();
     for (uint32_t index = 0U; index < count; index++) {
-        DominoHumanExecutionMessage* message_ptr = &batch_list[index];
+        DominoHumanInboxMessage* message_ptr = &batch_list[index];
         switch (message_ptr->type) {
-            case DOMINO_HUMAN_EXECUTION_MESSAGE_GAME_TIMER: {
+            case DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER: {
                 DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.game_timer);
                 if (human_ptr) {
-                    advanceHumanNow(human_ptr);
+                    advanceHumanToNow(human_ptr);
                 }
                 break;
             }
 #ifdef DOMINO_PLAYGROUND_MODE
-            case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_SLEEP_CONDITION:
-            case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_ENERGY:
-            case DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_STIMULUS:
+            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
+            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
+            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS:
                 processTestInput(message_ptr);
                 break;
 #endif
@@ -1123,7 +1122,7 @@ static bool processInbox(DominoHumanExecutionMessage* batch_list) {
                 DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human executor message type=%d", (int)message_ptr->type);
         }
     }
-    writeUnlock(locked_at_ns);
+    unlockForWrite(locked_at_ns);
     return count == quota;
 }
 
@@ -1131,26 +1130,26 @@ static bool processInbox(DominoHumanExecutionMessage* batch_list) {
  * @return 是否仍有待办。
  */
 static bool processTodos(void) {
-    if (g_execution.todo_count == 0U) {
+    if (g_executor.todo_count == 0U) {
         return false;
     }
-    const uint64_t locked_at_ns = writeLock();
-    for (uint32_t index = 0U; index < g_domino_human_ai_config.todo_quota && g_execution.todo_count != 0U; index++) {
-        g_execution.stats.todo_count++;
-        advanceHumanNow(popTodo());
+    const uint64_t locked_at_ns = lockForWrite();
+    for (uint32_t index = 0U; index < g_domino_human_ai_config.todo_quota && g_executor.todo_count != 0U; index++) {
+        g_executor.stats.todo_count++;
+        advanceHumanToNow(popTodo());
     }
-    writeUnlock(locked_at_ns);
-    return g_execution.todo_count != 0U;
+    unlockForWrite(locked_at_ns);
+    return g_executor.todo_count != 0U;
 }
 
 /** @brief Snapshot → 退出／冻结检查 → 六条结果队列、业务收件箱、本地待办各自有限配额 → 无工作时按快照等待。 */
-static int humanExecutionThread(void* arg_ptr) {
+static int executorThreadMain(void* arg_ptr) {
     (void)arg_ptr;
     DominoHumanPlanResultMessage result_batch[DOMINO_HUMAN_EXECUTOR_BATCH_MESSAGE_MAX];
-    DominoHumanExecutionMessage inbox_batch[DOMINO_HUMAN_EXECUTOR_BATCH_MESSAGE_MAX];
+    DominoHumanInboxMessage inbox_batch[DOMINO_HUMAN_EXECUTOR_BATCH_MESSAGE_MAX];
     for (;;) {
         uint64_t epoch;
-        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_execution.inbox, &epoch);
+        DOMINO_CODE code = dominoThreadQueueSnapshot(&g_executor.inbox, &epoch);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "cannot snapshot human executor inbox");
         }
@@ -1162,8 +1161,8 @@ static int humanExecutionThread(void* arg_ptr) {
             dominoTimeModuleWait(freeze_epoch);
             continue;
         }
-        g_execution.batch_seq++;
-        g_execution.stats.batch_count++;
+        g_executor.batch_seq++;
+        g_executor.stats.batch_count++;
         const bool results_more_flag = processResultQueues(result_batch);
         const bool inbox_more_flag = processInbox(inbox_batch);
         const bool todo_more_flag = processTodos();
@@ -1171,7 +1170,7 @@ static int humanExecutionThread(void* arg_ptr) {
             /* 本批额度耗尽但仍有消息或待办：回到批次入口，不进入等待。 */
             continue;
         }
-        code = dominoThreadQueueWait(&g_execution.inbox, epoch);
+        code = dominoThreadQueueWait(&g_executor.inbox, epoch);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "cannot wait on human executor inbox");
         }
@@ -1182,41 +1181,40 @@ static int humanExecutionThread(void* arg_ptr) {
 /* 生命周期                                                                                                           */
 /* ---------------------------------------------------------------------------------------------------------------- */
 
-void dominoHumanExecutionInit(void) {
-    dominoThreadQueueInit(&g_execution.inbox, sizeof(DominoHumanExecutionMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY,
-                          DOMINO_THREAD_QUEUE_MAX_CAPACITY);
-    dominoHumanPlannerInit(&g_execution.inbox);
+void dominoHumanExecutorInit(void) {
+    dominoThreadQueueInit(&g_executor.inbox, sizeof(DominoHumanInboxMessage), DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
+    dominoHumanPlannerInit(&g_executor.inbox);
 }
 
-void dominoHumanExecutionInitAfter(void) {
-    const size_t human_count = kv_size(domino_all_human_list);
+void dominoHumanExecutorInitAfter(void) {
+    const size_t human_count = kv_size(g_domino_human_list);
     if (human_count > DOMINO_HUMAN_WORLD_COUNT_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "world human count %zu exceeds capacity %u", human_count, DOMINO_HUMAN_WORLD_COUNT_MAX);
     }
-    g_execution.todo_capacity = human_count > 0U ? (uint32_t)human_count : 1U;
-    domino_human_runtime_list = calloc(g_execution.todo_capacity, sizeof(*domino_human_runtime_list));
-    g_execution.todo_ring = calloc(g_execution.todo_capacity, sizeof(*g_execution.todo_ring));
-    if (!domino_human_runtime_list || !g_execution.todo_ring) {
+    g_executor.todo_capacity = human_count > 0U ? (uint32_t)human_count : 1U;
+    g_domino_human_runtime_list = calloc(g_executor.todo_capacity, sizeof(*g_domino_human_runtime_list));
+    g_executor.todo_ring = calloc(g_executor.todo_capacity, sizeof(*g_executor.todo_ring));
+    if (!g_domino_human_runtime_list || !g_executor.todo_ring) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "cannot allocate human runtime arrays count=%zu", human_count);
     }
     /* 计划运行期版本从 1 起重新建立；未回收行为记录数由记录本身重建。 */
-    for (size_t index = 0U; index < kv_size(domino_all_task_list); index++) {
-        DominoTask* task_ptr = &kv_A(domino_all_task_list, index);
+    for (size_t index = 0U; index < kv_size(g_domino_task_list); index++) {
+        DominoTask* task_ptr = &kv_A(g_domino_task_list, index);
         task_ptr->plan_version = dominoHumanStoreNextPlanVersion();
         if (dominoHumanGetTaskRules(task_ptr->type) == nullptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "task=%u type=%u has no supported rules", task_ptr->task_id, task_ptr->type);
         }
     }
-    for (size_t index = 0U; index < kv_size(domino_all_behavior_list); index++) {
-        const DominoBehavior* behavior_ptr = &kv_A(domino_all_behavior_list, index);
+    for (size_t index = 0U; index < kv_size(g_domino_behavior_list); index++) {
+        const DominoBehavior* behavior_ptr = &kv_A(g_domino_behavior_list, index);
         if (dominoHumanGetBehaviorRules(behavior_ptr->type) == nullptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_GAME_STATE_INVALID, "behavior=%u type=%u has no supported rules", behavior_ptr->behavior_id,
                                    behavior_ptr->type);
         }
-        dominoGetTaskByID(behavior_ptr->task_id)->record_count++;
+        dominoGetTaskById(behavior_ptr->task_id)->behavior_record_count++;
     }
     for (size_t index = 0U; index < human_count; index++) {
-        DominoHuman* human_ptr = &kv_A(domino_all_human_list, index);
+        DominoHuman* human_ptr = &kv_A(g_domino_human_list, index);
         human_ptr->state = dominoHumanComputeState(human_ptr);
         /* 待规划标志与下次规划时刻不跨会话保存：每个人物评估一次动机，有有效动机的人物规划一次任务，由规划器重新给出时刻。 */
         dominoHumanMarkPlanPending(human_ptr, (uint8_t)(DOMINO_HUMAN_PLAN_MASK_MOTIVATION |
@@ -1226,64 +1224,64 @@ void dominoHumanExecutionInitAfter(void) {
     }
 }
 
-void dominoHumanExecutionStart(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_execution.thread, humanExecutionThread, nullptr), ERR_THREAD_CREATE,
+void dominoHumanExecutorStart(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_executor.thread, executorThreadMain, nullptr), ERR_THREAD_CREATE,
                                   "cannot create human executor thread");
     dominoHumanPlannerStart();
 }
 
-void dominoHumanExecutionNotifyTimeChanged(void) {
-    dominoThreadQueueWakeAll(&g_execution.inbox);
+void dominoHumanExecutorNotifyTimeChanged(void) {
+    dominoThreadQueueWakeAll(&g_executor.inbox);
     dominoHumanPlannerNotifyTimeChanged();
 }
 
-void dominoHumanExecutionStop(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_execution.thread, nullptr), ERR_THREAD_JOIN, "cannot join human executor thread");
+void dominoHumanExecutorStop(void) {
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_join(g_executor.thread, nullptr), ERR_THREAD_JOIN, "cannot join human executor thread");
     /* 执行器的末批仍可投递规划请求；先结束生产者，再 join 三个规划线程。 */
     dominoHumanPlannerStop();
 }
 
-void dominoHumanExecutionDestroy(void) {
+void dominoHumanExecutorDestroy(void) {
     /* 全部线程已结束且业务事实已保存；留队通知、请求和候选只属于本会话，可由正式事实重建。 */
     dominoHumanPlannerDestroy();
-    DominoHumanExecutionMessage message;
+    DominoHumanInboxMessage message;
     DOMINO_CODE code;
-    while ((code = dominoThreadQueueConsume(&g_execution.inbox, &message, false)) == CODE_OK) {
+    while ((code = dominoThreadQueueConsume(&g_executor.inbox, &message, false)) == CODE_OK) {
     }
     if (code != ERR_QUEUE_EMPTY) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot drain human executor inbox during destroy");
     }
-    dominoThreadQueueDestroy(&g_execution.inbox);
-    free(domino_human_runtime_list);
-    domino_human_runtime_list = nullptr;
-    free(g_execution.todo_ring);
-    memset(&g_execution, 0, sizeof(g_execution));
+    dominoThreadQueueDestroy(&g_executor.inbox);
+    free(g_domino_human_runtime_list);
+    g_domino_human_runtime_list = nullptr;
+    free(g_executor.todo_ring);
+    memset(&g_executor, 0, sizeof(g_executor));
 }
 
-void dominoHumanExecutionSubmit(DominoHumanExecutionMessage* message_ptr) {
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_execution.inbox, message_ptr, false);
+void dominoHumanExecutorSubmit(DominoHumanInboxMessage* message_ptr) {
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_executor.inbox, message_ptr, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot submit human executor message type=%d", (int)message_ptr->type);
     }
 }
 
-DominoHumanExecutorStats dominoHumanExecutionGetStats(void) {
-    return g_execution.stats;
+DominoHumanExecutorStats dominoHumanExecutorGetStats(void) {
+    return g_executor.stats;
 }
 
 #ifdef DOMINO_PLAYGROUND_MODE
-void dominoHumanExecutionProcessResultForTest(uint8_t planner_kind, uint8_t priority, DominoHumanPlanResultMessage* result_ptr) {
-    g_execution.batch_seq++;
+void dominoHumanExecutorProcessResultForTest(uint8_t planner_kind, uint8_t priority, DominoHumanPlanResultMessage* result_ptr) {
+    g_executor.batch_seq++;
     processResult(planner_kind, priority, result_ptr);
 }
 
-void dominoHumanExecutionAdvanceForTest(domino_human_id_t human_id) {
-    g_execution.batch_seq++;
-    advanceHumanNow(dominoGetHumanByID(human_id));
+void dominoHumanExecutorAdvanceForTest(domino_human_id_t human_id) {
+    g_executor.batch_seq++;
+    advanceHumanToNow(dominoGetHumanById(human_id));
 }
 
-void dominoHumanExecutionProcessMessageForTest(const DominoHumanExecutionMessage* message_ptr) {
-    g_execution.batch_seq++;
+void dominoHumanExecutorProcessMessageForTest(const DominoHumanInboxMessage* message_ptr) {
+    g_executor.batch_seq++;
     processTestInput(message_ptr);
 }
 #endif

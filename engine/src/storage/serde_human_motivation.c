@@ -63,11 +63,11 @@ static void deserializeMotivation(yyjson_val* object, DominoMotivation* motivati
         };
     }
     motivation_ptr->history_count = (uint8_t)count;
-    motivation_ptr->history_head = 0U;
+    motivation_ptr->history_head_index = 0U;
 }
 
 void serdeSaveHumanMotivation(const char* save_path) {
-    const size_t total_count = kv_size(domino_all_motivation_list);
+    const size_t total_count = kv_size(g_domino_motivation_list);
     if (total_count > UINT32_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human motivation count exceeds storage limit: count=%zu", total_count);
     }
@@ -90,9 +90,9 @@ void serdeSaveHumanMotivation(const char* save_path) {
         const size_t remaining_count = total_count - start;
         const size_t count = remaining_count < DOMINO_STORAGE_SHARD_HUMAN_TASK ? remaining_count : DOMINO_STORAGE_SHARD_HUMAN_TASK;
         for (size_t index = start; index < start + count; index++) {
-            if (!yyjson_mut_arr_append(entities, serializeMotivation(doc, &kv_A(domino_all_motivation_list, index)))) {
+            if (!yyjson_mut_arr_append(entities, serializeMotivation(doc, &kv_A(g_domino_motivation_list, index)))) {
                 DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot serialize human motivation record: motivation_id=%u",
-                                       kv_A(domino_all_motivation_list, index).motivation_id);
+                                       kv_A(g_domino_motivation_list, index).motivation_id);
             }
         }
         storageWriteShardFile("human_motivation", shard, save_path, doc);

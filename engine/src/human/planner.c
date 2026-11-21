@@ -12,8 +12,8 @@
 #include "rules.h"
 
 /** @file planner.c
- * @brief 三类规划线程共用的私有循环：Snapshot → 退出／冻结检查 → 最多 K 个高请求 + 1 个普通请求 → 批次边界。
- * @note 每类上下文独立拥有线程句柄、四条队列、配置、批次临时数组和统计；共用循环不共享任何可变批次状态。
+ * @brief 三类规划线程的共用循环：Snapshot → 退出／冻结检查 → 至多 high_quota 个高优先级请求 + 1 个普通请求。
+ * @note 每类上下文各自拥有线程、队列、配置、批次数组和统计，循环之间不共享可变状态。
  */
 
 typedef struct HumanPlannerContext {
@@ -34,7 +34,7 @@ static DominoThreadQueue* g_executor_inbox_ptr;
 static DominoHumanPlanComputeFn g_compute_override_list[DOMINO_HUMAN_PLANNER_COUNT];
 #endif
 
-/* 十二条规划队列合计最大槽位内存受静态预算约束。 */
+// 十二条规划队列满载时的槽位内存上限。
 static_assert((sizeof(DominoHumanPlanRequestMessage) + sizeof(DominoHumanPlanResultMessage)) * DOMINO_HUMAN_PLANNER_COUNT *
                       DOMINO_HUMAN_PLAN_PRIORITY_COUNT * (uint64_t)DOMINO_THREAD_QUEUE_MAX_CAPACITY <=
                   (uint64_t)64U * 1024U * 1024U,
@@ -46,9 +46,9 @@ static const DominoHumanPlanComputeFn g_default_compute_list[DOMINO_HUMAN_PLANNE
     [DOMINO_HUMAN_PLANNER_BEHAVIOR] = dominoHumanPlanBehaviors,
 };
 
-/** @brief 持读锁还原完整身份并核对请求身份，再读取触发范围计算；失效项直接丢弃，有效项在读锁外回传明确结果及下次规划时刻。 */
+/** @brief 持读锁核对请求身份并计算：身份失效则丢弃；有效则在解锁后投递结果并唤醒执行器。 */
 static void processRequest(HumanPlannerContext* context_ptr, uint8_t priority, const DominoHumanPlanRequestMessage* request_ptr) {
-    const uint64_t begin_ns = dominoMonotonicTimeNs();
+    const uint64_t begin_ns = dominoGetMonotonicTimeNs();
     context_ptr->stats.request_count_list[priority]++;
     DominoHumanPlanResultMessage result = {
         .request_id = request_ptr->request_id,
@@ -57,12 +57,12 @@ static void processRequest(HumanPlannerContext* context_ptr, uint8_t priority, c
         .priority = priority,
     };
     dominoHumanReadLock();
-    const DominoHuman* human_ptr = dominoGetHumanByID(request_ptr->human_id);
-    const DominoHumanPlanSlot* slot_ptr = human_ptr ? &dominoHumanRuntimeOf(human_ptr)->slot_list[context_ptr->kind] : nullptr;
+    const DominoHuman* human_ptr = dominoGetHumanById(request_ptr->human_id);
+    const DominoHumanPlanSlot* slot_ptr = human_ptr ? &dominoHumanRuntimeOf(human_ptr)->plan_slot_list[context_ptr->kind] : nullptr;
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
     if (!slot_ptr || slot_ptr->request_id != request_ptr->request_id || slot_ptr->priority != priority) {
-        /* 旧消息不能读取后来请求的触发范围；已失效请求不回传结果。请求不设期限，有效请求排队再久也照常计算。 */
+        // 旧请求不得读取新请求的触发范围，直接丢弃。有效请求不设期限，排队再久也照常计算。
         dominoHumanReadUnlock();
         context_ptr->stats.dropped_count++;
         return;
@@ -74,7 +74,7 @@ static void processRequest(HumanPlannerContext* context_ptr, uint8_t priority, c
         (result.outcome == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE) != (output.candidate_ptr != nullptr)) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "planner kind=%u returned an invalid outcome=%u", context_ptr->kind, result.outcome);
     }
-    /* 下次规划时刻只属于动机和任务规划，且须晚于规划时刻。 */
+    // 下次规划时刻只属于动机和任务规划器，且须晚于规划时刻。
     if (output.next_plan_valid_flag && (context_ptr->kind == DOMINO_HUMAN_PLANNER_BEHAVIOR || output.next_plan_at_ms <= now_ms)) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_DATA, "planner kind=%u returned an invalid next plan time=%" PRIu32 " now_ms=%" PRIu32, context_ptr->kind,
                                output.next_plan_at_ms, now_ms);
@@ -82,22 +82,22 @@ static void processRequest(HumanPlannerContext* context_ptr, uint8_t priority, c
     result.candidate_ptr = output.candidate_ptr;
     result.next_plan_at_ms = output.next_plan_at_ms;
     result.next_plan_valid_flag = output.next_plan_valid_flag;
-    result.enqueued_mono_ns = dominoMonotonicTimeNs();
+    result.enqueued_monotonic_ns = dominoGetMonotonicTimeNs();
     const DOMINO_CODE code = dominoThreadQueueProduce(&context_ptr->result_queue_list[priority], &result, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "cannot deliver plan result kind=%u human=%" PRIu32 " request=%" PRIu64, context_ptr->kind,
                                request_ptr->human_id, request_ptr->request_id);
     }
-    /* 成功入队后候选归执行器；执行器以收件箱为统一等待对象。 */
+    // 入队成功后候选归执行器；执行器等待在收件箱上，因此唤醒收件箱。
     dominoThreadQueueWakeAll(g_executor_inbox_ptr);
-    const uint64_t elapsed_ns = dominoMonotonicTimeNs() - begin_ns;
+    const uint64_t elapsed_ns = dominoGetMonotonicTimeNs() - begin_ns;
     context_ptr->stats.busy_ns += elapsed_ns;
     if (elapsed_ns > context_ptr->stats.max_request_ns) {
         context_ptr->stats.max_request_ns = elapsed_ns;
     }
 }
 
-static int humanPlannerThread(void* arg_ptr) {
+static int plannerThreadMain(void* arg_ptr) {
     HumanPlannerContext* context_ptr = arg_ptr;
     DominoThreadQueue* normal_queue_ptr = &context_ptr->request_queue_list[DOMINO_HUMAN_PLAN_PRIORITY_NORMAL];
     for (;;) {
@@ -169,7 +169,7 @@ void dominoHumanPlannerInit(DominoThreadQueue* executor_inbox_ptr) {
 
 void dominoHumanPlannerStart(void) {
     for (uint8_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
-        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planner_list[kind].thread, humanPlannerThread, &g_planner_list[kind]), ERR_THREAD_CREATE,
+        DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_planner_list[kind].thread, plannerThreadMain, &g_planner_list[kind]), ERR_THREAD_CREATE,
                                       "cannot create human planner thread");
     }
 }
@@ -187,7 +187,7 @@ void dominoHumanPlannerStop(void) {
 }
 
 void dominoHumanPlannerDestroy(void) {
-    /* 全部使用者已结束：留队请求只含身份值，留队结果的候选整块释放一次；均可依据正式事实重新规划。 */
+    // 留队请求和结果只属于本会话，重新加载后由业务事实重新规划；这里只释放结果中的候选。
     for (uint8_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
         HumanPlannerContext* context_ptr = &g_planner_list[kind];
         for (uint8_t priority = 0U; priority < DOMINO_HUMAN_PLAN_PRIORITY_COUNT; priority++) {
@@ -207,7 +207,7 @@ void dominoHumanPlannerDestroy(void) {
     g_executor_inbox_ptr = nullptr;
 }
 
-uint64_t dominoHumanPlannerPost(uint8_t planner_kind, uint8_t priority, domino_human_id_t human_id) {
+uint64_t dominoHumanPlannerPostRequest(uint8_t planner_kind, uint8_t priority, domino_human_id_t human_id) {
     HumanPlannerContext* context_ptr = &g_planner_list[planner_kind];
     DominoHumanPlanRequestMessage request = {.human_id = human_id};
     const DOMINO_CODE code = dominoThreadQueueProduce(&context_ptr->request_queue_list[priority], &request, false);
@@ -215,13 +215,13 @@ uint64_t dominoHumanPlannerPost(uint8_t planner_kind, uint8_t priority, domino_h
         DOMINO_EXIT_WITH_ERROR(code, "cannot post plan request kind=%u human=%" PRIu32, planner_kind, human_id);
     }
     if (priority == DOMINO_HUMAN_PLAN_PRIORITY_HIGH) {
-        /* 规划线程以普通请求队列为统一等待对象；高优先级入队后推进其版本。 */
+        // 规划线程只等待在普通请求队列上，高优先级入队后须唤醒它。
         dominoThreadQueueWakeAll(&context_ptr->request_queue_list[DOMINO_HUMAN_PLAN_PRIORITY_NORMAL]);
     }
     return request.request_id;
 }
 
-DominoThreadQueue* dominoHumanPlannerResultQueue(uint8_t planner_kind, uint8_t priority) {
+DominoThreadQueue* dominoHumanPlannerGetResultQueue(uint8_t planner_kind, uint8_t priority) {
     return &g_planner_list[planner_kind].result_queue_list[priority];
 }
 

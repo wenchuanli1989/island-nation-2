@@ -16,15 +16,15 @@
 #include "domino_shared_common.h"
 #include "entry.h"
 #include "io.h"
+#include "manifest.h"
 #include "serde.h"
 #include "serde_registry.h"
-#include "sub_module.h"
 
-/** @brief 分片已全部写入后，写模块 meta 并直接返回根 meta 所需摘要。 */
-static void writeOneModuleMetaFile(const char* save_path, const StorageModuleType* module_type, uint32_t* crc32c_out, uint32_t* size_out) {
-    const char* type_name = module_type->type_name;
-    uint32_t total_count = (uint32_t)module_type->count_fn();
-    uint32_t shard_count = storageModuleShardCount(module_type, total_count);
+/** @brief 写一个模块的 meta 文件（实体数、分片数、分片摘要），输出该文件自身的摘要供根 meta 记录。 */
+static void writeModuleMetaFile(const char* save_path, const StorageModuleDescriptor* module_ptr, uint32_t* crc32c_out, uint32_t* size_out) {
+    const char* type_name = module_ptr->type_name;
+    uint32_t total_count = (uint32_t)module_ptr->count_fn();
+    uint32_t shard_count = storageModuleShardCount(module_ptr, total_count);
     char path[DOMINO_STORAGE_PATH_MAX];
     int written = snprintf(path, sizeof(path), "%s/%s.meta.json", save_path, type_name);
     if (written < 0) {
@@ -33,7 +33,7 @@ static void writeOneModuleMetaFile(const char* save_path, const StorageModuleTyp
     if ((size_t)written >= sizeof(path)) {
         DOMINO_EXIT_WITH_ERROR(ERR_BUFFER_TOO_SMALL, "module metadata path exceeds buffer (capacity=%zu)", sizeof(path));
     }
-    bool do_verify = storageSubModuleIntegrityVerify();
+    bool integrity_check = storageManifestChecksIntegrity();
 
     yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
     if (!doc) {
@@ -50,11 +50,11 @@ static void writeOneModuleMetaFile(const char* save_path, const StorageModuleTyp
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate module metadata JSON (path=%s)", path);
     }
 
-    if (module_type->write_meta_extra_fn) {
-        module_type->write_meta_extra_fn(doc, root, type_name);
+    if (module_ptr->write_meta_extra_fn) {
+        module_ptr->write_meta_extra_fn(doc, root, type_name);
     }
 
-    yyjson_mut_val* shard_digest_arr = yyjson_mut_obj_add_arr(doc, root, "shard");
+    yyjson_mut_val* shard_digest_arr = yyjson_mut_obj_add_arr(doc, root, "shards");
     if (!shard_digest_arr) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate module metadata JSON (path=%s)", path);
     }
@@ -65,73 +65,59 @@ static void writeOneModuleMetaFile(const char* save_path, const StorageModuleTyp
         }
         uint32_t shard_crc32c = 0;
         uint32_t shard_size = 0;
-        if (do_verify) {
-            /* saveAllShards 已按同一注册表及连续编号登记全部摘要。 */
-            const StorageSubModuleShard* rec = storageSubModuleShardFind(type_name, shard_id);
-            shard_crc32c = rec->crc32c;
-            shard_size = rec->size;
+        if (integrity_check) {
+            const StorageShardDigest* digest_ptr = storageManifestFindShard(type_name, shard_id);
+            shard_crc32c = digest_ptr->crc32c;
+            shard_size = digest_ptr->size;
         }
         if (!yyjson_mut_obj_add_uint(doc, item, "crc32c", shard_crc32c) || !yyjson_mut_obj_add_uint(doc, item, "size", shard_size)) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate module metadata JSON (path=%s)", path);
         }
     }
 
-    storageWriteJsonFile(path, doc, do_verify, crc32c_out, size_out);
+    storageWriteJsonFile(path, doc, integrity_check, crc32c_out, size_out);
     yyjson_mut_doc_free(doc);
 }
 
-static void emitIncrementIds(yyjson_mut_doc* doc, yyjson_mut_val* inc) {
-    /* ID 计数器独立持久化；road ID 由两端节点 ID 组合，无独立计数器。 */
-    if (!yyjson_mut_obj_add_uint(doc, inc, "human", atomic_load(&g_domino_global_increment_id.human_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "motivation", atomic_load(&g_domino_global_increment_id.motivation_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "task", atomic_load(&g_domino_global_increment_id.task_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "behavior", atomic_load(&g_domino_global_increment_id.behavior_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "org", atomic_load(&g_domino_global_increment_id.org_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "country", atomic_load(&g_domino_global_increment_id.country_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "city", atomic_load(&g_domino_global_increment_id.city_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "island", atomic_load(&g_domino_global_increment_id.island_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "building", atomic_load(&g_domino_global_increment_id.building_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "fork_road", atomic_load(&g_domino_global_increment_id.fork_road_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "road_line", atomic_load(&g_domino_global_increment_id.road_line_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "asset", atomic_load(&g_domino_global_increment_id.asset_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "movable_object", atomic_load(&g_domino_global_increment_id.movable_object_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "name", atomic_load(&g_domino_global_increment_id.name_increment_id)) ||
-        !yyjson_mut_obj_add_uint(doc, inc, "description", atomic_load(&g_domino_global_increment_id.description_increment_id))) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate global increment ID metadata");
+/* 根 meta 的 id_counters：JSON key 与 DominoIdCounters 字段同名。road ID 由两端路口 ID 组成，没有独立计数器。 */
+#define ID_COUNTER_FIELD(field) {#field, &g_domino_id_counters.field}
+static const struct {
+    const char* key;
+    _Atomic uint32_t* counter_ptr;
+} g_id_counter_fields[] = {
+    ID_COUNTER_FIELD(next_human_id),          ID_COUNTER_FIELD(last_motivation_id), ID_COUNTER_FIELD(last_task_id),
+    ID_COUNTER_FIELD(last_behavior_id),       ID_COUNTER_FIELD(next_org_id),        ID_COUNTER_FIELD(next_country_id),
+    ID_COUNTER_FIELD(next_city_id),           ID_COUNTER_FIELD(next_island_id),     ID_COUNTER_FIELD(next_building_id),
+    ID_COUNTER_FIELD(next_fork_road_id),      ID_COUNTER_FIELD(next_road_line_id),  ID_COUNTER_FIELD(next_asset_id),
+    ID_COUNTER_FIELD(next_movable_object_id), ID_COUNTER_FIELD(next_name_id),       ID_COUNTER_FIELD(next_description_id),
+};
+#undef ID_COUNTER_FIELD
+
+static void writeIdCounters(yyjson_mut_doc* doc, yyjson_mut_val* id_counter_obj) {
+    for (size_t i = 0; i < sizeof(g_id_counter_fields) / sizeof(g_id_counter_fields[0]); i++) {
+        if (!yyjson_mut_obj_add_uint(doc, id_counter_obj, g_id_counter_fields[i].key, atomic_load(g_id_counter_fields[i].counter_ptr))) {
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate ID counter metadata (key=%s)", g_id_counter_fields[i].key);
+        }
     }
 }
 
-static void ingestIncrementIds(yyjson_val* inc) {
-    /* 动机、任务和行为保存最后已分配 ID，0 表示尚未分配；后续递增分配，永不复用。 */
-    atomic_store(&g_domino_global_increment_id.motivation_increment_id, (domino_motivation_id_t)yyjson_get_uint(yyjson_obj_get(inc, "motivation")));
-    atomic_store(&g_domino_global_increment_id.task_increment_id, (domino_task_id_t)yyjson_get_uint(yyjson_obj_get(inc, "task")));
-    atomic_store(&g_domino_global_increment_id.behavior_increment_id, (domino_behavior_id_t)yyjson_get_uint(yyjson_obj_get(inc, "behavior")));
-    /* 其他实体仍按各模块原有计数器格式恢复。 */
-    atomic_store(&g_domino_global_increment_id.human_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "human")));
-    atomic_store(&g_domino_global_increment_id.org_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "org")));
-    atomic_store(&g_domino_global_increment_id.country_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "country")));
-    atomic_store(&g_domino_global_increment_id.city_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "city")));
-    atomic_store(&g_domino_global_increment_id.island_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "island")));
-    atomic_store(&g_domino_global_increment_id.building_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "building")));
-    atomic_store(&g_domino_global_increment_id.fork_road_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "fork_road")));
-    atomic_store(&g_domino_global_increment_id.road_line_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "road_line")));
-    atomic_store(&g_domino_global_increment_id.asset_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "asset")));
-    atomic_store(&g_domino_global_increment_id.movable_object_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "movable_object")));
-    atomic_store(&g_domino_global_increment_id.name_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "name")));
-    atomic_store(&g_domino_global_increment_id.description_increment_id, (uint32_t)yyjson_get_uint(yyjson_obj_get(inc, "description")));
+static void readIdCounters(yyjson_val* id_counter_obj) {
+    for (size_t i = 0; i < sizeof(g_id_counter_fields) / sizeof(g_id_counter_fields[0]); i++) {
+        atomic_store(g_id_counter_fields[i].counter_ptr, (uint32_t)yyjson_get_uint(yyjson_obj_get(id_counter_obj, g_id_counter_fields[i].key)));
+    }
 }
 
-void saveAllShards(const char* save_path) {
+void storageSaveAllShards(const char* save_path) {
     if (dominoMkdir(save_path) != 0) {
         int mkdir_errno = errno;
         DOMINO_EXIT_WITH_ERROR(ERR_DIRECTORY_CREATE, "failed to create save directory (path=%s, errno=%d)", save_path, mkdir_errno);
     }
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        g_storage_module_types[i].save_fn(save_path);
+    for (size_t i = 0; i < g_storage_module_registry_count; i++) {
+        g_storage_module_registry[i].save_fn(save_path);
     }
 }
 
-void metaSave(const char* save_path) {
+void storageSaveMeta(const char* save_path) {
     char path[DOMINO_STORAGE_PATH_MAX];
     int written = snprintf(path, sizeof(path), "%s/meta.json", save_path);
     if (written < 0) {
@@ -141,7 +127,7 @@ void metaSave(const char* save_path) {
         DOMINO_EXIT_WITH_ERROR(ERR_BUFFER_TOO_SMALL, "root metadata path exceeds buffer (capacity=%zu)", sizeof(path));
     }
 
-    bool do_verify = storageSubModuleIntegrityVerify();
+    bool integrity_check = storageManifestChecksIntegrity();
     yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
     if (!doc) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
@@ -153,40 +139,30 @@ void metaSave(const char* save_path) {
     yyjson_mut_doc_set_root(doc, root);
 
     if (!yyjson_mut_obj_add_uint(doc, root, "version", DOMINO_STORAGE_SAVE_VERSION) ||
-        !yyjson_mut_obj_add_bool(doc, root, "integrity_verify", do_verify)) {
+        !yyjson_mut_obj_add_bool(doc, root, "integrity_check", integrity_check)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
     }
 
-    yyjson_mut_val* info = yyjson_mut_obj_add_obj(doc, root, "info");
-    if (!info || !yyjson_mut_obj_add_str(doc, info, "account_id", g_domino_storage_account_id)) {
+    if (!yyjson_mut_obj_add_str(doc, root, "account_id", g_domino_account_id) || !yyjson_mut_obj_add_str(doc, root, "run_mode", g_domino_run_mode) ||
+        !yyjson_mut_obj_add_uint(doc, root, "runtime_base_ns", dominoTimeGetRuntimeBaseNs())) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
     }
+    yyjson_mut_val* id_counter_obj = yyjson_mut_obj_add_obj(doc, root, "id_counters");
+    if (!id_counter_obj) {
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
+    }
+    writeIdCounters(doc, id_counter_obj);
 
-    yyjson_mut_val* runtime_option = yyjson_mut_obj_add_obj(doc, root, "runtime_option");
-    if (!runtime_option || !yyjson_mut_obj_add_str(doc, runtime_option, "run_mode", g_domino_storage_run_mode)) {
+    yyjson_mut_val* module_digest_obj = yyjson_mut_obj_add_obj(doc, root, "modules");
+    if (!module_digest_obj) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
     }
-
-    yyjson_mut_val* runtime_data = yyjson_mut_obj_add_obj(doc, root, "runtime_data");
-    if (!runtime_data || !yyjson_mut_obj_add_uint(doc, runtime_data, "game_date_time_ns", dominoGetRuntimeDateTimeBase())) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
-    }
-    yyjson_mut_val* inc = yyjson_mut_obj_add_obj(doc, runtime_data, "global_increment_id");
-    if (!inc) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
-    }
-    emitIncrementIds(doc, inc);
-
-    yyjson_mut_val* sub_module = yyjson_mut_obj_add_obj(doc, root, "sub_module");
-    if (!sub_module) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
-    }
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
+    for (size_t i = 0; i < g_storage_module_registry_count; i++) {
+        const StorageModuleDescriptor* module_ptr = &g_storage_module_registry[i];
         uint32_t crc32c = 0;
         uint32_t size = 0;
-        writeOneModuleMetaFile(save_path, module_type, &crc32c, &size);
-        yyjson_mut_val* module_obj = yyjson_mut_obj_add_obj(doc, sub_module, module_type->type_name);
+        writeModuleMetaFile(save_path, module_ptr, &crc32c, &size);
+        yyjson_mut_val* module_obj = yyjson_mut_obj_add_obj(doc, module_digest_obj, module_ptr->type_name);
         if (!module_obj || !yyjson_mut_obj_add_uint(doc, module_obj, "crc32c", crc32c) || !yyjson_mut_obj_add_uint(doc, module_obj, "size", size)) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "failed to allocate root metadata JSON (path=%s)", path);
         }
@@ -196,16 +172,16 @@ void metaSave(const char* save_path) {
     yyjson_mut_doc_free(doc);
 }
 
-/** @brief 先读取模块 meta 建立分片摘要索引，再加载实体分片。 */
-static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* module_type) {
-    const char* type_name = module_type->type_name;
-    bool do_verify = storageSubModuleIntegrityVerify();
-    yyjson_val* item = yyjson_obj_get(sub_module, type_name);
+/** @brief 读取一个模块 meta，把模块和各分片摘要登记到清单；模块扩展字段（如 Nav 分段）一并恢复。 */
+static void loadModuleMeta(yyjson_val* module_digest_obj, const StorageModuleDescriptor* module_ptr) {
+    const char* type_name = module_ptr->type_name;
+    bool integrity_check = storageManifestChecksIntegrity();
+    yyjson_val* item = yyjson_obj_get(module_digest_obj, type_name);
     yyjson_val* crc_val = yyjson_obj_get(item, "crc32c");
     yyjson_val* size_val = yyjson_obj_get(item, "size");
     uint32_t meta_crc32c = 0;
     uint32_t meta_size = 0;
-    if (do_verify) {
+    if (integrity_check) {
         meta_crc32c = (uint32_t)yyjson_get_uint(crc_val);
         meta_size = (uint32_t)yyjson_get_uint(size_val);
     }
@@ -218,19 +194,19 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
         DOMINO_EXIT_WITH_ERROR(ERR_BUFFER_TOO_SMALL, "module metadata path exceeds buffer (module=%s, capacity=%zu)", type_name,
                                sizeof(module_meta_path));
     }
-    yyjson_doc* doc = storageReadJsonFile(module_meta_path, do_verify, meta_crc32c, meta_size);
+    yyjson_doc* doc = storageReadJsonFile(module_meta_path, integrity_check, meta_crc32c, meta_size);
     yyjson_val* root = yyjson_doc_get_root(doc);
-    yyjson_val* shard_arr = yyjson_obj_get(root, "shard");
+    yyjson_val* shard_arr = yyjson_obj_get(root, "shards");
     uint32_t shard_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(root, "shard_count"));
     uint32_t total_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(root, "total_count"));
 
-    StorageSubModuleMeta load_sm = {0};
-    strncpy(load_sm.type_name, type_name, sizeof(load_sm.type_name) - 1);
-    load_sm.crc32c = meta_crc32c;
-    load_sm.size = meta_size;
-    load_sm.total_count = total_count;
-    load_sm.shard_count = shard_count;
-    storageSubModuleMetaAdd(load_sm);
+    StorageModuleMeta module_meta = {0};
+    strncpy(module_meta.type_name, type_name, sizeof(module_meta.type_name) - 1);
+    module_meta.crc32c = meta_crc32c;
+    module_meta.size = meta_size;
+    module_meta.total_count = total_count;
+    module_meta.shard_count = shard_count;
+    storageManifestAddModule(module_meta);
 
     for (uint32_t shard_id = 0; shard_id < shard_count; shard_id++) {
         yyjson_val* shard_item = yyjson_arr_get(shard_arr, shard_id);
@@ -238,47 +214,46 @@ static void loadSubModuleMeta(yyjson_val* sub_module, const StorageModuleType* m
         yyjson_val* shard_size_val = yyjson_obj_get(shard_item, "size");
         uint32_t crc32c = (uint32_t)yyjson_get_uint(shard_crc_val);
         uint32_t size = (uint32_t)yyjson_get_uint(shard_size_val);
-        StorageSubModuleShard shard_row = {0};
-        strncpy(shard_row.type_name, type_name, sizeof(shard_row.type_name) - 1);
-        shard_row.shard_id = shard_id;
-        shard_row.crc32c = crc32c;
-        shard_row.size = size;
-        storageSubModuleShardAdd(shard_row);
+        StorageShardDigest shard_digest = {0};
+        strncpy(shard_digest.type_name, type_name, sizeof(shard_digest.type_name) - 1);
+        shard_digest.shard_id = shard_id;
+        shard_digest.crc32c = crc32c;
+        shard_digest.size = size;
+        storageManifestAddShard(shard_digest);
     }
 
-    if (module_type->read_meta_extra_fn) {
-        module_type->read_meta_extra_fn(root, type_name);
+    if (module_ptr->read_meta_extra_fn) {
+        module_ptr->read_meta_extra_fn(root, type_name);
     }
 
     yyjson_doc_free(doc);
 }
 
-void loadAllSubModule(yyjson_val* sub_module) {
+void storageLoadAllModules(yyjson_val* module_digest_obj) {
     const char* save_path = g_domino_engine_launch_config.storage_path;
 
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        loadSubModuleMeta(sub_module, module_type);
+    for (size_t i = 0; i < g_storage_module_registry_count; i++) {
+        const StorageModuleDescriptor* module_ptr = &g_storage_module_registry[i];
+        loadModuleMeta(module_digest_obj, module_ptr);
     }
 
-    /* 分片读取依赖已准备好的全部模块摘要。 */
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        const StorageSubModuleMeta* meta = storageSubModuleMetaFind(module_type->type_name);
-        /* 当前格式为每个注册项写出 meta，空集合也保持同一加载路径。 */
-        module_type->load_fn(save_path, meta->total_count, meta->shard_count);
+    // 分片读取依赖清单中已登记的全部摘要。
+    for (size_t i = 0; i < g_storage_module_registry_count; i++) {
+        const StorageModuleDescriptor* module_ptr = &g_storage_module_registry[i];
+        const StorageModuleMeta* meta = storageManifestFindModule(module_ptr->type_name);
+        module_ptr->load_fn(save_path, meta->total_count, meta->shard_count);
     }
 
-    /* 主表和 ID map 已稳定；只构造当前进程的指针和调度状态。 */
-    for (size_t i = 0; i < g_storage_module_type_count; i++) {
-        const StorageModuleType* module_type = &g_storage_module_types[i];
-        if (module_type->bind_references_fn) {
-            module_type->bind_references_fn();
+    // 全部实体就位后才绑定指针，避免容器扩容让已绑定的地址失效。
+    for (size_t i = 0; i < g_storage_module_registry_count; i++) {
+        const StorageModuleDescriptor* module_ptr = &g_storage_module_registry[i];
+        if (module_ptr->bind_references_fn) {
+            module_ptr->bind_references_fn();
         }
     }
 }
 
-yyjson_doc* metaLoad(void) {
+yyjson_doc* storageLoadMeta(void) {
     const char* save_path = g_domino_engine_launch_config.storage_path;
     char path[DOMINO_STORAGE_PATH_MAX];
     int written = snprintf(path, sizeof(path), "%s/meta.json", save_path);
@@ -307,18 +282,10 @@ yyjson_doc* metaLoad(void) {
         DOMINO_EXIT_WITH_ERROR(ERR_UNSUPPORTED_VERSION, "unsupported save version (path=%s, version=%" PRIu64 ", supported=%u)", path, version,
                                (unsigned)DOMINO_STORAGE_SAVE_VERSION);
     }
-    yyjson_val* info = yyjson_obj_get(root, "info");
-    yyjson_val* runtime_option = yyjson_obj_get(root, "runtime_option");
-    yyjson_val* runtime_data = yyjson_obj_get(root, "runtime_data");
-    yyjson_val* game_date_time_ns_val = yyjson_obj_get(runtime_data, "game_date_time_ns");
-    yyjson_val* inc = yyjson_obj_get(runtime_data, "global_increment_id");
-
-    yyjson_val* integrity_verify_val = yyjson_obj_get(root, "integrity_verify");
-    storageSubModuleSetIntegrityVerify(yyjson_get_bool(integrity_verify_val));
-
-    serdeReadStr(info, "account_id", g_domino_storage_account_id, sizeof(g_domino_storage_account_id));
-    serdeReadStr(runtime_option, "run_mode", g_domino_storage_run_mode, sizeof(g_domino_storage_run_mode));
-    dominoSetRuntimeDateTimeBase(yyjson_get_uint(game_date_time_ns_val));
-    ingestIncrementIds(inc);
+    storageManifestSetIntegrityCheck(yyjson_get_bool(yyjson_obj_get(root, "integrity_check")));
+    serdeReadStr(root, "account_id", g_domino_account_id, sizeof(g_domino_account_id));
+    serdeReadStr(root, "run_mode", g_domino_run_mode, sizeof(g_domino_run_mode));
+    dominoTimeSetRuntimeBaseNs(yyjson_get_uint(yyjson_obj_get(root, "runtime_base_ns")));
+    readIdCounters(yyjson_obj_get(root, "id_counters"));
     return doc;
 }

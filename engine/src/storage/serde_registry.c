@@ -2,24 +2,24 @@
 
 #include "../host/entry.h"
 #include "../human/state.h"
-#include "../nav/storage_view.h"
+#include "../nav/state.h"
 #include "../social/entry.h"
 #include "serde.h"
 
 static size_t countHuman(void) {
-    return kv_size(domino_all_human_list);
+    return kv_size(g_domino_human_list);
 }
 
 static size_t countHumanTask(void) {
-    return kv_size(domino_all_task_list);
+    return kv_size(g_domino_task_list);
 }
 
 static size_t countHumanBehavior(void) {
-    return kv_size(domino_all_behavior_list);
+    return kv_size(g_domino_behavior_list);
 }
 
 static size_t countHumanMotivation(void) {
-    return kv_size(domino_all_motivation_list);
+    return kv_size(g_domino_motivation_list);
 }
 
 static size_t countRegion(void) {
@@ -27,47 +27,47 @@ static size_t countRegion(void) {
 }
 
 static size_t countOrg(void) {
-    return kv_size(domino_all_org_list);
+    return kv_size(g_domino_org_list);
 }
 
 static size_t countBuilding(void) {
-    return kv_size(domino_all_building_list);
+    return kv_size(g_domino_building_list);
 }
 
 static size_t countCity(void) {
-    return kv_size(domino_all_city_list);
+    return kv_size(g_domino_city_list);
 }
 
 static size_t countCountry(void) {
-    return kv_size(domino_all_country_list);
+    return kv_size(g_domino_country_list);
 }
 
 static size_t countAsset(void) {
-    return kv_size(domino_all_asset_list);
+    return kv_size(g_domino_asset_list);
 }
 
 static size_t countIsland(void) {
-    return kv_size(domino_all_island_list);
+    return kv_size(g_domino_island_list);
 }
 
 static size_t countMovableObject(void) {
-    return kv_size(domino_all_movable_object_list);
+    return kv_size(g_domino_movable_object_list);
 }
 
 static size_t countForkRoad(void) {
-    return kv_size(domino_all_fork_road_list);
+    return kv_size(g_domino_fork_road_list);
 }
 
 static size_t countRoad(void) {
-    return kv_size(domino_all_road_list);
+    return kv_size(g_domino_road_list);
 }
 
 static size_t countRoadLine(void) {
-    return kv_size(domino_all_road_line_list);
+    return kv_size(g_domino_road_line_list);
 }
 
 /* regions 先恢复地域；全部实体加载后绑定可信存档中的跨模块引用。 */
-const StorageModuleType g_storage_module_types[] = {
+const StorageModuleDescriptor g_storage_module_registry[] = {
     {
         .type_name = "regions",
         .max_per_shard = 1,
@@ -116,8 +116,8 @@ const StorageModuleType g_storage_module_types[] = {
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveForkRoad,
         .load_fn = serdeLoadForkRoad,
-        .write_meta_extra_fn = serdeNavWriteModuleMetaExtraFields,
-        .read_meta_extra_fn = serdeNavReadModuleMetaExtraFields,
+        .write_meta_extra_fn = serdeWriteNavSegments,
+        .read_meta_extra_fn = serdeReadNavSegments,
     },
     {
         .type_name = "human",
@@ -183,8 +183,8 @@ const StorageModuleType g_storage_module_types[] = {
         .shard_count_fn = storageEntityShardCount,
         .save_fn = serdeSaveRoad,
         .load_fn = serdeLoadRoad,
-        .write_meta_extra_fn = serdeNavWriteModuleMetaExtraFields,
-        .read_meta_extra_fn = serdeNavReadModuleMetaExtraFields,
+        .write_meta_extra_fn = serdeWriteNavSegments,
+        .read_meta_extra_fn = serdeReadNavSegments,
     },
     {
         .type_name = "road_line",
@@ -196,4 +196,4 @@ const StorageModuleType g_storage_module_types[] = {
     },
 };
 
-const size_t g_storage_module_type_count = sizeof(g_storage_module_types) / sizeof(g_storage_module_types[0]);
+const size_t g_storage_module_registry_count = sizeof(g_storage_module_registry) / sizeof(g_storage_module_registry[0]);

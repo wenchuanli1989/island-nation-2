@@ -52,7 +52,7 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 
 - **构建目标：** 各构建模式都可追加 `target`：`shared`、`engine`、`engine-remote-local`、`engine-remote-server`、`client-hub`、`playground`，脚本拼成 CMake 目标 `domino-<target>`；省略时构建全部。
 - **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/npc_ai`；脚本拒绝不带目标的调用。`lib/` 由 `lib/.clang-format` 关闭格式化；目标覆盖 `playground/算法/` 时（如 `format playground`）会改写其中的第三方 `khash.h`，格式化后用 `git status --short -- playground/算法/` 确认它未变。
-- **默认 Playground：** 入口为 `playground/src/main.c`。在构建目录下运行 `./bin/domino-playground`，完成一次引擎生命周期后退出；存档写在 `build-<preset>/runtime/sandbox/`，再次运行会加载该存档。
+- **默认 Playground：** 入口为 `playground/src/main.c`。运行 `build-<preset>/bin/domino-playground`，完成一次引擎生命周期后退出；存档按可执行文件位置写在其构建目录的 `runtime/sandbox/`，与工作目录无关，再次运行会加载该存档。
 - **实验与模块夹具：** `playground-build`／`playground-run` 以 `DOMINO_PLAYGROUND_MODE=ON` 构建，`PLAYGROUND_SOURCE_DIR` 指向 `playground/` 下含 `main.c` 的实验目录。模块内部夹具经 `engine/src/playground.c` 的 `dominoEnginePlayground()` 分派：参数为 `npc_ai <sandbox_dir> <work_dir>` 时运行 `engine/src/human/playground.c`，其余参数运行同文件内的导航演示；`playground/npc_ai/main.c` 是 NPC AI 的调用示例。
 - **共用构建目录：** `playground-build`／`playground-run` 复用同名预设的 `build-<preset>/`，`bin/domino-playground` 是最近一次配置的入口；普通构建（如 `debug`）恢复默认入口并关闭 Playground 模式。切换模式会改变全部项目目标的编译定义，等于全量重编。clangd 读取 `build-debug`（macOS 为 `build-macos-debug`）的编译数据库，IDE 诊断也随最近一次配置变化。
 - **源文件与夹具：** 除 engine-remote/server 显式列出源文件外，各模块从 `src/` 自动收集 `.c`（`GLOB_RECURSE … CONFIGURE_DEPENDS`），增删源文件无需修改 CMake。名为 `playground.c` 的文件是模块内部夹具，正式构建由顶层 `CMakeLists.txt` 的 `domino_exclude_playground_sources()` 排除；其他文件中的测试代码用 `DOMINO_PLAYGROUND_MODE` 宏条件编译。
@@ -101,7 +101,7 @@ shared（静态库）— 公共类型、错误码、日志、线程队列、读�
 
 ### 客户端边界
 
-约束见宪法第十章，客户端消息的定义规则见宪法 3.6 节。当前尚未定义任何业务场景：`dominoEnginePushMsg()`／`dominoEnginePopMsg()`、主循环和 `engine/src/dispatch/` 只保留通道骨架，`DominoEngineMessage` 只有 `id` 和 `type`。主循环把收到的消息按不支持的类型记录一次并丢弃，不回包。
+约束见宪法第十章，客户端消息的定义规则见宪法 3.6 节。当前尚未定义任何业务场景：`dominoEngineSendMessage()`／`dominoEngineReceiveMessage()`、主循环和 `engine/src/dispatch/` 只保留通道骨架，`DominoEngineMessage` 只有 `id` 和 `type`。主循环把收到的消息按不支持的类型记录一次并丢弃，不回包。
 
 ### 第三方库
 
@@ -129,7 +129,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 ### Init
 
 - **调用顺序：** logger → 主循环双向队列 → common → time → host → nav → social → human → game_timer → storage（加载）→ nav InitAfter → human InitAfter。Init 准备日志文件、主循环队列、human 执行器收件箱、三类规划器的十二条队列与运行映射表、game_timer 命令队列及同步对象；动态业务容量和保存用的临时缓冲按需分配。
-- **启动配置：** `launch_config.storage_path` 必须是非空存档目录，不能是根目录、`.` 或 `..`；新世界判定见宪法第五章。`storage_integrity_verify` 控制下次保存是否记录 CRC32C／size；加载时按存档自身声明的校验策略处理。
+- **启动配置：** `launch_config.storage_path` 必须是非空存档目录，不能是根目录、`.` 或 `..`；新世界判定见宪法第五章。`storage_integrity_check` 控制下次保存是否记录 CRC32C／size；加载时按存档自身声明的校验策略处理。
 - **空世界基线：** 每次 Init 都从静态初值或上一轮 Destroy 复位后的空世界加载。同一进程可以切换存档路径，不继承上一世界的地域、全局 ID、account_id 或 run_mode。
 - **加载后准备：** nav InitAfter 重建邻接，并把加载的数据标记为 canonical 布局。human InitAfter 检查任务／行为类型的执行能力，重建计划运行期版本；为每个人物置动机待评估标志（有有效动机的人物再置任务待规划标志），并准备首次本地待办。这一步不推进业务、不前移游标，也不提交规划。
 
@@ -219,17 +219,19 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 - **事务提交：** storage 先把完整存档写入同父目录的 staging 并刷盘，再按 `active → .prev`、`staging → active` 的顺序 rename；每次关键目录项变更后都刷父目录。实体按注册表顺序写入 `regions.json` 或 `{type}_{shard_id}.json`，然后写 `{type}.meta.json`，最后写根 `meta.json`。实现见 `engine/src/storage/transaction.c`。
 - **加载恢复：** 加载根 `meta.json` 前自动恢复未完成的事务：只有 `.prev` 时恢复旧存档；active 与 `.prev` 同时存在时保留 active 并清理备份。active、staging 或 `.prev` 是 symlink 或普通文件时，拒绝加载或提交；递归清理只删除 symlink 本身，不进入链接目标。保存失败的存档由后续新进程按磁盘事务恢复。
-- **nav 布局：** 运行期维护 canonical 基础段与追加式增量尾，增删不触发全量排序。DestroyBefore 才把逻辑删除的数据排到末尾，并按 `(region_index, road_network_type)` 压实 data segment。路径矩阵和 fork road 指针缓存只在内存中，不序列化。
-- **当前版本 31**（`DOMINO_STORAGE_SAVE_VERSION`）。根 meta 的 `global_increment_id.motivation/task/behavior` 为最后已分配 ID。各文件内容：
+- **nav 布局：** 运行期维护 canonical 基础段与追加式增量尾，增删不触发全量排序。DestroyBefore 才把逻辑删除的数据排到末尾，并按 `(region_index, road_network_type)` 压实分段；fork road 与 road 的模块 meta 用 `nav_segments` 记录各分组的基础段和增量尾。路径矩阵和 fork road 指针缓存只在内存中，不序列化。
+- **当前版本 32**（`DOMINO_STORAGE_SAVE_VERSION`）。实体的 JSON key 与结构体字段同名，派生值（如 `sleep_forbidden`、名称和描述字符串）除外。各文件内容：
+  - 根 `meta.json`：`version`、`integrity_check`、`account_id`、`run_mode`、`runtime_base_ns`（累计未冻结纳秒）、`id_counters` 和各模块 meta 的摘要 `modules`。`id_counters` 中 `last_*_id`（动机、任务、行为）为最后已分配 ID，`next_*_id` 为下一个待分配 ID。
+  - `{type}.meta.json`：`type`、`total_count`、`shard_count` 和分片摘要 `shards`。
   - `human.entities[].data`：结算游标、睡眠条件、显示称呼、待处理外部信息（类别、来源、轮次）、动机／任务清单、运行任务和待执行队列。
   - `human_motivation`：身份、类型、生命周期（终态记在 `status` 中，已回收的动机不再保存）、需求轮次与承接任务、累计实施次数、最近失败原因，以及按时间顺序的最近成功明细。
   - `human_task`：工作身份、动机引用、回应的外部信息类别、完成指标、截止点、最后已分配的步骤序号、未来行为计划值（步骤序号、通道、插入标志、行为依赖）、行为规划重试依据、让位请求、“完成条件已成立”标志，以及可选的执行部分（实际时刻、各通道当前行为、最近行为、主行为成功／失败／取消计数、归并进度和结束原因）。
   - `human_behavior`：步骤序号、通道、插入标志、行为依赖、类型、状态、实际时刻、目标有效时长、有效进度和结束原因。
-- **样例存档** `playground/sandbox/domino`（版本 31）：
+- **样例存档** `playground/sandbox/domino`（版本 32）：
   - 人物及其 data 的 `human_id=1`，`data.energy=20`，`data.wealth=100`。
   - 动机、任务清单和待执行队列为空，运行任务为 0，没有待处理外部信息，显示称呼为空。
   - `data.current_building_id=1` 引用名为“样例住宅”的建筑，但其类型、产权和睡眠资格规则尚未定义，不能据此证明它提供睡眠服务。
-  - `data.sleep_address` 为 0。这是导航路口 ID，不能填写建筑 ID。
+  - `data.sleep_fork_road_id` 为 0。这是导航路口 ID，不能填写建筑 ID。
 
 ## 时间语义
 
@@ -244,7 +246,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 - **计时命令队列：** `DominoGameTimerRequestMessage`
 - **三类规划器：** 六条请求队列使用 `DominoHumanPlanRequestMessage`，六条结果队列使用 `DominoHumanPlanResultMessage`。候选扁平块布局（公共头及动机／任务／行为条目）同样定义在 `engine/src/queue/message.h`。
-- **human 执行器混合收件箱：** `DominoHumanExecutionMessage`，承载计时通知；playground 下另有测试验收专用的睡眠条件、精力、外部信息输入。
+- **human 执行器混合收件箱：** `DominoHumanInboxMessage`，承载计时通知；playground 下另有测试验收专用的睡眠条件、精力、外部信息输入。
 - **客户端收发队列：** `DominoEngineMessage`，见[客户端边界](#客户端边界)。
 
 ## 编码规范
@@ -255,15 +257,20 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 - **编译警告：** 项目目标经 `domino_options` 启用 `-Wall`、`-Wextra`、`-Wpedantic`、`-Wconversion`、`-Wsign-conversion` 等警告，构建保持零警告，改动不得引入新警告。缺少原型或声明按错误处理，并启用 `-fno-common`：非 `static` 函数须先在头文件声明，头文件只能用 `extern` 声明全局变量。
 - **配置差异：** Debug 使用 `-O0` 和 `-ftrapv`（有符号整数溢出时陷入）；Release 使用 `-O3`、ThinLTO 和 `-DNDEBUG`，`assert()` 不生效。
 - 使用固定宽度整数类型（`uint32_t`、`int16_t` 等）。
-- 使用 Doxygen 风格注释（`@brief`、`@param`、`@return`）；注释说明“为什么”，不复述代码在做什么。
+- **函数注释：** 使用 Doxygen 风格，按需书写，不要求每个函数配齐全部标签。
+  - 头文件声明的函数必须有 `@brief`，写清功能及调用契约；前置条件用 `@pre`，不做的事和副作用用 `@note`。
+  - `@param`／`@return` 只在名称和类型说不清时写：单位与范围、是否可空、输出参数、所有权、各返回值的含义；不写复述类型或名称的条目。
+  - `static` 函数在以下情况写 `@brief`：逻辑不平凡、返回值含义不明显（如 `bool` 表示拒绝还是跳过）、修改输出参数或有锁／线程要求。几行的取值或转发函数不写。
+  - 注释说明“为什么”和契约，不复述代码在做什么；修改函数签名或行为时同步注释，过时注释按缺陷处理。
 
 **命名规范：**
 
 - 文件：`snake_case.c` / `snake_case.h`
 - 函数：`camelCase`，动词开头（如 `createPlayer`、`navModuleInit`）
 - 变量：`snake_case`，带语义后缀（`_count`、`_size`、`_len`、`_num`、`_index`、`_max`、`_min`、`_default`、`_ptr`、`_str`、`_buf`、`_flag`）；时间量的单位后缀见宪法 7.1 节
+- 全局变量：跨文件共享的加 `g_domino_` 前缀（如实体容器 `g_domino_human_list`、ID 映射表 `g_domino_human_id_map`），文件内 `static` 的加 `g_` 前缀；khashl 生成函数的前缀（如 `dominoHumanIdMap_get`）不得与变量同名
 - 结构体／联合体：`PascalCase`（如 `DominoPlayer`）
-- 宏／枚举值：`UPPER_SNAKE_CASE`
+- 宏、枚举类型及枚举值：`UPPER_SNAKE_CASE`（如 `DOMINO_TASK_TYPE`、`DOMINO_TASK_TYPE_SLEEP`）
 - 指针声明：星号靠左（`int* ptr`），每个指针变量单独声明
 - 类型别名：`lowercase_t` 后缀（如 `domino_human_id_t`）
 - 模块内部函数和变量用 `static` 限定作用域

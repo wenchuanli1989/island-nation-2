@@ -95,7 +95,7 @@ uint8_t dominoHumanPlanTasks(const DominoHuman* human_ptr, const DominoHumanPlan
 
 uint8_t dominoHumanPlanBehaviors(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms,
                                  uint32_t compute_budget, DominoHumanPlanOutput* output_ptr) {
-    const DominoTask* task_ptr = slot_ptr->scope_kind == DOMINO_HUMAN_PLAN_SCOPE_TASK ? dominoGetTaskByID(slot_ptr->scope_id) : nullptr;
+    const DominoTask* task_ptr = slot_ptr->scope_kind == DOMINO_HUMAN_PLAN_SCOPE_TASK ? dominoGetTaskById(slot_ptr->scope_id) : nullptr;
     if (task_ptr == nullptr || task_ptr->owner_human_id != human_ptr->human_id || !dominoHumanTaskNeedsBehaviorPlan(human_ptr, task_ptr)) {
         return DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE;
     }

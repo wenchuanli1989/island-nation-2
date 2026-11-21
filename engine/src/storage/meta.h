@@ -3,27 +3,28 @@
 
 #include "yyjson/yyjson.h"
 
-/**
- * @brief 写根 meta.json 和所有模块 meta 文件。
- *
- * 调用前必须已经完成分片写入，因为模块 meta 会消费分片摘要缓存。
+/** @file meta.h
+ * @brief 根 meta.json 与模块 meta 的读写，以及按注册表顺序保存、加载全部模块。
+ * @note 摘要逐层依赖：先写分片，再写模块 meta（含分片摘要），最后写根 meta（含模块 meta 摘要）。
  */
-void metaSave(const char* save_path);
 
-/**
- * @brief 读取根 meta.json，恢复运行时选项和全局自增 ID。
- *
- * 返回的 yyjson_doc 由调用者释放；nullptr 表示不存在存档，应启动新世界。
- * 存档存在时，IO、格式、完整性或分配失败直接打印到 stderr 并 exit。
+/** @brief 写全部模块 meta 和根 meta.json。
+ * @pre 全部分片已写出，清单中已登记分片摘要。
  */
-yyjson_doc* metaLoad(void);
+void storageSaveMeta(const char* save_path);
 
-/** @brief 创建保存目录，再按注册表顺序写出全部模块分片。 */
-void saveAllShards(const char* save_path);
-
-/** @brief 读取所有模块 meta，再按注册表顺序加载模块数据。
- * @pre 引擎已初始化全部世界容器和 ID 映射；目标为空，本次 Init 尚未加载数据。
+/** @brief 读取根 meta.json：校验版本，恢复完整性开关、账户信息、累计时间基准和全局 ID 计数器。
+ * @return 根文档，由调用方释放；根 meta 不存在时返回空指针，表示新世界。其他读取或解析失败致命退出。
  */
-void loadAllSubModule(yyjson_val* sub_module);
+yyjson_doc* storageLoadMeta(void);
+
+/** @brief 创建保存目录，按注册表顺序写出全部模块分片。 */
+void storageSaveAllShards(const char* save_path);
+
+/** @brief 先读全部模块 meta 登记摘要，再按注册表顺序加载各模块，最后绑定跨模块引用。
+ * @param module_digest_obj 根 meta 中 "modules" 对象，借用根文档内存。
+ * @pre 世界容器和 ID 映射表已初始化且为空。
+ */
+void storageLoadAllModules(yyjson_val* module_digest_obj);
 
 #endif

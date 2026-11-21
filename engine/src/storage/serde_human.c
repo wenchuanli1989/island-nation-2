@@ -60,10 +60,10 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "current_building_id", human_data->current_building_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "current_island_id", human_data->current_island_id) ||
         !yyjson_mut_obj_add_sint(doc, obj, "wealth", human_data->wealth) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "current_address", human_data->current_address) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "family_address", human_data->family_address) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "company_address", human_data->company_address) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "sleep_address", human_data->sleep_address) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "current_fork_road_id", human_data->current_fork_road_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "family_fork_road_id", human_data->family_fork_road_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "company_fork_road_id", human_data->company_fork_road_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "sleep_fork_road_id", human_data->sleep_fork_road_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "outer_host_country_id", human_data->outer_host_country_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "health", human_data->health) || !yyjson_mut_obj_add_uint(doc, obj, "energy", human_data->energy) ||
         !yyjson_mut_obj_add_uint(doc, obj, "food", human_data->food) || !yyjson_mut_obj_add_uint(doc, obj, "water", human_data->water) ||
@@ -77,18 +77,17 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
         !yyjson_mut_obj_add_uint(doc, obj, "couple_love", human_data->couple_love) ||
         !yyjson_mut_obj_add_uint(doc, obj, "friendship", human_data->friendship) || !yyjson_mut_obj_add_uint(doc, obj, "job", human_data->job) ||
         !yyjson_mut_obj_add_uint(doc, obj, "influence", human_data->influence) || !yyjson_mut_obj_add_uint(doc, obj, "fame", human_data->fame) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "body_hp_value", human_data->body_hp_value) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "gender", human_data->gender) || !yyjson_mut_obj_add_uint(doc, obj, "age", human_data->age) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "intelligence", human_data->intelligence) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "body_hp", human_data->body_hp) || !yyjson_mut_obj_add_uint(doc, obj, "gender", human_data->gender) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "age", human_data->age) || !yyjson_mut_obj_add_uint(doc, obj, "intelligence", human_data->intelligence) ||
         !yyjson_mut_obj_add_uint(doc, obj, "talent", human_data->talent) || !yyjson_mut_obj_add_uint(doc, obj, "character", human_data->character) ||
         !yyjson_mut_obj_add_uint(doc, obj, "hobby", human_data->hobby) || !yyjson_mut_obj_add_uint(doc, obj, "belief", human_data->belief) ||
         !yyjson_mut_obj_add_uint(doc, obj, "world_view", human_data->world_view) ||
         !yyjson_mut_obj_add_uint(doc, obj, "life_view", human_data->life_view) ||
         !yyjson_mut_obj_add_uint(doc, obj, "value_view", human_data->value_view) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "family_info", human_data->family_info) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "org_info", human_data->org_info) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "hold_asset_list_count", human_data->hold_asset_list_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "own_asset_list_count", human_data->own_asset_list_count)) {
+        !yyjson_mut_obj_add_uint(doc, obj, "family_flags", human_data->family_flags) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "org_role_flags", human_data->org_role_flags) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "hold_asset_count", human_data->hold_asset_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "own_asset_count", human_data->own_asset_count)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
@@ -134,18 +133,18 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
 
     if (!yyjson_mut_obj_add_val(doc, obj, "recent_contact_id_list",
                                 serdeWriteU32Array(doc, human_data->recent_contact_id_list, DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT)) ||
-        !yyjson_mut_obj_add_val(doc, obj, "recent_visited_address_id_list",
-                                serdeWriteU32Array(doc, human_data->recent_visited_address_id_list, DOMINO_MAX_RECENT_VISITED_ADDRESS_COUNT))) {
+        !yyjson_mut_obj_add_val(doc, obj, "recent_fork_road_id_list",
+                                serdeWriteU32Array(doc, human_data->recent_fork_road_id_list, DOMINO_MAX_RECENT_FORK_ROAD_COUNT))) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_region_index", human_data->last_active_region_index) ||
         !yyjson_mut_obj_add_uint(doc, obj, "birth_region_index", human_data->birth_region_index) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_region_index", human_data->death_region_index) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "recent_contact_list_count", human_data->recent_contact_list_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "recent_contact_id_list_head_index", human_data->recent_contact_id_list_head_index) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "recent_visited_address_list_count", human_data->recent_visited_address_list_count) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "recent_visited_address_id_list_head_index", human_data->recent_visited_address_id_list_head_index)) {
+        !yyjson_mut_obj_add_uint(doc, obj, "recent_contact_count", human_data->recent_contact_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "recent_contact_head_index", human_data->recent_contact_head_index) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "recent_fork_road_count", human_data->recent_fork_road_count) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "recent_fork_road_head_index", human_data->recent_fork_road_head_index)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
@@ -156,11 +155,11 @@ static yyjson_mut_val* serializeHumanData(yyjson_mut_doc* doc, const DominoHuman
     }
 
     if (!yyjson_mut_obj_add_uint(doc, obj, "last_active_space_id", human_data->last_active_space_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "last_active_area_id", human_data->last_active_area_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "last_active_space_area_id", human_data->last_active_space_area_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "birth_space_id", human_data->birth_space_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "birth_area_id", human_data->birth_area_id) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "birth_space_area_id", human_data->birth_space_area_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "death_space_id", human_data->death_space_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "death_area_id", human_data->death_area_id)) {
+        !yyjson_mut_obj_add_uint(doc, obj, "death_space_area_id", human_data->death_space_area_id)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
 
@@ -208,10 +207,10 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->current_city_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "current_city_id"));
     out_human_data->current_island_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "current_island_id"));
     out_human_data->wealth = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "wealth"));
-    out_human_data->current_address = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "current_address"));
-    out_human_data->family_address = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "family_address"));
-    out_human_data->company_address = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "company_address"));
-    out_human_data->sleep_address = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "sleep_address"));
+    out_human_data->current_fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "current_fork_road_id"));
+    out_human_data->family_fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "family_fork_road_id"));
+    out_human_data->company_fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "company_fork_road_id"));
+    out_human_data->sleep_fork_road_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "sleep_fork_road_id"));
     out_human_data->outer_host_country_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "outer_host_country_id"));
     out_human_data->health = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "health"));
     out_human_data->energy = (typeof(out_human_data->energy))yyjson_get_uint(yyjson_obj_get(obj, "energy"));
@@ -230,7 +229,7 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->job = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "job"));
     out_human_data->influence = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "influence"));
     out_human_data->fame = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "fame"));
-    out_human_data->body_hp_value = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "body_hp_value"));
+    out_human_data->body_hp = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "body_hp"));
     out_human_data->gender = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "gender"));
     out_human_data->age = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "age"));
     out_human_data->intelligence = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "intelligence"));
@@ -241,10 +240,10 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->world_view = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "world_view"));
     out_human_data->life_view = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "life_view"));
     out_human_data->value_view = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "value_view"));
-    out_human_data->family_info = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "family_info"));
-    out_human_data->org_info = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "org_info"));
-    out_human_data->hold_asset_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hold_asset_list_count"));
-    out_human_data->own_asset_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "own_asset_list_count"));
+    out_human_data->family_flags = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "family_flags"));
+    out_human_data->org_role_flags = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "org_role_flags"));
+    out_human_data->hold_asset_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hold_asset_count"));
+    out_human_data->own_asset_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "own_asset_count"));
     out_human_data->current_building_id = (typeof(out_human_data->current_building_id))yyjson_get_uint(yyjson_obj_get(obj, "current_building_id"));
 
     serdeReadU32Array(yyjson_obj_get(obj, "own_asset_id_list"), out_human_data->own_asset_id_list, DOMINO_MAX_ASSET_COUNT_PER_HUMAN);
@@ -273,28 +272,26 @@ static void deserializeHumanData(yyjson_val* obj, DominoHumanData* out_human_dat
     out_human_data->death_building_id = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "death_building_id"));
 
     serdeReadU32Array(yyjson_obj_get(obj, "recent_contact_id_list"), out_human_data->recent_contact_id_list, DOMINO_MAX_RECENT_CONTACT_HUMAN_COUNT);
-    serdeReadU32Array(yyjson_obj_get(obj, "recent_visited_address_id_list"), out_human_data->recent_visited_address_id_list,
-                      DOMINO_MAX_RECENT_VISITED_ADDRESS_COUNT);
+    serdeReadU32Array(yyjson_obj_get(obj, "recent_fork_road_id_list"), out_human_data->recent_fork_road_id_list, DOMINO_MAX_RECENT_FORK_ROAD_COUNT);
 
     out_human_data->last_active_region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_region_index"));
     out_human_data->birth_region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "birth_region_index"));
     out_human_data->death_region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "death_region_index"));
-    out_human_data->recent_contact_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_contact_list_count"));
-    out_human_data->recent_contact_id_list_head_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_contact_id_list_head_index"));
-    out_human_data->recent_visited_address_list_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_visited_address_list_count"));
-    out_human_data->recent_visited_address_id_list_head_index =
-        (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_visited_address_id_list_head_index"));
+    out_human_data->recent_contact_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_contact_count"));
+    out_human_data->recent_contact_head_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_contact_head_index"));
+    out_human_data->recent_fork_road_count = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_fork_road_count"));
+    out_human_data->recent_fork_road_head_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "recent_fork_road_head_index"));
 
     serdeReadStr(obj, "id_card", out_human_data->id_card, sizeof(out_human_data->id_card));
     serdeReadNameDescription(obj, &out_human_data->name_id, &out_human_data->description_id);
     out_human_data->generation = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "generation"));
 
     out_human_data->last_active_space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_space_id"));
-    out_human_data->last_active_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_area_id"));
+    out_human_data->last_active_space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "last_active_space_area_id"));
     out_human_data->birth_space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "birth_space_id"));
-    out_human_data->birth_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "birth_area_id"));
+    out_human_data->birth_space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "birth_space_area_id"));
     out_human_data->death_space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "death_space_id"));
-    out_human_data->death_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "death_area_id"));
+    out_human_data->death_space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "death_space_area_id"));
 
     out_human_data->skin_color = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "skin_color"));
     out_human_data->hair_color = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "hair_color"));
@@ -334,9 +331,9 @@ static yyjson_mut_val* serializeHuman(yyjson_mut_doc* doc, const DominoHuman* hu
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
     }
     if (movable_object_id == 0) {
-        if (!yyjson_mut_obj_add_sint(doc, obj, "position_x", human->position_info.x) ||
-            !yyjson_mut_obj_add_sint(doc, obj, "position_y", human->position_info.y) ||
-            !yyjson_mut_obj_add_sint(doc, obj, "position_z", human->position_info.z)) {
+        if (!yyjson_mut_obj_add_sint(doc, obj, "position_x", human->position.x) ||
+            !yyjson_mut_obj_add_sint(doc, obj, "position_y", human->position.y) ||
+            !yyjson_mut_obj_add_sint(doc, obj, "position_z", human->position.z)) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human JSON value");
         }
     }
@@ -363,9 +360,9 @@ static void deserializeHuman(yyjson_val* obj, DominoHuman* out_human, DominoHuma
     out_human->human_id = (typeof(out_human->human_id))yyjson_get_uint(yyjson_obj_get(obj, "human_id"));
     out_human->movable_object_id = (typeof(out_human->movable_object_id))yyjson_get_uint(yyjson_obj_get(obj, "movable_object_id"));
     if (out_human->movable_object_id == 0) {
-        out_human->position_info.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
-        out_human->position_info.y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
-        out_human->position_info.z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
+        out_human->position.x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
+        out_human->position.y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
+        out_human->position.z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
     }
     out_human->space_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_id"));
     out_human->space_area_id = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "space_area_id"));
@@ -381,18 +378,18 @@ static void loadOneHuman(yyjson_val* entity_value) {
     DominoHumanData data = {0};
     deserializeHuman(entity_value, &human, &data);
     int absent_flag;
-    const khint_t map_index = dominoHumanIdMap_put(dominoHumanIdMap, human.human_id, &absent_flag);
+    const khint_t map_index = dominoHumanIdMap_put(g_domino_human_id_map, human.human_id, &absent_flag);
     if (absent_flag < 0) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot allocate human ID map entry: human_id=%u", human.human_id);
     }
-    const size_t index = kv_size(domino_all_human_list);
-    kv_push(DominoHuman, domino_all_human_list, human);
-    kv_push(DominoHumanData, domino_all_human_data_list, data);
-    kh_val(dominoHumanIdMap, map_index) = (uint32_t)index;
+    const size_t index = kv_size(g_domino_human_list);
+    kv_push(DominoHuman, g_domino_human_list, human);
+    kv_push(DominoHumanData, g_domino_human_data_list, data);
+    kh_val(g_domino_human_id_map, map_index) = (uint32_t)index;
 }
 
 void serdeSaveHuman(const char* save_path) {
-    const size_t total_count = kv_size(domino_all_human_list);
+    const size_t total_count = kv_size(g_domino_human_list);
     if (total_count > UINT32_MAX) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Human count exceeds storage limit: count=%zu", total_count);
     }
@@ -419,7 +416,7 @@ void serdeSaveHuman(const char* save_path) {
         }
         yyjson_mut_doc_set_root(doc, root);
         for (uint32_t index = start; index < start + count; index++) {
-            yyjson_mut_val* object = serializeHuman(doc, &domino_all_human_list.a[index], &domino_all_human_data_list.a[index]);
+            yyjson_mut_val* object = serializeHuman(doc, &g_domino_human_list.a[index], &g_domino_human_data_list.a[index]);
             if (!yyjson_mut_arr_append(entities, object)) {
                 DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Cannot append human JSON record: shard=%u", shard);
             }
@@ -446,11 +443,11 @@ void serdeLoadHuman(const char* save_path, uint32_t total_count, uint32_t shard_
 }
 
 void serdeBindHumanReferences(void) {
-    for (size_t index = 0; index < domino_all_human_list.n; index++) {
-        DominoHuman* human = &domino_all_human_list.a[index];
-        human->data = &domino_all_human_data_list.a[index];
+    for (size_t index = 0; index < g_domino_human_list.n; index++) {
+        DominoHuman* human = &g_domino_human_list.a[index];
+        human->data = &g_domino_human_data_list.a[index];
         if (human->movable_object_id != 0) {
-            human->movable_object = dominoGetMovableObjectByID(human->movable_object_id);
+            human->movable_object = dominoGetMovableObjectById(human->movable_object_id);
         }
     }
 }

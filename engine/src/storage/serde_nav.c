@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../nav/storage_view.h"
+#include "../nav/state.h"
 #include "domino_shared_common.h"
 #include "io.h"
 #include "klib/kvec.h"
@@ -11,11 +11,11 @@
 #define DOMINO_NAV_DATA_SEGMENT_KEY_COUNT ((size_t)UINT16_MAX + 1U)
 
 /** @brief 仅保存分段布局；调用方提供已创建的 doc 和有效分段。 */
-static yyjson_mut_val* serializeNavDataSegment(yyjson_mut_doc* doc, const DominoNavDataSegment* segment) {
+static yyjson_mut_val* serializeNavSegment(yyjson_mut_doc* doc, const DominoNavSegment* segment) {
     yyjson_mut_val* object = yyjson_mut_obj(doc);
-    if (!object || !yyjson_mut_obj_add_uint(doc, object, "init_index", segment->init_index) ||
-        !yyjson_mut_obj_add_uint(doc, object, "init_count", segment->init_count) ||
-        !yyjson_mut_obj_add_uint(doc, object, "increment_index", segment->increment_index) ||
+    if (!object || !yyjson_mut_obj_add_uint(doc, object, "base_index", segment->base_index) ||
+        !yyjson_mut_obj_add_uint(doc, object, "base_count", segment->base_count) ||
+        !yyjson_mut_obj_add_uint(doc, object, "tail_index", segment->tail_index) ||
         !yyjson_mut_obj_add_uint(doc, object, "total_count", segment->total_count) ||
         !yyjson_mut_obj_add_uint(doc, object, "region_index", segment->region_index) ||
         !yyjson_mut_obj_add_uint(doc, object, "road_network_type", segment->road_network_type)) {
@@ -24,44 +24,42 @@ static yyjson_mut_val* serializeNavDataSegment(yyjson_mut_doc* doc, const Domino
     return object;
 }
 
-static void deserializeNavDataSegment(yyjson_val* object, DominoNavDataSegment* out_segment) {
-    *out_segment = (DominoNavDataSegment){
-        .init_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "init_index")),
-        .init_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "init_count")),
-        .increment_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "increment_index")),
+static void deserializeNavSegment(yyjson_val* object, DominoNavSegment* out_segment) {
+    *out_segment = (DominoNavSegment){
+        .base_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "base_index")),
+        .base_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "base_count")),
+        .tail_index = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "tail_index")),
         .total_count = (uint32_t)yyjson_get_uint(yyjson_obj_get(object, "total_count")),
         .region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(object, "region_index")),
         .road_network_type = (uint8_t)yyjson_get_uint(yyjson_obj_get(object, "road_network_type")),
     };
 }
 
-void serdeNavWriteModuleMetaExtraFields(yyjson_mut_doc* doc, yyjson_mut_val* root, const char* type_name) {
-    const DominoNavDataSegmentVec* segment_list =
-        strcmp(type_name, "fork_road") == 0 ? &domino_all_fork_road_nav_data_segment_list : &domino_all_road_nav_data_segment_list;
+void serdeWriteNavSegments(yyjson_mut_doc* doc, yyjson_mut_val* root, const char* type_name) {
+    const DominoNavSegmentVec* segment_list = strcmp(type_name, "fork_road") == 0 ? &g_domino_fork_road_segment_list : &g_domino_road_segment_list;
 
-    yyjson_mut_val* array = yyjson_mut_obj_add_arr(doc, root, "data_segment");
+    yyjson_mut_val* array = yyjson_mut_obj_add_arr(doc, root, "nav_segments");
     if (!array) {
-        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate nav data segment array: type=%s", type_name);
+        DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate nav segment array: type=%s", type_name);
     }
     for (size_t index = 0U; index < kv_size(*segment_list); index++) {
-        yyjson_mut_val* item = serializeNavDataSegment(doc, &kv_A(*segment_list, index));
+        yyjson_mut_val* item = serializeNavSegment(doc, &kv_A(*segment_list, index));
         if (!yyjson_mut_arr_append(array, item)) {
-            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize nav data segment: type=%s, index=%zu", type_name, index);
+            DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to serialize nav segment: type=%s, index=%zu", type_name, index);
         }
     }
 }
 
 /** @brief 从可信元数据恢复分段；保留本次容器容量和分配大小检查。 */
-void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name) {
-    DominoNavDataSegmentVec* out_segment_list =
-        strcmp(type_name, "fork_road") == 0 ? &domino_all_fork_road_nav_data_segment_list : &domino_all_road_nav_data_segment_list;
+void serdeReadNavSegments(yyjson_val* root, const char* type_name) {
+    DominoNavSegmentVec* out_segment_list = strcmp(type_name, "fork_road") == 0 ? &g_domino_fork_road_segment_list : &g_domino_road_segment_list;
 
-    yyjson_val* array = yyjson_obj_get(root, "data_segment");
+    yyjson_val* array = yyjson_obj_get(root, "nav_segments");
     size_t segment_count = yyjson_arr_size(array);
     if (segment_count > DOMINO_NAV_DATA_SEGMENT_KEY_COUNT) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Nav segment count exceeds capacity: type=%s, count=%zu", type_name, segment_count);
     }
-    if (segment_count > SIZE_MAX / sizeof(DominoNavDataSegment)) {
+    if (segment_count > SIZE_MAX / sizeof(DominoNavSegment)) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "Nav segment allocation size overflows: type=%s, count=%zu", type_name, segment_count);
     }
 
@@ -69,9 +67,9 @@ void serdeNavReadModuleMetaExtraFields(yyjson_val* root, const char* type_name) 
     size_t count;
     yyjson_val* item;
     yyjson_arr_foreach(array, index, count, item) {
-        DominoNavDataSegment segment;
-        deserializeNavDataSegment(item, &segment);
-        kv_push(DominoNavDataSegment, *out_segment_list, segment);
+        DominoNavSegment segment;
+        deserializeNavSegment(item, &segment);
+        kv_push(DominoNavSegment, *out_segment_list, segment);
     }
 }
 
@@ -96,7 +94,7 @@ static void deserializeForkRoad(yyjson_val* obj, DominoForkRoad* out_fork_road) 
     out_fork_road->position_x = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_x"));
     out_fork_road->position_y = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_y"));
     out_fork_road->position_z = (int32_t)yyjson_get_sint(yyjson_obj_get(obj, "position_z"));
-    out_fork_road->weight = (domino_nav_weight_atom_t)yyjson_get_uint(yyjson_obj_get(obj, "weight"));
+    out_fork_road->weight = (domino_nav_edge_weight_t)yyjson_get_uint(yyjson_obj_get(obj, "weight"));
     out_fork_road->region_index = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "region_index"));
     out_fork_road->status = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "status"));
     out_fork_road->type = (uint8_t)yyjson_get_uint(yyjson_obj_get(obj, "type"));
@@ -110,7 +108,7 @@ static yyjson_mut_val* serdeWriteCornerPoints(yyjson_mut_doc* doc, const DominoR
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate entity JSON data");
     }
     uint16_t count = road->corner_point_count;
-    if (count > MIN_CORNER_POINTS_PER_ROAD) {
+    if (count > DOMINO_ROAD_INLINE_CORNER_POINT_MAX) {
         for (uint16_t i = 0; i < count; i++) {
             yyjson_mut_val* point_arr = yyjson_mut_arr(doc);
             if (!point_arr || !yyjson_mut_arr_add_sint(doc, point_arr, road->corner_point_ptr[i][0]) ||
@@ -136,7 +134,7 @@ static yyjson_mut_val* serdeWriteCornerPoints(yyjson_mut_doc* doc, const DominoR
 /** @brief 转折点数量来自可信存档；按该数量分配并写入对应的 union 存储。 */
 static void serdeReadCornerPoints(yyjson_val* json_corner_points, DominoRoad* out_road) {
     const uint16_t count = out_road->corner_point_count;
-    if (count > MIN_CORNER_POINTS_PER_ROAD) {
+    if (count > DOMINO_ROAD_INLINE_CORNER_POINT_MAX) {
         out_road->corner_point_ptr = malloc(sizeof(*out_road->corner_point_ptr) * (size_t)count);
         if (!out_road->corner_point_ptr) {
             DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "Failed to allocate road corner points: count=%u", count);
@@ -146,7 +144,7 @@ static void serdeReadCornerPoints(yyjson_val* json_corner_points, DominoRoad* ou
         yyjson_val* point = yyjson_arr_get(json_corner_points, index);
         for (size_t axis = 0; axis < 3; axis++) {
             int32_t coordinate = (int32_t)yyjson_get_sint(yyjson_arr_get(point, axis));
-            if (count > MIN_CORNER_POINTS_PER_ROAD) {
+            if (count > DOMINO_ROAD_INLINE_CORNER_POINT_MAX) {
                 out_road->corner_point_ptr[index][axis] = coordinate;
             } else {
                 out_road->corner_points[axis][index] = coordinate;
@@ -237,8 +235,8 @@ static yyjson_mut_val* serializeRoadLine(yyjson_mut_doc* doc, const DominoRoadLi
     if (!yyjson_mut_obj_add_uint(doc, obj, "start_fork_road_id", road_line->start_fork_road_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "target_fork_road_id", road_line->target_fork_road_id) ||
         !yyjson_mut_obj_add_uint(doc, obj, "current_fork_road_id", road_line->current_fork_road_id) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "used_time", road_line->used_time) ||
-        !yyjson_mut_obj_add_uint(doc, obj, "remaining_time", road_line->remaining_time) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "elapsed_ms", road_line->elapsed_ms) ||
+        !yyjson_mut_obj_add_uint(doc, obj, "remaining_ms", road_line->remaining_ms) ||
         !yyjson_mut_obj_add_uint(doc, obj, "passed_distance", road_line->passed_distance) ||
         !yyjson_mut_obj_add_uint(doc, obj, "remaining_distance", road_line->remaining_distance) ||
         !yyjson_mut_obj_add_uint(doc, obj, "consumed_cost", road_line->consumed_cost) ||
@@ -256,7 +254,7 @@ static void deserializeRoadLine(yyjson_val* obj, DominoRoadLine* out_road_line) 
     out_road_line->id = (domino_road_line_id_t)yyjson_get_uint(yyjson_obj_get(obj, "id"));
 
     uint64_t fork_count_u = yyjson_get_uint(yyjson_obj_get(obj, "fork_road_count"));
-    if (fork_count_u > (uint64_t)MAX_FORK_ROAD_COUNT_PER_ROAD_LINE) {
+    if (fork_count_u > (uint64_t)DOMINO_MAX_FORK_ROAD_COUNT_PER_ROAD_LINE) {
         DOMINO_EXIT_WITH_ERROR(ERR_CAPACITY_EXCEEDED, "Road line fork count exceeds capacity: count=%llu", (unsigned long long)fork_count_u);
     }
     out_road_line->fork_road_count = (uint16_t)fork_count_u;
@@ -266,16 +264,16 @@ static void deserializeRoadLine(yyjson_val* obj, DominoRoadLine* out_road_line) 
         out_road_line->fork_road_id_list[index] = (domino_fork_road_id_t)yyjson_get_uint(yyjson_arr_get(fork_ids, index));
     }
 
-    serdeReadSintVec2FromJson(obj, "start_location", &out_road_line->start_location.x, &out_road_line->start_location.y);
-    serdeReadSintVec2FromJson(obj, "target_location", &out_road_line->target_location.x, &out_road_line->target_location.y);
-    serdeReadSintVec2FromJson(obj, "current_location", &out_road_line->current_location.x, &out_road_line->current_location.y);
+    serdeReadSintVec2(obj, "start_location", &out_road_line->start_location.x, &out_road_line->start_location.y);
+    serdeReadSintVec2(obj, "target_location", &out_road_line->target_location.x, &out_road_line->target_location.y);
+    serdeReadSintVec2(obj, "current_location", &out_road_line->current_location.x, &out_road_line->current_location.y);
 
     out_road_line->start_fork_road_id = (domino_fork_road_id_t)yyjson_get_uint(yyjson_obj_get(obj, "start_fork_road_id"));
     out_road_line->target_fork_road_id = (domino_fork_road_id_t)yyjson_get_uint(yyjson_obj_get(obj, "target_fork_road_id"));
     out_road_line->current_fork_road_id = (domino_fork_road_id_t)yyjson_get_uint(yyjson_obj_get(obj, "current_fork_road_id"));
 
-    out_road_line->used_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "used_time"));
-    out_road_line->remaining_time = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "remaining_time"));
+    out_road_line->elapsed_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "elapsed_ms"));
+    out_road_line->remaining_ms = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "remaining_ms"));
     out_road_line->passed_distance = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "passed_distance"));
     out_road_line->remaining_distance = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "remaining_distance"));
     out_road_line->consumed_cost = (uint32_t)yyjson_get_uint(yyjson_obj_get(obj, "consumed_cost"));
@@ -291,11 +289,11 @@ static void deserializeRoadLine(yyjson_val* obj, DominoRoadLine* out_road_line) 
     out_road_line->region_index = (uint8_t)region_u;
 }
 
-STORAGE_DEFINE_SHARDED_SIMPLE(ForkRoad, "fork_road", DominoForkRoad, domino_all_fork_road_list, dominoForkRoadIdMap, dominoForkRoadIdMap_put,
+STORAGE_DEFINE_SHARDED_SIMPLE(ForkRoad, "fork_road", DominoForkRoad, g_domino_fork_road_list, g_domino_fork_road_id_map, dominoForkRoadIdMap_put,
                               serializeForkRoad, deserializeForkRoad, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)
 
-STORAGE_DEFINE_SHARDED_SIMPLE(Road, "road", DominoRoad, domino_all_road_list, dominoRoadIdMap, dominoRoadIdMap_put, serializeRoad, deserializeRoad,
+STORAGE_DEFINE_SHARDED_SIMPLE(Road, "road", DominoRoad, g_domino_road_list, g_domino_road_id_map, dominoRoadIdMap_put, serializeRoad, deserializeRoad,
                               DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)
 
-STORAGE_DEFINE_SHARDED_SIMPLE(RoadLine, "road_line", DominoRoadLine, domino_all_road_line_list, dominoRoadLineIdMap, dominoRoadLineIdMap_put,
+STORAGE_DEFINE_SHARDED_SIMPLE(RoadLine, "road_line", DominoRoadLine, g_domino_road_line_list, g_domino_road_line_id_map, dominoRoadLineIdMap_put,
                               serializeRoadLine, deserializeRoadLine, DOMINO_STORAGE_SHARD_ENTITIES_NO_DATA)

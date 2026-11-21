@@ -42,7 +42,7 @@ static const char* g_case_name = "";
     } while (0)
 
 static void setNowMs(domino_runtime_ms_t now_ms) {
-    dominoSetRuntimeDateTimeBase((uint64_t)now_ms * 1000000U);
+    dominoTimeSetRuntimeBaseNs((uint64_t)now_ms * 1000000U);
 }
 
 static domino_runtime_ms_t nowMs(void) {
@@ -73,13 +73,13 @@ static void fixtureBegin(const char* case_name, uint32_t human_count, const uint
             .social = 100U,
         };
         int absent_flag;
-        const khint_t map_index = dominoHumanIdMap_put(dominoHumanIdMap, human_id, &absent_flag);
-        kh_val(dominoHumanIdMap, map_index) = index;
-        kv_push(DominoHuman, domino_all_human_list, human);
-        kv_push(DominoHumanData, domino_all_human_data_list, data);
+        const khint_t map_index = dominoHumanIdMap_put(g_domino_human_id_map, human_id, &absent_flag);
+        kh_val(g_domino_human_id_map, map_index) = index;
+        kv_push(DominoHuman, g_domino_human_list, human);
+        kv_push(DominoHumanData, g_domino_human_data_list, data);
     }
-    for (size_t index = 0U; index < kv_size(domino_all_human_list); index++) {
-        kv_A(domino_all_human_list, index).data = &kv_A(domino_all_human_data_list, index);
+    for (size_t index = 0U; index < kv_size(g_domino_human_list); index++) {
+        kv_A(g_domino_human_list, index).data = &kv_A(g_domino_human_data_list, index);
     }
     dominoHumanModuleInitAfter();
 }
@@ -87,16 +87,16 @@ static void fixtureBegin(const char* case_name, uint32_t human_count, const uint
 static void fixtureEnd(void) {
     dominoGameTimerModuleDestroy();
     dominoHumanModuleDestroy();
-    atomic_store(&g_domino_global_increment_id.motivation_increment_id, 0U);
-    atomic_store(&g_domino_global_increment_id.task_increment_id, 0U);
-    atomic_store(&g_domino_global_increment_id.behavior_increment_id, 0U);
+    atomic_store(&g_domino_id_counters.last_motivation_id, 0U);
+    atomic_store(&g_domino_id_counters.last_task_id, 0U);
+    atomic_store(&g_domino_id_counters.last_behavior_id, 0U);
     dominoTimeModuleDestroy();
     dominoLoggerModuleStop();
     dominoLoggerModuleDestroy();
 }
 
 static DominoHuman* human(domino_human_id_t human_id) {
-    return dominoGetHumanByID(human_id);
+    return dominoGetHumanById(human_id);
 }
 
 static DominoHumanRuntime* runtimeOf(domino_human_id_t human_id) {
@@ -115,16 +115,16 @@ static DominoMotivation* contactMotivation(domino_human_id_t human_id) {
 static DominoTask* activeOrHead(domino_human_id_t human_id) {
     const DominoHumanData* data_ptr = human(human_id)->data;
     if (data_ptr->active_task_id != 0U) {
-        return dominoGetTaskByID(data_ptr->active_task_id);
+        return dominoGetTaskById(data_ptr->active_task_id);
     }
-    return data_ptr->task_queue_count != 0U ? dominoGetTaskByID(data_ptr->task_queue_list[0]) : nullptr;
+    return data_ptr->task_queue_count != 0U ? dominoGetTaskById(data_ptr->task_queue_list[0]) : nullptr;
 }
 
 /** @brief 运行任务在某通道的当前行为；没有返回空指针。 */
 static DominoBehavior* channelBehavior(domino_human_id_t human_id, uint8_t channel) {
-    const DominoTask* task_ptr = dominoHumanActiveTask(human(human_id)->data);
+    const DominoTask* task_ptr = dominoHumanGetActiveTask(human(human_id)->data);
     const domino_behavior_id_t behavior_id = task_ptr != nullptr ? task_ptr->current_behavior_id_list[channel] : 0U;
-    return behavior_id != 0U ? dominoGetBehaviorByID(behavior_id) : nullptr;
+    return behavior_id != 0U ? dominoGetBehaviorById(behavior_id) : nullptr;
 }
 
 static const DominoHumanPlanComputeFn g_policy_list[DOMINO_HUMAN_PLANNER_COUNT] = {
@@ -135,7 +135,7 @@ static const DominoHumanPlanComputeFn g_policy_list[DOMINO_HUMAN_PLANNER_COUNT] 
 
 /** @brief 模拟规划线程处理人物当前请求：按槽位资格调用策略，再经执行器的复核与提交路径处理结果及下次规划时刻。 */
 static uint8_t serveRequest(domino_human_id_t human_id, uint8_t planner_kind, DominoHumanPlanComputeFn compute_fn) {
-    const DominoHumanPlanSlot slot = runtimeOf(human_id)->slot_list[planner_kind];
+    const DominoHumanPlanSlot slot = runtimeOf(human_id)->plan_slot_list[planner_kind];
     if (slot.request_id == 0U) {
         return DOMINO_HUMAN_PLAN_OUTCOME_NONE;
     }
@@ -148,7 +148,7 @@ static uint8_t serveRequest(domino_human_id_t human_id, uint8_t planner_kind, Do
     }
     DominoHumanPlanResultMessage result = {
         .request_id = slot.request_id,
-        .enqueued_mono_ns = dominoMonotonicTimeNs(),
+        .enqueued_monotonic_ns = dominoGetMonotonicTimeNs(),
         .candidate_ptr = output.candidate_ptr,
         .human_id = human_id,
         .next_plan_at_ms = output.next_plan_at_ms,
@@ -157,7 +157,7 @@ static uint8_t serveRequest(domino_human_id_t human_id, uint8_t planner_kind, Do
         .outcome = outcome,
         .next_plan_valid_flag = output.next_plan_valid_flag,
     };
-    dominoHumanExecutionProcessResultForTest(planner_kind, slot.priority, &result);
+    dominoHumanExecutorProcessResultForTest(planner_kind, slot.priority, &result);
     return outcome;
 }
 
@@ -166,7 +166,7 @@ static void pumpRequests(domino_human_id_t human_id) {
     for (uint32_t round = 0U; round < 12U; round++) {
         bool served_flag = false;
         for (uint8_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
-            if (runtimeOf(human_id)->slot_list[kind].request_id != 0U) {
+            if (runtimeOf(human_id)->plan_slot_list[kind].request_id != 0U) {
                 serveRequest(human_id, kind, nullptr);
                 served_flag = true;
             }
@@ -192,7 +192,7 @@ static bool advanceToWakeup(domino_human_id_t human_id) {
     }
     setNowMs(runtime_ptr->wakeup_due_ms);
     deliverWakeup(human_id);
-    dominoHumanExecutionAdvanceForTest(human_id);
+    dominoHumanExecutorAdvanceForTest(human_id);
     pumpRequests(human_id);
     return true;
 }
@@ -201,34 +201,34 @@ static bool advanceToWakeup(domino_human_id_t human_id) {
 static void advanceAt(domino_human_id_t human_id, domino_runtime_ms_t now_ms) {
     setNowMs(now_ms);
     deliverWakeup(human_id);
-    dominoHumanExecutionAdvanceForTest(human_id);
+    dominoHumanExecutorAdvanceForTest(human_id);
 }
 
 /** @brief 测试验收专用：构造与 dominoHumanSubmitEnergyForTest 相同的精力输入并串行处理。 */
 static void submitEnergyForTest(domino_human_id_t human_id, uint8_t energy) {
-    const DominoHumanExecutionMessage message = {
-        .type = DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_ENERGY,
+    const DominoHumanInboxMessage message = {
+        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY,
         .payload.test_energy = {.human_id = human_id, .energy = energy},
     };
-    dominoHumanExecutionProcessMessageForTest(&message);
+    dominoHumanExecutorProcessMessageForTest(&message);
 }
 
 /** @brief 测试验收专用：构造与 dominoHumanSubmitSleepConditionForTest 相同的睡眠条件输入并串行处理。 */
 static void submitConditionForTest(domino_human_id_t human_id, bool forbidden_flag) {
-    const DominoHumanExecutionMessage message = {
-        .type = DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_SLEEP_CONDITION,
+    const DominoHumanInboxMessage message = {
+        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION,
         .payload.test_sleep_condition = {.human_id = human_id, .forbidden_flag = forbidden_flag},
     };
-    dominoHumanExecutionProcessMessageForTest(&message);
+    dominoHumanExecutorProcessMessageForTest(&message);
 }
 
 /** @brief 测试验收专用：构造与 dominoHumanSubmitStimulusForTest 相同的外部信息输入（来源与类别同次写入）并串行处理。 */
 static void submitStimulusForTest(domino_human_id_t human_id, uint8_t stimulus_kind, uint32_t source_id) {
-    const DominoHumanExecutionMessage message = {
-        .type = DOMINO_HUMAN_EXECUTION_MESSAGE_TEST_STIMULUS,
+    const DominoHumanInboxMessage message = {
+        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS,
         .payload.test_stimulus = {.human_id = human_id, .source_id = source_id, .stimulus_kind = stimulus_kind},
     };
-    dominoHumanExecutionProcessMessageForTest(&message);
+    dominoHumanExecutorProcessMessageForTest(&message);
 }
 
 /** @brief 受控夹具：直接建立有效动机（可信内部场景，不经过客户端）。 */
@@ -258,10 +258,10 @@ static domino_task_id_t addRunningTask(domino_human_id_t human_id, domino_motiva
 /** @brief 受控夹具：为任务在某通道建立 ACTIVE 行为，分配本任务内的步骤序号。返回 behavior_id。 */
 static domino_behavior_id_t addRunningBehavior(domino_task_id_t task_id, uint8_t channel, uint8_t behavior_type, domino_runtime_ms_t target_ms,
                                                uint32_t param, uint8_t flags) {
-    DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    DominoTask* task_ptr = dominoGetTaskById(task_id);
     const DominoBehavior behavior = {
         .step_seq = ++task_ptr->last_step_seq,
-        .started_at_ms = dominoGetHumanByID(task_ptr->owner_human_id)->data->settled_at_ms,
+        .started_at_ms = dominoGetHumanById(task_ptr->owner_human_id)->data->settled_at_ms,
         .target_effective_ms = target_ms,
         .param = param,
         .type = behavior_type,
@@ -270,16 +270,16 @@ static domino_behavior_id_t addRunningBehavior(domino_task_id_t task_id, uint8_t
         .flags = flags,
     };
     const domino_behavior_id_t behavior_id = dominoHumanStoreAddBehavior(task_ptr, &behavior)->behavior_id;
-    dominoGetTaskByID(task_id)->current_behavior_id_list[channel] = behavior_id;
+    dominoGetTaskById(task_id)->current_behavior_id_list[channel] = behavior_id;
     return behavior_id;
 }
 
 /** @brief 受控夹具：让行为依赖另一个正在运行的行为。 */
 static void addBehaviorDependency(domino_behavior_id_t behavior_id, domino_behavior_id_t source_id, uint8_t kind) {
-    DominoBehavior* behavior_ptr = dominoGetBehaviorByID(behavior_id);
+    DominoBehavior* behavior_ptr = dominoGetBehaviorById(behavior_id);
     for (uint8_t index = 0U; index < DOMINO_BEHAVIOR_DEPENDENCY_COUNT_MAX; index++) {
         if (behavior_ptr->dependency_list[index].kind == DOMINO_BEHAVIOR_DEPENDENCY_NONE) {
-            behavior_ptr->dependency_list[index] = (DominoBehaviorDependency){.step_seq = dominoGetBehaviorByID(source_id)->step_seq, .kind = kind};
+            behavior_ptr->dependency_list[index] = (DominoBehaviorDependency){.step_seq = dominoGetBehaviorById(source_id)->step_seq, .kind = kind};
             return;
         }
     }
@@ -287,7 +287,7 @@ static void addBehaviorDependency(domino_behavior_id_t behavior_id, domino_behav
 }
 
 static void setDeadline(domino_task_id_t task_id, domino_runtime_ms_t deadline_ms, bool inclusive_flag) {
-    DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    DominoTask* task_ptr = dominoGetTaskById(task_id);
     task_ptr->deadline_ms = deadline_ms;
     task_ptr->flags |= (uint8_t)(DOMINO_TASK_FLAG_DEADLINE_VALID | (inclusive_flag ? DOMINO_TASK_FLAG_DEADLINE_INCLUSIVE : 0U));
 }
@@ -326,15 +326,15 @@ static bool serveControlled(domino_human_id_t human_id, uint8_t planner_kind, ui
                             domino_runtime_ms_t next_at_ms) {
     g_controlled_plan =
         (ControlledPlan){.candidate_ptr = candidate_ptr, .next_plan_at_ms = next_at_ms, .outcome = outcome, .next_plan_valid_flag = next_valid_flag};
-    const uint64_t accepted_before = dominoHumanExecutionGetStats().accepted_candidate_count;
+    const uint64_t accepted_before = dominoHumanExecutorGetStats().accepted_candidate_count;
     serveRequest(human_id, planner_kind, controlledCompute);
-    return dominoHumanExecutionGetStats().accepted_candidate_count > accepted_before;
+    return dominoHumanExecutorGetStats().accepted_candidate_count > accepted_before;
 }
 
 /** @brief 为人物发布一次受控规划请求资格（不经过调度条件），覆盖该类原有请求。 */
 static void issueSlot(domino_human_id_t human_id, uint8_t planner_kind, uint8_t scope_kind, uint32_t scope_id) {
     static uint64_t request_seq = 1000U;
-    runtimeOf(human_id)->slot_list[planner_kind] = (DominoHumanPlanSlot){
+    runtimeOf(human_id)->plan_slot_list[planner_kind] = (DominoHumanPlanSlot){
         .request_id = ++request_seq,
         .scope_id = scope_id,
         .priority = DOMINO_HUMAN_PLAN_PRIORITY_NORMAL,
@@ -401,7 +401,7 @@ static DominoBehaviorCandidateEntry behaviorEntry(const DominoTask* task_ptr, ui
     DominoBehaviorCandidateEntry entry = {
         .expected_plan_version = task_ptr->plan_version,
         .task_id = task_ptr->task_id,
-        .expected_stimulus_round = dominoGetHumanByID(task_ptr->owner_human_id)->data->stimulus_round,
+        .expected_stimulus_round = dominoGetHumanById(task_ptr->owner_human_id)->data->stimulus_round,
         .step_count = step_count,
         .op = op,
         .depends_current_flag = 1U,
@@ -432,25 +432,25 @@ static void testAutonomousSleep(void) {
     const uint8_t energy_list[] = {20U};
     fixtureBegin("autonomous_sleep", 1U, energy_list);
     setNowMs(1000U);
-    dominoHumanExecutionAdvanceForTest(1U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    dominoHumanExecutorAdvanceForTest(1U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE);
     DominoMotivation* motivation_ptr = restoreMotivation(1U);
     CHECK(motivation_ptr != nullptr && motivation_ptr->status == DOMINO_MOTIVATION_STATUS_ACTIVE && motivation_ptr->success_count == 0U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE);
     DominoTask* task_ptr = activeOrHead(1U);
-    CHECK(task_ptr != nullptr && task_ptr->task_id != 0U && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE && task_ptr->plan_count == 0U);
+    CHECK(task_ptr != nullptr && task_ptr->task_id != 0U && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE && task_ptr->plan_item_count == 0U);
     CHECK(human(1U)->data->active_task_id == 0U && human(1U)->data->task_queue_count == 1U);
     const domino_task_id_t task_id = task_ptr->task_id;
     motivation_ptr = restoreMotivation(1U);
     CHECK(motivation_ptr->round_task_id == task_id && motivation_ptr->need_round == 1U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE);
-    task_ptr = dominoGetTaskByID(task_id);
-    CHECK(task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && task_ptr->started_at_ms == 1000U && task_ptr->plan_count == 0U);
+    task_ptr = dominoGetTaskById(task_id);
+    CHECK(task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && task_ptr->started_at_ms == 1000U && task_ptr->plan_item_count == 0U);
     CHECK(human(1U)->data->active_task_id == task_id && human(1U)->data->task_queue_count == 0U && human(1U)->state == DOMINO_HUMAN_STATE_NORMAL);
     const DominoBehavior* behavior_ptr = channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_MAIN);
     CHECK(behavior_ptr != nullptr && behavior_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP && behavior_ptr->status == DOMINO_BEHAVIOR_STATUS_ACTIVE &&
@@ -458,20 +458,20 @@ static void testAutonomousSleep(void) {
           behavior_ptr->channel_index == DOMINO_BEHAVIOR_CHANNEL_MAIN);
     CHECK(channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_AUX_1) == nullptr && channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_AUX_2) == nullptr);
     CHECK(runtimeOf(1U)->wakeup_game_timer_id != 0U);
-    for (uint32_t step = 0U; step < 64U && dominoGetTaskByID(task_id) != nullptr; step++) {
+    for (uint32_t step = 0U; step < 64U && dominoGetTaskById(task_id) != nullptr; step++) {
         if (!advanceToWakeup(1U)) {
             break;
         }
     }
     motivation_ptr = restoreMotivation(1U);
-    CHECK(dominoGetTaskByID(task_id) == nullptr);
+    CHECK(dominoGetTaskById(task_id) == nullptr);
     CHECK(motivation_ptr->success_count == 1U && motivation_ptr->history_count == 1U);
     const DominoMotivationHistory entry = dominoHumanMotivationHistoryAt(motivation_ptr, 0U);
     CHECK(entry.task_id == task_id && entry.started_at_ms == 1000U && entry.ended_at_ms > entry.started_at_ms);
     CHECK(human(1U)->data->energy >= g_domino_human_ai_config.sleep_target_energy);
     CHECK(motivation_ptr->round_task_id == 0U);
     CHECK(human(1U)->data->task_count == 0U && human(1U)->data->active_task_id == 0U &&
-          runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+          runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     CHECK(human(1U)->state == DOMINO_HUMAN_STATE_THINKING);
     /* 精力充足时任务规划不建任务，给出精力降到触发值的下次规划时刻；唤醒只登记这一时刻，不重复制造工作。 */
     const DominoHumanRuntime* runtime_ptr = runtimeOf(1U);
@@ -514,7 +514,7 @@ static void testSettlementEquivalence(void) {
     /* 人物 3：睡眠在第 48 秒达到 83 点、第 50 秒主行为成功并结束任务；其后效果停止，自然衰减继续到第 65 秒。 */
     const domino_task_id_t task3_id = activeOrHead(3U)->task_id;
     dominoHumanSettle(human(3U), 65000U);
-    const DominoTask* task3_ptr = dominoGetTaskByID(task3_id);
+    const DominoTask* task3_ptr = dominoGetTaskById(task3_id);
     CHECK(task3_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_SUCCEEDED && task3_ptr->ended_at_ms == 50000U);
     CHECK(human(3U)->data->settled_at_ms == 65000U && human(3U)->data->energy == 82U && task3_ptr->main_succeeded_count == 1U);
     CHECK(human(3U)->data->active_task_id == 0U);
@@ -533,14 +533,14 @@ static void testPredictArithmetic(void) {
     const domino_task_id_t task_id = addRunningTask(1U, motivation_ptr->motivation_id, DOMINO_TASK_TYPE_PHONE_CALL, 0U);
     const domino_behavior_id_t behavior_id =
         addRunningBehavior(task_id, DOMINO_BEHAVIOR_CHANNEL_AUX_1, DOMINO_BEHAVIOR_TYPE_WORK, 100000U, 1000U, 0U);
-    dominoGetBehaviorByID(behavior_id)->effective_progress_ms = 900U;
+    dominoGetBehaviorById(behavior_id)->effective_progress_ms = 900U;
     DominoHumanNeedValues predicted;
     uint32_t work_count = 0U;
     CHECK(dominoHumanPredictNeedsAt(human(1U), 200U, &predicted, &work_count));
     CHECK(predicted.energy == 49U && human(1U)->data->energy == 50U && human(1U)->data->settled_at_ms == 0U &&
-          dominoGetBehaviorByID(behavior_id)->effective_progress_ms == 900U);
+          dominoGetBehaviorById(behavior_id)->effective_progress_ms == 900U);
     dominoHumanSettle(human(1U), 200U);
-    CHECK(human(1U)->data->energy == 49U && dominoGetBehaviorByID(behavior_id)->effective_progress_ms == 1100U);
+    CHECK(human(1U)->data->energy == 49U && dominoGetBehaviorById(behavior_id)->effective_progress_ms == 1100U);
     CHECK(human(1U)->data->settled_at_ms == 200U);
     /* 预测下一检查边界严格晚于已结算基准。 */
     domino_runtime_ms_t due_ms;
@@ -583,7 +583,7 @@ static void testNaturalMinuteAlignment(void) {
 /** @brief 推进到睡眠任务刚接受（未启动、在待执行队列）或刚启动（运行任务）的状态。 */
 static domino_task_id_t prepareSleepTask(domino_human_id_t human_id, bool start_flag) {
     setNowMs(1000U);
-    dominoHumanExecutionAdvanceForTest(human_id);
+    dominoHumanExecutorAdvanceForTest(human_id);
     serveRequest(human_id, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr);
     serveRequest(human_id, DOMINO_HUMAN_PLANNER_TASK, nullptr);
     if (start_flag) {
@@ -598,10 +598,10 @@ static void testExternalSatisfaction(void) {
     const uint8_t energy_list[] = {20U, 20U};
     fixtureBegin("external_satisfaction", 2U, energy_list);
     const domino_task_id_t planned_id = prepareSleepTask(1U, false);
-    CHECK(planned_id != 0U && dominoGetTaskByID(planned_id)->exec_status == DOMINO_TASK_EXEC_STATUS_NONE);
+    CHECK(planned_id != 0U && dominoGetTaskById(planned_id)->exec_status == DOMINO_TASK_EXEC_STATUS_NONE);
     setNowMs(2000U);
     submitEnergyForTest(1U, 90U);
-    CHECK(dominoGetTaskByID(planned_id) == nullptr && human(1U)->data->task_count == 0U && human(1U)->data->task_queue_count == 0U);
+    CHECK(dominoGetTaskById(planned_id) == nullptr && human(1U)->data->task_count == 0U && human(1U)->data->task_queue_count == 0U);
     CHECK(restoreMotivation(1U)->success_count == 0U && restoreMotivation(1U)->round_task_id == 0U && restoreMotivation(1U)->need_round == 1U);
     CHECK(restoreMotivation(1U)->last_failure_reason == DOMINO_END_REASON_NEED_SATISFIED);
     /* 新需求出现时按新轮次重新规划，新 task_id 不复用旧值。 */
@@ -612,11 +612,11 @@ static void testExternalSatisfaction(void) {
     CHECK(round2_ptr != nullptr && round2_ptr->task_id > planned_id && round2_ptr->work_round == 2U && restoreMotivation(1U)->need_round == 2U);
 
     const domino_task_id_t running_id = prepareSleepTask(2U, true);
-    CHECK(running_id != 0U && dominoGetTaskByID(running_id)->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN);
-    const domino_behavior_id_t behavior_id = dominoGetTaskByID(running_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
+    CHECK(running_id != 0U && dominoGetTaskById(running_id)->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN);
+    const domino_behavior_id_t behavior_id = dominoGetTaskById(running_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
     setNowMs(7000U);
     submitEnergyForTest(2U, 90U);
-    CHECK(dominoGetTaskByID(running_id) == nullptr && dominoGetBehaviorByID(behavior_id) == nullptr);
+    CHECK(dominoGetTaskById(running_id) == nullptr && dominoGetBehaviorById(behavior_id) == nullptr);
     CHECK(restoreMotivation(2U)->success_count == 0U && restoreMotivation(2U)->last_failure_reason == DOMINO_END_REASON_NEED_SATISFIED);
     CHECK(human(2U)->data->active_task_id == 0U && human(2U)->data->energy == 90U);
     fixtureEnd();
@@ -627,30 +627,30 @@ static void testSleepConditionRepair(void) {
     const uint8_t energy_list[] = {20U};
     fixtureBegin("sleep_condition_repair", 1U, energy_list);
     const domino_task_id_t task_id = prepareSleepTask(1U, true);
-    const domino_behavior_id_t first_behavior_id = dominoGetTaskByID(task_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
+    const domino_behavior_id_t first_behavior_id = dominoGetTaskById(task_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
     setNowMs(11000U);
     submitConditionForTest(1U, true);
-    const DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    const DominoTask* task_ptr = dominoGetTaskById(task_id);
     CHECK(task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && task_ptr->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN] == 0U &&
           task_ptr->main_cancelled_count == 1U);
     CHECK(task_ptr->progress_ms == 10000U && task_ptr->main_succeeded_count == 0U && task_ptr->last_behavior_id == first_behavior_id);
-    CHECK(dominoGetBehaviorByID(first_behavior_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
-          dominoGetBehaviorByID(first_behavior_id)->ended_at_ms == 11000U);
+    CHECK(dominoGetBehaviorById(first_behavior_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
+          dominoGetBehaviorById(first_behavior_id)->ended_at_ms == 11000U);
     CHECK(human(1U)->data->active_task_id == task_id);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id == 0U && human(1U)->state == DOMINO_HUMAN_STATE_THINKING);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id == 0U && human(1U)->state == DOMINO_HUMAN_STATE_THINKING);
     /* 相同条件值不重复处置。 */
     submitConditionForTest(1U, true);
-    CHECK(dominoGetTaskByID(task_id)->main_cancelled_count == 1U);
+    CHECK(dominoGetTaskById(task_id)->main_cancelled_count == 1U);
     setNowMs(12000U);
     submitConditionForTest(1U, false);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].priority == DOMINO_HUMAN_PLAN_PRIORITY_HIGH);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].priority == DOMINO_HUMAN_PLAN_PRIORITY_HIGH);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, nullptr);
-    task_ptr = dominoGetTaskByID(task_id);
+    task_ptr = dominoGetTaskById(task_id);
     const domino_behavior_id_t second_behavior_id = task_ptr->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
     CHECK(second_behavior_id != 0U && second_behavior_id > first_behavior_id && task_ptr->started_at_ms == 1000U);
-    CHECK(task_ptr->progress_ms == 10000U && dominoGetBehaviorByID(second_behavior_id)->started_at_ms == 12000U &&
-          dominoGetBehaviorByID(second_behavior_id)->step_seq == 2U);
+    CHECK(task_ptr->progress_ms == 10000U && dominoGetBehaviorById(second_behavior_id)->started_at_ms == 12000U &&
+          dominoGetBehaviorById(second_behavior_id)->step_seq == 2U);
     fixtureEnd();
 }
 
@@ -681,26 +681,26 @@ static void testRequestIdentity(void) {
     const uint8_t energy_list[] = {20U};
     fixtureBegin("request_identity", 1U, energy_list);
     setNowMs(1000U);
-    dominoHumanExecutionAdvanceForTest(1U);
+    dominoHumanExecutorAdvanceForTest(1U);
     const DominoHumanRuntime* runtime_ptr = runtimeOf(1U);
-    const DominoHumanPlanSlot slot = runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
+    const DominoHumanPlanSlot slot = runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
     CHECK(slot.request_id != 0U && slot.priority == DOMINO_HUMAN_PLAN_PRIORITY_NORMAL && slot.scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN);
     /* 待评估标志在投递时清除；投递请求不改变人物唤醒：没有任务、行为重试和下次规划时刻，人物不登记唤醒。 */
     CHECK(runtime_ptr->pending_mask == 0U && runtime_ptr->wakeup_game_timer_id == 0U);
     DominoHumanPlanResultMessage stale = {.request_id = slot.request_id + 7U, .human_id = 1U, .outcome = DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE};
-    dominoHumanExecutionProcessResultForTest(DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_PRIORITY_NORMAL, &stale);
+    dominoHumanExecutorProcessResultForTest(DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_PRIORITY_NORMAL, &stale);
     DominoHumanPlanResultMessage wrong_priority = {.request_id = slot.request_id, .human_id = 1U, .outcome = DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE};
-    dominoHumanExecutionProcessResultForTest(DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_PRIORITY_HIGH, &wrong_priority);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == slot.request_id);
-    CHECK(dominoHumanExecutionGetStats().stale_result_count == 2U && runtime_ptr->next_plan_mask == 0U);
+    dominoHumanExecutorProcessResultForTest(DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_PRIORITY_HIGH, &wrong_priority);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == slot.request_id);
+    CHECK(dominoHumanExecutorGetStats().stale_result_count == 2U && runtime_ptr->next_plan_mask == 0U);
     /* 排队 9 秒：推进人物不撤销请求，也不重新投递。 */
-    const uint64_t posted_count = dominoHumanExecutionGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
+    const uint64_t posted_count = dominoHumanExecutorGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
     advanceAt(1U, 10000U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == slot.request_id);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == slot.request_id);
     /* 结果照常计算并提交，之后没有重试，也没有新的动机请求。 */
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE && restoreMotivation(1U) != nullptr);
-    CHECK(dominoHumanExecutionGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION] == posted_count);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U &&
+    CHECK(dominoHumanExecutorGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION] == posted_count);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U &&
           (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_MOTIVATION) == 0U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
     fixtureEnd();
@@ -728,7 +728,7 @@ static void testCandidateCommit(void) {
     /* 必要部分不成立：整份拒绝，下次规划时刻设为处理时刻 + retry_delay_ms。 */
     const DominoTaskCandidateEntry invalid_list[] = {bad_entry, sleep_entry};
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(2U, 1U, invalid_list)));
-    CHECK(human(1U)->data->task_count == 0U && dominoHumanExecutionGetStats().rejected_candidate_count == 1U);
+    CHECK(human(1U)->data->task_count == 0U && dominoHumanExecutorGetStats().rejected_candidate_count == 1U);
     CHECK((runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U && runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_TASK] == 4000U);
     /* 必要部分成立：一份候选为两个动机各建一项任务，省略非法类型和过期队列版本的插队；结果给出“无”，清除兜底时刻。 */
     const DominoTaskCandidateEntry valid_list[] = {sleep_entry, phone_entry, bad_entry, stale_insert_entry};
@@ -736,8 +736,8 @@ static void testCandidateCommit(void) {
     const DominoHumanData* data_ptr = human(1U)->data;
     CHECK(data_ptr->task_count == 2U && data_ptr->task_queue_count == 2U && data_ptr->active_task_id == 0U);
     CHECK((runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
-    const DominoTask* sleep_ptr = dominoGetTaskByID(data_ptr->task_queue_list[0]);
-    const DominoTask* phone_ptr = dominoGetTaskByID(data_ptr->task_queue_list[1]);
+    const DominoTask* sleep_ptr = dominoGetTaskById(data_ptr->task_queue_list[0]);
+    const DominoTask* phone_ptr = dominoGetTaskById(data_ptr->task_queue_list[1]);
     CHECK(sleep_ptr != nullptr && sleep_ptr->type == DOMINO_TASK_TYPE_SLEEP && sleep_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_NONE);
     CHECK(phone_ptr != nullptr && phone_ptr->type == DOMINO_TASK_TYPE_PHONE_CALL && phone_ptr->motivation_id == contact_id);
     CHECK((phone_ptr->flags & DOMINO_TASK_FLAG_PREEMPT) == 0U && phone_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE);
@@ -776,7 +776,7 @@ static void testInformationGap(void) {
     /* 规划器在精力 25 时读取快照，提出第 2 轮睡眠且不要求以后再看。 */
     issueSlot(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U);
     DominoHumanPlanOutput snapshot = {0};
-    CHECK(dominoHumanPlanTasks(human(1U), &runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK], nowMs(), 512U, &snapshot) ==
+    CHECK(dominoHumanPlanTasks(human(1U), &runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK], nowMs(), 512U, &snapshot) ==
               DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE &&
           !snapshot.next_plan_valid_flag);
     /* 提交前精力被外部补到 90：执行器不复核精力，结果照常提交；未启动的任务随后被任务决策撤销，不计次。 */
@@ -787,7 +787,7 @@ static void testInformationGap(void) {
     CHECK(motivation_ptr->need_round == 2U && motivation_ptr->round_task_id == 0U && motivation_ptr->success_count == 0U);
     CHECK(motivation_ptr->last_failure_reason == DOMINO_END_REASON_NEED_SATISFIED && human(1U)->data->task_count == 0U);
     /* 请求在途期间置位的任务待规划标志保留：结果处理后再发起一次，精力充足时 NO_CHANGE 并给出下次规划时刻。 */
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE);
     CHECK((runtimeOf(1U)->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U);
     /* 按旧轮次读取的建议：读取时轮次与当前轮次不符，拒绝。 */
@@ -830,25 +830,25 @@ static void testBehaviorDependencies(void) {
     }
     /* 人物 1 第 1 秒：A 自身已达标但完成依赖未到，继续保持 ACTIVE。 */
     dominoHumanSettle(human(1U), 2000U);
-    CHECK(dominoGetBehaviorByID(a_id_list[0])->status == DOMINO_BEHAVIOR_STATUS_ACTIVE &&
-          dominoGetBehaviorByID(a_id_list[0])->effective_progress_ms == 1000U);
+    CHECK(dominoGetBehaviorById(a_id_list[0])->status == DOMINO_BEHAVIOR_STATUS_ACTIVE &&
+          dominoGetBehaviorById(a_id_list[0])->effective_progress_ms == 1000U);
     domino_runtime_ms_t due_ms;
     CHECK(dominoHumanPredictNextCheck(human(1U), &due_ms) && due_ms == 3000U);
     dominoHumanSettle(human(1U), 3000U);
-    const DominoTask* task1_ptr = dominoGetTaskByID(task_id_list[0]);
-    const DominoBehavior* a1_ptr = dominoGetBehaviorByID(a_id_list[0]);
+    const DominoTask* task1_ptr = dominoGetTaskById(task_id_list[0]);
+    const DominoBehavior* a1_ptr = dominoGetBehaviorById(a_id_list[0]);
     CHECK(a1_ptr != nullptr && a1_ptr->status == DOMINO_BEHAVIOR_STATUS_SUCCEEDED && a1_ptr->ended_at_ms == 3000U);
     CHECK(task1_ptr->current_behavior_id_list[0] == 0U && task1_ptr->current_behavior_id_list[1] == 0U &&
           task1_ptr->current_behavior_id_list[2] != 0U);
     CHECK(task1_ptr->main_succeeded_count == 1U && task1_ptr->progress_ms == 1000U && task1_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN);
     dominoHumanSettle(human(1U), 7000U);
-    task1_ptr = dominoGetTaskByID(task_id_list[0]);
+    task1_ptr = dominoGetTaskById(task_id_list[0]);
     CHECK(task1_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_SUCCEEDED && task1_ptr->ended_at_ms == 5000U);
     CHECK(contactMotivation(1U)->success_count == 1U && human(1U)->data->active_task_id == 0U);
 
     dominoHumanSettle(human(2U), 7000U);
-    const DominoTask* task2_ptr = dominoGetTaskByID(task_id_list[1]);
-    const DominoBehavior* a2_ptr = dominoGetBehaviorByID(a_id_list[1]);
+    const DominoTask* task2_ptr = dominoGetTaskById(task_id_list[1]);
+    const DominoBehavior* a2_ptr = dominoGetBehaviorById(a_id_list[1]);
     CHECK(a2_ptr != nullptr && a2_ptr->status == DOMINO_BEHAVIOR_STATUS_FAILED && a2_ptr->end_reason == DOMINO_END_REASON_DEPENDENCY_BROKEN &&
           a2_ptr->ended_at_ms == 5000U);
     CHECK(task2_ptr->current_behavior_id_list[0] == 0U && task2_ptr->current_behavior_id_list[1] == 0U &&
@@ -869,7 +869,7 @@ static void testBehaviorCandidateDependencies(void) {
     const domino_motivation_id_t motivation_id = addMotivation(1U, DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT)->motivation_id;
     dominoHumanSettle(human(1U), 1000U);
     const domino_task_id_t task_id = addRunningTask(1U, motivation_id, DOMINO_TASK_TYPE_MESSAGE, 0U);
-    const DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    const DominoTask* task_ptr = dominoGetTaskById(task_id);
     /* 非法：依赖更晚的步骤。 */
     DominoBehaviorPlanItem bad_list[2] = {planStep(0U, DOMINO_BEHAVIOR_TYPE_WORK, 2000U), planStep(1U, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 1000U)};
     bad_list[0].dependency_list[0] = localDependency(1U, DOMINO_BEHAVIOR_DEPENDENCY_START);
@@ -891,8 +891,8 @@ static void testBehaviorCandidateDependencies(void) {
     bad_list[1].flags = DOMINO_BEHAVIOR_FLAG_INSERTED;
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &entry, 2U, bad_list)));
-    task_ptr = dominoGetTaskByID(task_id);
-    CHECK(task_ptr->plan_count == 0U && task_ptr->last_step_seq == 0U && dominoHumanExecutionGetStats().rejected_candidate_count == 4U);
+    task_ptr = dominoGetTaskById(task_id);
+    CHECK(task_ptr->plan_item_count == 0U && task_ptr->last_step_seq == 0U && dominoHumanExecutorGetStats().rejected_candidate_count == 4U);
     /* 合法：s0 主通道工作 2s；s1 辅 1 通话 1s，启动依赖 s0；s2 辅 2 消息 5s，伴随 s0。 */
     DominoBehaviorPlanItem step_list[3] = {planStep(0U, DOMINO_BEHAVIOR_TYPE_WORK, 2000U), planStep(1U, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 1000U),
                                            planStep(2U, DOMINO_BEHAVIOR_TYPE_MESSAGE, 5000U)};
@@ -901,11 +901,11 @@ static void testBehaviorCandidateDependencies(void) {
     entry = behaviorEntry(task_ptr, DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 3U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                           buildBehaviorCandidate(1U, 1U, &entry, 3U, step_list)));
-    task_ptr = dominoGetTaskByID(task_id);
+    task_ptr = dominoGetTaskById(task_id);
     const DominoBehavior* s0_ptr = channelBehavior(1U, 0U);
     const DominoBehavior* s2_ptr = channelBehavior(1U, 2U);
     CHECK(s0_ptr != nullptr && s0_ptr->step_seq == 1U && s0_ptr->started_at_ms == 1000U);
-    CHECK(channelBehavior(1U, 1U) == nullptr && task_ptr->plan_count == 1U && task_ptr->plan_item_list[0].step_seq == 2U);
+    CHECK(channelBehavior(1U, 1U) == nullptr && task_ptr->plan_item_count == 1U && task_ptr->plan_item_list[0].step_seq == 2U);
     CHECK(task_ptr->plan_item_list[0].dependency_list[0].step_seq == 1U &&
           task_ptr->plan_item_list[0].dependency_list[0].state == DOMINO_BEHAVIOR_DEPENDENCY_PENDING);
     CHECK(s2_ptr != nullptr && s2_ptr->step_seq == 3U && s2_ptr->dependency_list[0].kind == DOMINO_BEHAVIOR_DEPENDENCY_WHILE &&
@@ -913,16 +913,16 @@ static void testBehaviorCandidateDependencies(void) {
     const domino_behavior_id_t s2_id = s2_ptr->behavior_id;
     /* 第 3 秒：s0 成功，s2 随之取消，s1 的启动依赖满足并在同一时刻启动。 */
     advanceAt(1U, 3000U);
-    task_ptr = dominoGetTaskByID(task_id);
+    task_ptr = dominoGetTaskById(task_id);
     const DominoBehavior* s1_ptr = channelBehavior(1U, 1U);
-    CHECK(channelBehavior(1U, 0U) == nullptr && channelBehavior(1U, 2U) == nullptr && task_ptr->plan_count == 0U);
+    CHECK(channelBehavior(1U, 0U) == nullptr && channelBehavior(1U, 2U) == nullptr && task_ptr->plan_item_count == 0U);
     CHECK(s1_ptr != nullptr && s1_ptr->step_seq == 2U && s1_ptr->started_at_ms == 3000U);
-    CHECK(dominoGetBehaviorByID(s2_id) == nullptr || (dominoGetBehaviorByID(s2_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
-                                                      dominoGetBehaviorByID(s2_id)->end_reason == DOMINO_END_REASON_DEPENDENCY_BROKEN));
+    CHECK(dominoGetBehaviorById(s2_id) == nullptr || (dominoGetBehaviorById(s2_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
+                                                      dominoGetBehaviorById(s2_id)->end_reason == DOMINO_END_REASON_DEPENDENCY_BROKEN));
     CHECK(task_ptr->main_succeeded_count == 1U && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN);
     /* 第 4 秒：s1 成功，自身工作全部完成，任务成功。 */
     advanceAt(1U, 4000U);
-    CHECK(dominoGetTaskByID(task_id) == nullptr && contactMotivation(1U)->success_count == 1U);
+    CHECK(dominoGetTaskById(task_id) == nullptr && contactMotivation(1U)->success_count == 1U);
     CHECK(dominoHumanMotivationHistoryAt(contactMotivation(1U), 0U).ended_at_ms == 4000U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
     fixtureEnd();
@@ -949,7 +949,7 @@ static void testDeadlineBoundary(void) {
         addBehaviorDependency(order_id, payment_id, DOMINO_BEHAVIOR_DEPENDENCY_COMPLETE);
         setDeadline(task_id, 10000U, inclusive_list[index]);
         dominoHumanSettle(human(human_id), 12000U);
-        const DominoTask* task_ptr = dominoGetTaskByID(task_id);
+        const DominoTask* task_ptr = dominoGetTaskById(task_id);
         CHECK(task_ptr->exec_status == expected_list[index] && task_ptr->ended_at_ms == 10000U);
         CHECK(task_ptr->end_reason ==
               (expected_list[index] == DOMINO_TASK_EXEC_STATUS_SUCCEEDED ? DOMINO_END_REASON_COMPLETED : DOMINO_END_REASON_DEADLINE_MISSED));
@@ -970,24 +970,24 @@ static void testTerminalDetailRetention(void) {
         task_id_list[human_id - 1U] = task_id;
     }
     dominoHumanSettle(human(1U), 6000U);
-    DominoTask* task1_ptr = dominoGetTaskByID(task_id_list[0]);
+    DominoTask* task1_ptr = dominoGetTaskById(task_id_list[0]);
     CHECK(task1_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && task1_ptr->main_succeeded_count == 1U && task1_ptr->last_behavior_id != 0U);
     dominoHumanStoreReclaimBehavior(task1_ptr, task1_ptr->last_behavior_id);
     task1_ptr->last_behavior_id = 0U;
     setNowMs(6000U);
     submitEnergyForTest(1U, 85U);
-    CHECK(dominoGetTaskByID(task_id_list[0]) == nullptr && restoreMotivation(1U)->success_count == 1U);
+    CHECK(dominoGetTaskById(task_id_list[0]) == nullptr && restoreMotivation(1U)->success_count == 1U);
     CHECK(dominoHumanMotivationHistoryAt(restoreMotivation(1U), 0U).task_id == task_id_list[0]);
 
     setNowMs(3000U);
     submitConditionForTest(2U, true);
-    DominoTask* task2_ptr = dominoGetTaskByID(task_id_list[1]);
+    DominoTask* task2_ptr = dominoGetTaskById(task_id_list[1]);
     CHECK(task2_ptr->progress_ms == 3000U && task2_ptr->main_cancelled_count == 1U && task2_ptr->main_succeeded_count == 0U);
     dominoHumanStoreReclaimBehavior(task2_ptr, task2_ptr->last_behavior_id);
     task2_ptr->last_behavior_id = 0U;
     setNowMs(9000U);
-    dominoHumanExecutionAdvanceForTest(2U);
-    task2_ptr = dominoGetTaskByID(task_id_list[1]);
+    dominoHumanExecutorAdvanceForTest(2U);
+    task2_ptr = dominoGetTaskById(task_id_list[1]);
     CHECK(task2_ptr->progress_ms == 3000U && task2_ptr->main_cancelled_count == 1U && restoreMotivation(2U)->success_count == 0U);
     fixtureEnd();
 }
@@ -1002,7 +1002,7 @@ static void testSameBoundaryInterplay(void) {
     addRunningBehavior(sleep_id, DOMINO_BEHAVIOR_CHANNEL_AUX_1, DOMINO_BEHAVIOR_TYPE_WORK, 60000U, 6000U, 0U);
     restoreMotivation(1U)->round_task_id = sleep_id;
     dominoHumanSettle(human(1U), 6000U);
-    const DominoTask* sleep_ptr = dominoGetTaskByID(sleep_id);
+    const DominoTask* sleep_ptr = dominoGetTaskById(sleep_id);
     CHECK(human(1U)->data->energy == 79U && sleep_ptr->main_succeeded_count == 1U);
     CHECK(sleep_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && sleep_ptr->current_behavior_id_list[0] == 0U &&
           sleep_ptr->current_behavior_id_list[1] != 0U);
@@ -1011,7 +1011,7 @@ static void testSameBoundaryInterplay(void) {
     CHECK(dominoHumanPredictNextCheck(human(1U), &due_ms) && due_ms > 6000U);
     /* 不推进时间的同刻复查不重复结算。 */
     dominoHumanResolveBoundary(human(1U));
-    CHECK(human(1U)->data->energy == 79U && dominoGetTaskByID(sleep_id)->main_succeeded_count == 1U);
+    CHECK(human(1U)->data->energy == 79U && dominoGetTaskById(sleep_id)->main_succeeded_count == 1U);
     fixtureEnd();
 }
 
@@ -1024,8 +1024,8 @@ static void testLateNotification(void) {
     addRunningBehavior(task_id, DOMINO_BEHAVIOR_CHANNEL_MAIN, DOMINO_BEHAVIOR_TYPE_SLEEP, 6000U, 0U, 0U);
     restoreMotivation(1U)->round_task_id = task_id;
     setNowMs(10000U);
-    dominoHumanExecutionAdvanceForTest(1U);
-    CHECK(dominoGetTaskByID(task_id) == nullptr && restoreMotivation(1U)->success_count == 1U);
+    dominoHumanExecutorAdvanceForTest(1U);
+    CHECK(dominoGetTaskById(task_id) == nullptr && restoreMotivation(1U)->success_count == 1U);
     CHECK(dominoHumanMotivationHistoryAt(restoreMotivation(1U), 0U).ended_at_ms == 6000U && human(1U)->data->energy == 80U);
     CHECK(human(1U)->data->settled_at_ms == 10000U);
     fixtureEnd();
@@ -1069,20 +1069,20 @@ static void testStimulusInsert(void) {
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 77U);
     const DominoHumanData* data_ptr = human(1U)->data;
     CHECK(data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_CONTACT && data_ptr->stimulus_source_id == 77U && data_ptr->stimulus_round == 1U);
-    CHECK(dominoHumanStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_INSERT);
-    const DominoHumanPlanSlot slot = runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR];
+    CHECK(dominoHumanGetStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_INSERT);
+    const DominoHumanPlanSlot slot = runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR];
     CHECK(slot.request_id != 0U && slot.scope_id == task_id && slot.priority == DOMINO_HUMAN_PLAN_PRIORITY_HIGH);
     /* 登记外部信息同时置动机和任务待规划标志；是否需要回应任务由规划器判断，执行器不检查应激选择。 */
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
-          runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
+          runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     /* 非法插入：主通道、带依赖、轮次过期。 */
-    const DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    const DominoTask* task_ptr = dominoGetTaskById(task_id);
     DominoBehaviorPlanItem step = planStep(DOMINO_BEHAVIOR_CHANNEL_MAIN, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 8000U);
     DominoBehaviorCandidateEntry entry = behaviorEntry(task_ptr, DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &entry, 1U, &step)));
     step = planStep(DOMINO_BEHAVIOR_CHANNEL_AUX_1, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 8000U);
-    step.dependency_list[0] = (DominoBehaviorDependency){.step_seq = dominoGetBehaviorByID(task_ptr->current_behavior_id_list[0])->step_seq,
+    step.dependency_list[0] = (DominoBehaviorDependency){.step_seq = dominoGetBehaviorById(task_ptr->current_behavior_id_list[0])->step_seq,
                                                          .kind = DOMINO_BEHAVIOR_DEPENDENCY_WHILE};
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &entry, 1U, &step)));
@@ -1090,19 +1090,20 @@ static void testStimulusInsert(void) {
     entry.expected_stimulus_round = 0U;
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &entry, 1U, &step)));
-    CHECK(data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_CONTACT && dominoGetTaskByID(task_id)->plan_count == 0U);
+    CHECK(data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_CONTACT && dominoGetTaskById(task_id)->plan_item_count == 0U);
     /* 合法插入：辅 1 通话 8s，第 1 秒启动并承接外部信息。 */
-    entry = behaviorEntry(dominoGetTaskByID(task_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
+    entry = behaviorEntry(dominoGetTaskById(task_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(
         injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id, buildBehaviorCandidate(1U, 1U, &entry, 1U, &step)));
     const DominoBehavior* inserted_ptr = channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_AUX_1);
     CHECK(inserted_ptr != nullptr && (inserted_ptr->flags & DOMINO_BEHAVIOR_FLAG_INSERTED) != 0U && inserted_ptr->started_at_ms == 1000U &&
           inserted_ptr->type == DOMINO_BEHAVIOR_TYPE_PHONE_CALL);
     CHECK(data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE && data_ptr->stimulus_round == 1U && data_ptr->active_task_id == task_id);
-    CHECK(channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_MAIN) != nullptr && runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id == 0U);
+    CHECK(channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_MAIN) != nullptr &&
+          runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].request_id == 0U);
     /* 第 4 秒主行为完成：完成条件成立，但插入行为仍在运行，任务保持 OPEN 等待。 */
     advanceAt(1U, 4000U);
-    task_ptr = dominoGetTaskByID(task_id);
+    task_ptr = dominoGetTaskById(task_id);
     CHECK(task_ptr != nullptr && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN &&
           (task_ptr->flags & DOMINO_TASK_FLAG_COMPLETION_REACHED) != 0U);
     CHECK(task_ptr->main_succeeded_count == 1U && task_ptr->progress_ms == 4000U && task_ptr->current_behavior_id_list[1] != 0U);
@@ -1114,10 +1115,10 @@ static void testStimulusInsert(void) {
     const DominoBehaviorPlanItem late_step = planStep(DOMINO_BEHAVIOR_CHANNEL_MAIN, DOMINO_BEHAVIOR_TYPE_MESSAGE, 1000U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &late_entry, 1U, &late_step)));
-    CHECK(dominoGetTaskByID(task_id)->plan_count == 0U);
+    CHECK(dominoGetTaskById(task_id)->plan_item_count == 0U);
     /* 第 9 秒插入行为结束：此时才提交任务成功，插入行为不计入主行为成功证明和进度。 */
     advanceAt(1U, 9000U);
-    CHECK(dominoGetTaskByID(task_id) == nullptr && human(1U)->data->active_task_id == 0U);
+    CHECK(dominoGetTaskById(task_id) == nullptr && human(1U)->data->active_task_id == 0U);
     CHECK(contactMotivation(1U)->success_count == 1U && dominoHumanMotivationHistoryAt(contactMotivation(1U), 0U).ended_at_ms == 9000U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
     fixtureEnd();
@@ -1129,7 +1130,7 @@ static void testStimulusInsert(void) {
 
 static uint8_t contactMotivationCompute(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms,
                                         uint32_t budget, DominoHumanPlanOutput* output_ptr) {
-    if (dominoHumanStimulusNeed(human_ptr) != DOMINO_HUMAN_STIMULUS_NEED_TASK ||
+    if (dominoHumanGetStimulusNeed(human_ptr) != DOMINO_HUMAN_STIMULUS_NEED_TASK ||
         dominoHumanFindActiveMotivation(human_ptr->data, DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT) != nullptr) {
         return dominoHumanPlanMotivations(human_ptr, slot_ptr, now_ms, budget, output_ptr);
     }
@@ -1145,7 +1146,7 @@ static uint32_t g_contact_source_offset;
 static uint8_t contactTaskCompute(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms, uint32_t budget,
                                   DominoHumanPlanOutput* output_ptr) {
     const DominoMotivation* motivation_ptr = dominoHumanFindActiveMotivation(human_ptr->data, DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT);
-    if (motivation_ptr == nullptr || dominoHumanStimulusNeed(human_ptr) != DOMINO_HUMAN_STIMULUS_NEED_TASK) {
+    if (motivation_ptr == nullptr || dominoHumanGetStimulusNeed(human_ptr) != DOMINO_HUMAN_STIMULUS_NEED_TASK) {
         return dominoHumanPlanTasks(human_ptr, slot_ptr, now_ms, budget, output_ptr);
     }
     const DominoTaskCandidateEntry entry = {
@@ -1167,7 +1168,7 @@ static domino_runtime_ms_t g_contact_call_ms = 3000U;
 /** @brief 回应任务：主通道通话，辅 1 记录消息伴随通话；其他任务交给生产策略。 */
 static uint8_t contactBehaviorCompute(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms, uint32_t budget,
                                       DominoHumanPlanOutput* output_ptr) {
-    const DominoTask* task_ptr = dominoGetTaskByID(slot_ptr->scope_id);
+    const DominoTask* task_ptr = dominoGetTaskById(slot_ptr->scope_id);
     if (task_ptr == nullptr || task_ptr->type != DOMINO_TASK_TYPE_PHONE_CALL || !dominoHumanTaskNeedsBehaviorPlan(human_ptr, task_ptr)) {
         return dominoHumanPlanBehaviors(human_ptr, slot_ptr, now_ms, budget, output_ptr);
     }
@@ -1186,64 +1187,64 @@ static void testStimulusYield(void) {
     const uint8_t energy_list[] = {20U};
     fixtureBegin("stimulus_yield", 1U, energy_list);
     const domino_task_id_t sleep_id = prepareSleepTask(1U, true);
-    const domino_behavior_id_t first_sleep_behavior_id = dominoGetTaskByID(sleep_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
+    const domino_behavior_id_t first_sleep_behavior_id = dominoGetTaskById(sleep_id)->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
     CHECK(sleep_id != 0U && first_sleep_behavior_id != 0U);
     setNowMs(5000U);
     const DominoHumanRuntime* runtime_ptr = runtimeOf(1U);
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 42U);
-    CHECK(dominoHumanStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
+    CHECK(dominoHumanGetStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
     /* 外部信息同时发起动机和任务规划（以人物为范围）。 */
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN);
     /* 新建回应联系动机：任务请求在途，任务待规划标志保留到结果处理之后。 */
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, contactMotivationCompute) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE);
     CHECK(contactMotivation(1U) != nullptr && (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U);
     /* 来源与待处理外部信息不符的回应任务被整份拒绝：设兜底时刻；保留的标志立即再发起一次任务规划。 */
     g_contact_source_offset = 1U;
     serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, contactTaskCompute);
-    CHECK(human(1U)->data->task_count == 1U && dominoHumanExecutionGetStats().rejected_candidate_count == 1U);
+    CHECK(human(1U)->data->task_count == 1U && dominoHumanExecutorGetStats().rejected_candidate_count == 1U);
     CHECK(runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_TASK] == 8000U &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     g_contact_source_offset = 0U;
     serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, contactTaskCompute);
     const DominoHumanData* data_ptr = human(1U)->data;
     CHECK(data_ptr->task_count == 2U && data_ptr->task_queue_count == 1U && data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE);
     CHECK((runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     const domino_task_id_t phone_id = data_ptr->task_queue_list[0];
-    const DominoTask* phone_ptr = dominoGetTaskByID(phone_id);
+    const DominoTask* phone_ptr = dominoGetTaskById(phone_id);
     CHECK(phone_ptr->work_source_kind == DOMINO_TASK_SOURCE_STIMULUS && phone_ptr->work_source_id == 42U && phone_ptr->work_round == 1U &&
           (phone_ptr->flags & DOMINO_TASK_FLAG_PREEMPT) != 0U && phone_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_CONTACT);
     /* 回应任务还没有可启动的行为：睡眠照常运行，不提前让位。 */
     CHECK(data_ptr->active_task_id == sleep_id && channelBehavior(1U, 0U)->behavior_id == first_sleep_behavior_id);
-    CHECK(runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].scope_id == phone_id);
+    CHECK(runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR].scope_id == phone_id);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, contactBehaviorCompute);
     /* 回应任务首批行为就绪：睡眠完全让位，通话与伴随的消息记录同时开始。 */
     CHECK(data_ptr->active_task_id == phone_id && data_ptr->task_queue_count == 1U && data_ptr->task_queue_list[0] == sleep_id);
-    phone_ptr = dominoGetTaskByID(phone_id);
+    phone_ptr = dominoGetTaskById(phone_id);
     CHECK(phone_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && phone_ptr->started_at_ms == 5000U &&
           (phone_ptr->flags & DOMINO_TASK_FLAG_PREEMPT) == 0U);
     CHECK(channelBehavior(1U, 0U) != nullptr && channelBehavior(1U, 0U)->type == DOMINO_BEHAVIOR_TYPE_PHONE_CALL);
     CHECK(channelBehavior(1U, 1U) != nullptr && channelBehavior(1U, 1U)->dependency_list[0].kind == DOMINO_BEHAVIOR_DEPENDENCY_WHILE);
-    const DominoTask* sleep_ptr = dominoGetTaskByID(sleep_id);
+    const DominoTask* sleep_ptr = dominoGetTaskById(sleep_id);
     CHECK(sleep_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && sleep_ptr->started_at_ms == 1000U && sleep_ptr->progress_ms == 4000U);
     CHECK(sleep_ptr->main_cancelled_count == 1U && sleep_ptr->last_behavior_end_reason == DOMINO_END_REASON_YIELDED &&
-          sleep_ptr->current_behavior_id_list[0] == 0U && sleep_ptr->plan_count == 0U);
-    CHECK(dominoGetBehaviorByID(first_sleep_behavior_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
-          dominoGetBehaviorByID(first_sleep_behavior_id)->ended_at_ms == 5000U);
+          sleep_ptr->current_behavior_id_list[0] == 0U && sleep_ptr->plan_item_count == 0U);
+    CHECK(dominoGetBehaviorById(first_sleep_behavior_id)->status == DOMINO_BEHAVIOR_STATUS_CANCELLED &&
+          dominoGetBehaviorById(first_sleep_behavior_id)->ended_at_ms == 5000U);
     /* 运行任务让位和回应任务启动都不置任务待规划标志。 */
-    CHECK(runtime_ptr->pending_mask == 0U && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    CHECK(runtime_ptr->pending_mask == 0U && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     /* 让位的睡眠在队列中等待，可提前规划剩余睡眠，但不会抢回运行。 */
     pumpRequests(1U);
-    CHECK(dominoGetTaskByID(sleep_id)->plan_count == 1U && data_ptr->active_task_id == phone_id);
+    CHECK(dominoGetTaskById(sleep_id)->plan_item_count == 1U && data_ptr->active_task_id == phone_id);
     /* 第 8 秒通话结束：伴随的消息记录随之取消，回应任务成功；睡眠恢复，替代行为取得新 ID。 */
     advanceAt(1U, 8000U);
-    CHECK(dominoGetTaskByID(phone_id) == nullptr && contactMotivation(1U)->success_count == 1U);
+    CHECK(dominoGetTaskById(phone_id) == nullptr && contactMotivation(1U)->success_count == 1U);
     CHECK(data_ptr->active_task_id == sleep_id && data_ptr->task_queue_count == 0U);
     const DominoBehavior* resumed_ptr = channelBehavior(1U, DOMINO_BEHAVIOR_CHANNEL_MAIN);
     CHECK(resumed_ptr != nullptr && resumed_ptr->type == DOMINO_BEHAVIOR_TYPE_SLEEP && resumed_ptr->behavior_id > first_sleep_behavior_id &&
           resumed_ptr->started_at_ms == 8000U);
-    CHECK(dominoGetTaskByID(sleep_id)->started_at_ms == 1000U && restoreMotivation(1U)->success_count == 0U);
+    CHECK(dominoGetTaskById(sleep_id)->started_at_ms == 1000U && restoreMotivation(1U)->success_count == 0U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
     fixtureEnd();
 }
@@ -1255,11 +1256,11 @@ static void testStimulusRounds(void) {
     setNowMs(1000U);
     const DominoHumanData* data_ptr = human(1U)->data;
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 5U);
-    CHECK(data_ptr->stimulus_round == 1U && dominoHumanStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
+    CHECK(data_ptr->stimulus_round == 1U && dominoHumanGetStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 6U);
     CHECK(data_ptr->stimulus_round == 1U && data_ptr->stimulus_source_id == 6U);
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_NONE, 6U);
-    CHECK(data_ptr->stimulus_round == 1U && dominoHumanStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_NONE);
+    CHECK(data_ptr->stimulus_round == 1U && dominoHumanGetStimulusNeed(human(1U)) == DOMINO_HUMAN_STIMULUS_NEED_NONE);
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 7U);
     CHECK(data_ptr->stimulus_round == 2U && data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_CONTACT);
     fixtureEnd();
@@ -1284,7 +1285,7 @@ static void testTestInputs(void) {
     submitConditionForTest(1U, false);
     CHECK((data_ptr->ai_flags & DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN) == 0U);
     submitEnergyForTest(9U, 10U);
-    CHECK(dominoGetHumanByID(9U) == nullptr && data_ptr->energy == 30U);
+    CHECK(dominoGetHumanById(9U) == nullptr && data_ptr->energy == 30U);
     fixtureEnd();
 }
 
@@ -1302,50 +1303,50 @@ static void testMotivationTriggers(void) {
     /* 加载：InitAfter 为每个人物置动机待评估标志；没有有效动机的人物不置任务待规划标志。 */
     CHECK(runtime_ptr->pending_mask == DOMINO_HUMAN_PLAN_MASK_MOTIVATION && runtime_ptr->next_plan_mask == 0U);
     setNowMs(1000U);
-    dominoHumanExecutionAdvanceForTest(1U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U && runtime_ptr->pending_mask == 0U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    dominoHumanExecutorAdvanceForTest(1U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U && runtime_ptr->pending_mask == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     /* 规划器选择不建动机：NO_CHANGE，下次规划时刻为“无”。 */
     serveControlled(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE, nullptr, false, 0U);
-    CHECK(restoreMotivation(1U) == nullptr && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U);
+    CHECK(restoreMotivation(1U) == nullptr && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U);
     /* 人物没有有效动机本身不发起：其后的推进都不再投递，也没有需要登记的唤醒。 */
-    const uint64_t posted_count = dominoHumanExecutionGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
+    const uint64_t posted_count = dominoHumanExecutorGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION];
     advanceAt(1U, 5000U);
     advanceAt(1U, 65000U);
-    CHECK(dominoHumanExecutionGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION] == posted_count);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U && runtime_ptr->wakeup_game_timer_id == 0U);
+    CHECK(dominoHumanExecutorGetStats().posted_request_count_list[DOMINO_HUMAN_PLANNER_MOTIVATION] == posted_count);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U && runtime_ptr->wakeup_game_timer_id == 0U);
     /* 外部信息：发起动机规划，同时发起任务规划。 */
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 9U);
-    const uint64_t first_id = runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id;
-    CHECK(first_id != 0U && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    const uint64_t first_id = runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id;
+    CHECK(first_id != 0U && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     /* 请求在途期间撤回外部信息：标志保留，结果处理后再发起一次请求。 */
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_NONE, 9U);
     CHECK((runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_MOTIVATION) != 0U);
     serveControlled(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE, nullptr, false, 0U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id > first_id &&
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id > first_id &&
           (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_MOTIVATION) == 0U);
     /* 规划器要求第 90 秒再看：结果覆盖下次规划时刻，唤醒登记该时刻。 */
     serveControlled(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE, nullptr, true, 90000U);
-    for (uint32_t round = 0U; round < 4U && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U; round++) {
+    for (uint32_t round = 0U; round < 4U && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U; round++) {
         serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr);
     }
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U &&
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     CHECK(runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_MOTIVATION] == 90000U && runtime_ptr->wakeup_due_ms == 90000U);
     /* 下次规划时刻到达：清除时刻、置待评估标志并发起动机规划。 */
     advanceAt(1U, 90000U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U &&
           (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_MOTIVATION) == 0U);
     /* 生产策略新建恢复精力动机；动机集合变化随即发起任务规划。 */
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE && restoreMotivation(1U) != nullptr);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE);
     /* 任务结束：未启动的睡眠任务被撤销，发起动机规划。 */
     const DominoTaskCandidateEntry sleep_entry = sleepEntry(restoreMotivation(1U)->motivation_id, 0U, 1U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &sleep_entry)));
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id == 0U);
     submitEnergyForTest(1U, 95U);
-    CHECK(human(1U)->data->task_count == 0U && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U);
+    CHECK(human(1U)->data->task_count == 0U && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_MOTIVATION].request_id != 0U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
     fixtureEnd();
 }
@@ -1369,7 +1370,7 @@ static void testMotivationTermination(void) {
     const DominoTaskCandidateEntry queued_entry = phoneEntry(contact_id, 7U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &queued_entry)));
     const domino_task_id_t queued_id = human(1U)->data->task_queue_list[0];
-    CHECK(dominoGetTaskByID(queued_id)->exec_status == DOMINO_TASK_EXEC_STATUS_NONE);
+    CHECK(dominoGetTaskById(queued_id)->exec_status == DOMINO_TASK_EXEC_STATUS_NONE);
     /* 终态不合法：整份拒绝，下次规划时刻设为处理时刻 + retry_delay_ms。 */
     DominoMotivationCandidateEntry terminate_entry = {
         .motivation_id = contact_id, .op = DOMINO_MOTIVATION_CANDIDATE_TERMINATE, .terminal_status = DOMINO_MOTIVATION_STATUS_ACTIVE};
@@ -1380,12 +1381,12 @@ static void testMotivationTermination(void) {
     terminate_entry.terminal_status = DOMINO_MOTIVATION_STATUS_ACHIEVED;
     CHECK(
         injectCandidate(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildMotivationCandidate(1U, 1U, &terminate_entry)));
-    const DominoMotivation* contact_ptr = dominoGetMotivationByID(contact_id);
+    const DominoMotivation* contact_ptr = dominoGetMotivationById(contact_id);
     CHECK(contact_ptr != nullptr && contact_ptr->status == DOMINO_MOTIVATION_STATUS_ACHIEVED && contactMotivation(1U) == nullptr);
     CHECK(contact_ptr->last_failure_reason == DOMINO_END_REASON_MOTIVATION_ENDED && contact_ptr->success_count == 0U);
-    CHECK(dominoGetTaskByID(queued_id) == nullptr && human(1U)->data->task_queue_count == 0U);
-    CHECK(dominoGetTaskByID(started_id)->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && human(1U)->data->active_task_id == started_id);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U &&
+    CHECK(dominoGetTaskById(queued_id) == nullptr && human(1U)->data->task_queue_count == 0U);
+    CHECK(dominoGetTaskById(started_id)->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && human(1U)->data->active_task_id == started_id);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U &&
           (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_MOTIVATION) == 0U);
     /* 挂在已终结动机下的新任务被拒绝。 */
     const DominoTaskCandidateEntry late_entry = phoneEntry(contact_id, 8U);
@@ -1395,15 +1396,15 @@ static void testMotivationTermination(void) {
     terminate_entry.terminal_status = DOMINO_MOTIVATION_STATUS_FAILED;
     CHECK(
         injectCandidate(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildMotivationCandidate(1U, 1U, &terminate_entry)));
-    CHECK(dominoGetMotivationByID(contact_id)->status == DOMINO_MOTIVATION_STATUS_ACHIEVED);
+    CHECK(dominoGetMotivationById(contact_id)->status == DOMINO_MOTIVATION_STATUS_ACHIEVED);
     /* 已启动的任务继续执行到第 5 秒成功：给原动机计次并追加明细，动机仍为终态。 */
     dominoHumanSettle(human(1U), 5000U);
-    contact_ptr = dominoGetMotivationByID(contact_id);
+    contact_ptr = dominoGetMotivationById(contact_id);
     CHECK(contact_ptr != nullptr && contact_ptr->success_count == 1U && contact_ptr->status == DOMINO_MOTIVATION_STATUS_ACHIEVED);
     CHECK(contact_ptr->history_count == 1U && dominoHumanMotivationHistoryAt(contact_ptr, 0U).task_id == started_id);
     /* 回收最后一个关联任务时一并回收已终结的动机。 */
     advanceAt(1U, 5000U);
-    CHECK(dominoGetTaskByID(started_id) == nullptr && dominoGetMotivationByID(contact_id) == nullptr && human(1U)->data->motivation_count == 1U);
+    CHECK(dominoGetTaskById(started_id) == nullptr && dominoGetMotivationById(contact_id) == nullptr && human(1U)->data->motivation_count == 1U);
     /* 目标已回收：忽略。 */
     terminate_entry.terminal_status = DOMINO_MOTIVATION_STATUS_ACHIEVED;
     CHECK(
@@ -1413,7 +1414,7 @@ static void testMotivationTermination(void) {
     const DominoMotivationCandidateEntry revoke_entry = {
         .motivation_id = restore_id, .op = DOMINO_MOTIVATION_CANDIDATE_TERMINATE, .terminal_status = DOMINO_MOTIVATION_STATUS_REVOKED};
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildMotivationCandidate(1U, 1U, &revoke_entry)));
-    CHECK(dominoGetMotivationByID(restore_id) == nullptr && human(1U)->data->motivation_count == 0U);
+    CHECK(dominoGetMotivationById(restore_id) == nullptr && human(1U)->data->motivation_count == 0U);
     /* 又出现同类需求时，由动机规划器以新 ID 新建，不恢复旧动机。 */
     issueSlot(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE);
@@ -1430,11 +1431,11 @@ static void testTaskTriggers(void) {
     fixtureBegin("task_triggers", 1U, energy_list);
     const DominoHumanRuntime* runtime_ptr = runtimeOf(1U);
     setNowMs(1000U);
-    dominoHumanExecutionAdvanceForTest(1U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    dominoHumanExecutorAdvanceForTest(1U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_MOTIVATION, nullptr);
     /* 动机集合变化：以人物为范围发起任务规划，不绑定单个动机。 */
-    const DominoHumanPlanSlot task_slot = runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK];
+    const DominoHumanPlanSlot task_slot = runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK];
     CHECK(task_slot.request_id != 0U && task_slot.scope_kind == DOMINO_HUMAN_PLAN_SCOPE_HUMAN && task_slot.scope_id == 0U);
     /* 精力 50 高于触发值：不建任务，下次规划时刻为第 20 次整分钟衰减的第 1200 秒。 */
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE && human(1U)->data->task_count == 0U);
@@ -1443,34 +1444,36 @@ static void testTaskTriggers(void) {
     /* 人物输入变化：精力改为 40，重新规划并给出新的时刻（第 600 秒）。 */
     setNowMs(2000U);
     submitEnergyForTest(1U, 40U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr);
     CHECK(runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_TASK] == 600000U && runtime_ptr->wakeup_due_ms == 600000U);
     /* 睡眠条件变化同样发起。 */
     submitConditionForTest(1U, true);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr);
     submitConditionForTest(1U, false);
     serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr);
     /* 下次规划时刻到达：精力恰好降到触发值，提出睡眠任务；本轮未结束，不给时刻。 */
     advanceAt(1U, 600000U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U && (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U &&
+          (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     CHECK(human(1U)->data->energy == 30U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE && human(1U)->data->task_count == 1U);
     CHECK((runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     /* 请求在途期间两次精力输入：只在途一个请求，标志保留，结果处理后再发起一次；本轮未结束，NO_CHANGE。 */
     submitEnergyForTest(1U, 29U);
-    const uint64_t first_id = runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id;
+    const uint64_t first_id = runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id;
     submitEnergyForTest(1U, 28U);
-    CHECK(first_id != 0U && runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == first_id &&
+    CHECK(first_id != 0U && runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == first_id &&
           (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id > first_id);
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id > first_id);
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_TASK, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U && (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U &&
+          (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     /* 运行任务启动不发起任务规划。 */
     CHECK(serveRequest(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, nullptr) == DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE && human(1U)->data->active_task_id != 0U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U && (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U && (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     fixtureEnd();
 }
 
@@ -1510,27 +1513,29 @@ static void testNextPlanTimes(void) {
     insert_entry.expected_queue_version = runtime_ptr->queue_version;
     void* stale_ptr = buildTaskCandidate(1U, 1U, &insert_entry);
     const DominoBehaviorPlanItem call_step = planStep(DOMINO_BEHAVIOR_CHANNEL_MAIN, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 10000U);
-    const DominoBehaviorCandidateEntry call_entry = behaviorEntry(dominoGetTaskByID(first_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 1U);
+    const DominoBehaviorCandidateEntry call_entry = behaviorEntry(dominoGetTaskById(first_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 1U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, first_id,
                           buildBehaviorCandidate(1U, 1U, &call_entry, 1U, &call_step)));
     CHECK(human(1U)->data->active_task_id == first_id && (runtime_ptr->pending_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     /* 插队候选因队列版本不符被整份拒绝：设兜底时刻（第 4 秒），没有其他事件也会再规划。 */
     issueSlot(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U);
     CHECK(!serveControlled(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE, stale_ptr, false, 0U));
     CHECK(runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_TASK] == 4000U &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     CHECK(runtime_ptr->wakeup_due_ms == 4000U);
     advanceAt(1U, 4000U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U && (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U &&
+          (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) == 0U);
     serveControlled(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE, nullptr, false, 0U);
     /* 兜底等待期内登记外部信息：立即发起任务规划，不等兜底时刻；兜底时刻保留到结果处理时覆盖。 */
     issueSlot(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U);
     CHECK(!serveControlled(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_OUTCOME_CANDIDATE, buildTaskCandidate(1U, 1U, &bad_entry), false, 0U));
     CHECK(runtime_ptr->next_plan_at_ms_list[DOMINO_HUMAN_PLANNER_TASK] == 7000U &&
-          runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
+          runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id == 0U);
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 3U);
-    CHECK(runtime_ptr->slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U && (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U);
+    CHECK(runtime_ptr->plan_slot_list[DOMINO_HUMAN_PLANNER_TASK].request_id != 0U &&
+          (runtime_ptr->next_plan_mask & DOMINO_HUMAN_PLAN_MASK_TASK) != 0U);
     /* 唤醒只登记一个最早时刻：兜底时刻（第 7 秒）早于通话结束（第 11 秒）。 */
     CHECK(runtime_ptr->wakeup_due_ms == 7000U);
     CHECK(dominoHumanCandidateBytesInUse() == 0U);
@@ -1551,24 +1556,25 @@ static void testBehaviorReview(void) {
     /* 运行任务缺少安排：NO_CHANGE 后仍需行为规划，设 3000ms 重试；NO_PLAN 同样设重试。 */
     issueSlot(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id);
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE, nullptr, false, 0U);
-    DominoTask* task_ptr = dominoGetTaskByID(task_id);
+    DominoTask* task_ptr = dominoGetTaskById(task_id);
     CHECK((task_ptr->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U && task_ptr->behavior_retry_at_ms == 4000U);
     task_ptr->flags = (uint8_t)(task_ptr->flags & ~DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID);
     issueSlot(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id);
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN, nullptr, false, 0U);
-    CHECK((dominoGetTaskByID(task_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U);
+    CHECK((dominoGetTaskById(task_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U);
     /* 规划器读取计划版本之后，执行器启动并消费了步骤：旧的替换方案被拒绝，已经开始的步骤不会再安排一次。 */
-    const DominoBehaviorCandidateEntry stale_entry = behaviorEntry(dominoGetTaskByID(task_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 1U);
+    const DominoBehaviorCandidateEntry stale_entry = behaviorEntry(dominoGetTaskById(task_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 1U);
     const DominoBehaviorPlanItem work_step = planStep(DOMINO_BEHAVIOR_CHANNEL_MAIN, DOMINO_BEHAVIOR_TYPE_WORK, 5000U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                           buildBehaviorCandidate(1U, 1U, &stale_entry, 1U, &work_step)));
-    task_ptr = dominoGetTaskByID(task_id);
+    task_ptr = dominoGetTaskById(task_id);
     const domino_behavior_id_t work_id = task_ptr->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN];
-    CHECK(work_id != 0U && task_ptr->plan_count == 0U && (task_ptr->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) == 0U);
+    CHECK(work_id != 0U && task_ptr->plan_item_count == 0U && (task_ptr->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) == 0U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &stale_entry, 1U, &work_step)));
-    task_ptr = dominoGetTaskByID(task_id);
-    CHECK(task_ptr->plan_count == 0U && task_ptr->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN] == work_id && task_ptr->last_step_seq == 1U);
+    task_ptr = dominoGetTaskById(task_id);
+    CHECK(task_ptr->plan_item_count == 0U && task_ptr->current_behavior_id_list[DOMINO_BEHAVIOR_CHANNEL_MAIN] == work_id &&
+          task_ptr->last_step_seq == 1U);
     CHECK((task_ptr->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U);
     /* 声明依赖当前行为而当前行为已变化：拒绝。 */
     DominoBehaviorCandidateEntry moved_entry = behaviorEntry(task_ptr, DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 1U);
@@ -1576,14 +1582,14 @@ static void testBehaviorReview(void) {
     const DominoBehaviorPlanItem note_step = planStep(DOMINO_BEHAVIOR_CHANNEL_AUX_1, DOMINO_BEHAVIOR_TYPE_MESSAGE, 1000U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &moved_entry, 1U, &note_step)));
-    CHECK(dominoGetTaskByID(task_id)->plan_count == 0U);
+    CHECK(dominoGetTaskById(task_id)->plan_item_count == 0U);
     /* 运行任务接受插入时登记联系信息；另一项排队任务不是运行任务，为它插入被拒绝。 */
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 8U);
     const DominoTaskCandidateEntry queued_entry = phoneEntry(contact_id, 3U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &queued_entry)));
     const domino_task_id_t queued_id = human(1U)->data->task_queue_list[0];
     const DominoBehaviorPlanItem chat_step = planStep(DOMINO_BEHAVIOR_CHANNEL_AUX_1, DOMINO_BEHAVIOR_TYPE_PHONE_CALL, 2000U);
-    DominoBehaviorCandidateEntry insert_entry = behaviorEntry(dominoGetTaskByID(queued_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
+    DominoBehaviorCandidateEntry insert_entry = behaviorEntry(dominoGetTaskById(queued_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, queued_id,
                            buildBehaviorCandidate(1U, 1U, &insert_entry, 1U, &chat_step)));
     /* 回应任务先提交：不复核运行任务的应激选择（消息任务选择接受插入），回应任务照常入队并承接外部信息；随后的插入被拒绝。 */
@@ -1597,25 +1603,25 @@ static void testBehaviorReview(void) {
         .work_source_kind = DOMINO_TASK_SOURCE_STIMULUS,
     };
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &respond_entry)));
-    const DominoTask* respond_ptr = dominoGetTaskByID(human(1U)->data->task_queue_list[0]);
+    const DominoTask* respond_ptr = dominoGetTaskById(human(1U)->data->task_queue_list[0]);
     CHECK(human(1U)->data->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE && respond_ptr->work_source_kind == DOMINO_TASK_SOURCE_STIMULUS &&
           (respond_ptr->flags & DOMINO_TASK_FLAG_PREEMPT) != 0U);
-    insert_entry = behaviorEntry(dominoGetTaskByID(task_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
+    insert_entry = behaviorEntry(dominoGetTaskById(task_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(!injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, task_id,
                            buildBehaviorCandidate(1U, 1U, &insert_entry, 1U, &chat_step)));
     /* 接受后任务仍需行为规划：显式清空排队任务的步骤，计划缺口仍在，设重试。 */
-    const DominoBehaviorCandidateEntry clear_entry = behaviorEntry(dominoGetTaskByID(queued_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 0U);
+    const DominoBehaviorCandidateEntry clear_entry = behaviorEntry(dominoGetTaskById(queued_id), DOMINO_BEHAVIOR_CANDIDATE_REPLACE, 0U);
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, queued_id,
                           buildBehaviorCandidate(1U, 1U, &clear_entry, 0U, &chat_step)));
-    CHECK((dominoGetTaskByID(queued_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U);
+    CHECK((dominoGetTaskById(queued_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) != 0U);
 
     /* 人物 2：睡眠中遇到联系信息，睡眠的应激选择是完全让位。 */
     const domino_task_id_t sleep_id = prepareSleepTask(2U, true);
     submitStimulusForTest(2U, DOMINO_HUMAN_STIMULUS_CONTACT, 5U);
-    CHECK(dominoHumanStimulusNeed(human(2U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
+    CHECK(dominoHumanGetStimulusNeed(human(2U)) == DOMINO_HUMAN_STIMULUS_NEED_TASK);
     /* 外部信息已撤回：插入被拒绝。 */
     submitStimulusForTest(2U, DOMINO_HUMAN_STIMULUS_NONE, 5U);
-    DominoBehaviorCandidateEntry sleep_insert = behaviorEntry(dominoGetTaskByID(sleep_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
+    DominoBehaviorCandidateEntry sleep_insert = behaviorEntry(dominoGetTaskById(sleep_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(!injectCandidate(2U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, sleep_id,
                            buildBehaviorCandidate(1U, 1U, &sleep_insert, 1U, &chat_step)));
     /* 新一轮外部信息到达：按旧轮次读取的插入被拒绝。 */
@@ -1624,7 +1630,7 @@ static void testBehaviorReview(void) {
     CHECK(!injectCandidate(2U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, sleep_id,
                            buildBehaviorCandidate(1U, 1U, &sleep_insert, 1U, &chat_step)));
     /* 不复核应激选择：睡眠选择完全让位，插入步骤仍照常提交并承接外部信息，睡眠继续运行。 */
-    sleep_insert = behaviorEntry(dominoGetTaskByID(sleep_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
+    sleep_insert = behaviorEntry(dominoGetTaskById(sleep_id), DOMINO_BEHAVIOR_CANDIDATE_INSERT, 1U);
     CHECK(injectCandidate(2U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_SCOPE_TASK, sleep_id,
                           buildBehaviorCandidate(1U, 1U, &sleep_insert, 1U, &chat_step)));
     const DominoBehavior* inserted_ptr = channelBehavior(2U, DOMINO_BEHAVIOR_CHANNEL_AUX_1);
@@ -1662,30 +1668,30 @@ static void testBehaviorScope(void) {
     const domino_task_id_t head_id = human(1U)->data->task_queue_list[0];
     const domino_task_id_t second_id = human(1U)->data->task_queue_list[1];
     CHECK(human(1U)->data->task_queue_count == 2U && human(1U)->data->active_task_id == active_id);
-    CHECK(dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskByID(active_id)) &&
-          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskByID(head_id)) &&
-          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskByID(second_id)));
+    CHECK(dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskById(active_id)) &&
+          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskById(head_id)) &&
+          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskById(second_id)));
     /* 三项任务都缺计划：先问运行任务（修复使用高优先级）。 */
-    const DominoHumanPlanSlot* slot_ptr = &runtimeOf(1U)->slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR];
+    const DominoHumanPlanSlot* slot_ptr = &runtimeOf(1U)->plan_slot_list[DOMINO_HUMAN_PLANNER_BEHAVIOR];
     CHECK(slot_ptr->request_id != 0U && slot_ptr->scope_id == active_id && slot_ptr->priority == DOMINO_HUMAN_PLAN_PRIORITY_HIGH);
     /* 运行任务无方案进入重试等待：为队首提前规划。 */
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN, nullptr, false, 0U);
     CHECK(slot_ptr->request_id != 0U && slot_ptr->scope_id == head_id && slot_ptr->priority == DOMINO_HUMAN_PLAN_PRIORITY_NORMAL);
     /* 队首也无方案：两者都在等待重试，队首之后的任务不被询问；唤醒取两者的重试时刻。 */
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN, nullptr, false, 0U);
-    CHECK(slot_ptr->request_id == 0U && (dominoGetTaskByID(second_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) == 0U);
+    CHECK(slot_ptr->request_id == 0U && (dominoGetTaskById(second_id)->flags & DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID) == 0U);
     CHECK(runtimeOf(1U)->wakeup_game_timer_id != 0U && runtimeOf(1U)->wakeup_due_ms <= 4000U);
     /* 撤销未启动的队首：原第二项成为队首，随即得到行为规划。 */
     const DominoTaskCandidateEntry cancel_entry = {.task_id = head_id, .op = DOMINO_TASK_CANDIDATE_CANCEL};
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &cancel_entry)));
-    CHECK(dominoGetTaskByID(head_id) == nullptr && human(1U)->data->task_queue_list[0] == second_id);
+    CHECK(dominoGetTaskById(head_id) == nullptr && human(1U)->data->task_queue_list[0] == second_id);
     CHECK(slot_ptr->request_id != 0U && slot_ptr->scope_id == second_id);
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN, nullptr, false, 0U);
     CHECK(slot_ptr->request_id == 0U);
     /* 让位阶段：运行任务结束重试等待、仍缺计划，回应任务进入队首并带让位请求，先问队首的回应任务。 */
     submitStimulusForTest(1U, DOMINO_HUMAN_STIMULUS_CONTACT, 8U);
     CHECK(slot_ptr->request_id == 0U);
-    DominoTask* active_ptr = dominoGetTaskByID(active_id);
+    DominoTask* active_ptr = dominoGetTaskById(active_id);
     active_ptr->flags = (uint8_t)(active_ptr->flags & ~DOMINO_TASK_FLAG_BEHAVIOR_RETRY_VALID);
     const DominoTaskCandidateEntry respond_entry = {
         .motivation_id = contact_id,
@@ -1698,8 +1704,8 @@ static void testBehaviorScope(void) {
     };
     CHECK(injectCandidate(1U, DOMINO_HUMAN_PLANNER_TASK, DOMINO_HUMAN_PLAN_SCOPE_HUMAN, 0U, buildTaskCandidate(1U, 1U, &respond_entry)));
     const domino_task_id_t respond_id = human(1U)->data->task_queue_list[0];
-    CHECK((dominoGetTaskByID(respond_id)->flags & DOMINO_TASK_FLAG_PREEMPT) != 0U &&
-          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskByID(active_id)));
+    CHECK((dominoGetTaskById(respond_id)->flags & DOMINO_TASK_FLAG_PREEMPT) != 0U &&
+          dominoHumanTaskNeedsBehaviorPlan(human(1U), dominoGetTaskById(active_id)));
     CHECK(slot_ptr->request_id != 0U && slot_ptr->scope_id == respond_id);
     /* 回应任务无方案进入重试等待：回到运行任务。 */
     serveControlled(1U, DOMINO_HUMAN_PLANNER_BEHAVIOR, DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN, nullptr, false, 0U);
@@ -1755,7 +1761,7 @@ typedef struct NpcView {
 static NpcView queryNpc(domino_human_id_t human_id) {
     NpcView view = {0};
     dominoHumanReadLock();
-    const DominoHuman* human_ptr = dominoGetHumanByID(human_id);
+    const DominoHuman* human_ptr = dominoGetHumanById(human_id);
     if (human_ptr != nullptr) {
         const DominoHumanData* data_ptr = human_ptr->data;
         view.found_flag = true;
@@ -1766,12 +1772,12 @@ static NpcView queryNpc(domino_human_id_t human_id) {
         view.active_task_id = data_ptr->active_task_id;
         view.queue_count = data_ptr->task_queue_count;
         for (uint8_t index = 0U; index < data_ptr->motivation_count; index++) {
-            const DominoMotivation* motivation_ptr = dominoGetMotivationByID(data_ptr->motivation_id_list[index]);
+            const DominoMotivation* motivation_ptr = dominoGetMotivationById(data_ptr->motivation_id_list[index]);
             if (motivation_ptr != nullptr && motivation_ptr->type == DOMINO_MOTIVATION_TYPE_RESTORE_ENERGY) {
                 view.restore_success_count = motivation_ptr->success_count;
             }
         }
-        const DominoTask* task_ptr = dominoHumanActiveTask(data_ptr);
+        const DominoTask* task_ptr = dominoHumanGetActiveTask(data_ptr);
         EXPECT_VIEW((task_ptr == nullptr) == (view.active_task_id == 0U));
         if (task_ptr != nullptr) {
             view.active_task_type = task_ptr->type;
@@ -1783,7 +1789,7 @@ static NpcView queryNpc(domino_human_id_t human_id) {
                     continue;
                 }
                 /* 当前行为必有执行记录，且只能是未终结状态。 */
-                const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(channel_ptr->behavior_id);
+                const DominoBehavior* behavior_ptr = dominoGetBehaviorById(channel_ptr->behavior_id);
                 EXPECT_VIEW(behavior_ptr != nullptr);
                 if (behavior_ptr != nullptr) {
                     channel_ptr->behavior_type = behavior_ptr->type;
@@ -1875,7 +1881,7 @@ static void prepareSave(const char* source_dir, const char* target_dir, uint32_t
             snprintf(digits, sizeof(digits), "%02u", energy % 100U);
             memcpy(found_ptr + strlen("\"energy\": "), digits, 2U);
         }
-        if (dominoAtomicWriteFile(target_path, bytes_ptr, length) != CODE_OK) {
+        if (dominoWriteFileAtomic(target_path, bytes_ptr, length) != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(ERR_FILE_WRITE, "cannot write %s", target_path);
         }
         free(bytes_ptr);
@@ -1920,8 +1926,8 @@ static void testEndToEndSleep(const char* sandbox_dir, const char* save_dir) {
     DOMINO_PRINT_MESSAGE("e2e session 1");
     dominoEngineInit(launch);
     /* 加载后：样例人物没有动机，只置动机待评估标志；下次规划时刻不跨会话保存。 */
-    CHECK(dominoHumanRuntimeOf(dominoGetHumanByID(1U))->pending_mask == DOMINO_HUMAN_PLAN_MASK_MOTIVATION &&
-          dominoHumanRuntimeOf(dominoGetHumanByID(1U))->next_plan_mask == 0U);
+    CHECK(dominoHumanRuntimeOf(dominoGetHumanById(1U))->pending_mask == DOMINO_HUMAN_PLAN_MASK_MOTIVATION &&
+          dominoHumanRuntimeOf(dominoGetHumanById(1U))->next_plan_mask == 0U);
     dominoEngineStart(nullptr);
     NpcView overview;
     CHECK(pollNpc(1U, sleepBehaviorActive, 0U, 10000U, &overview));
@@ -1933,29 +1939,29 @@ static void testEndToEndSleep(const char* sandbox_dir, const char* save_dir) {
     CHECK(overview.active_task_type == DOMINO_TASK_TYPE_SLEEP && overview.state == DOMINO_HUMAN_STATE_NORMAL && overview.queue_count == 0U);
     CHECK(!queryNpc(99U).found_flag);
     /* 客户端收发通道骨架：尚未定义业务场景，消息可以入队，主循环按不支持的类型记录并丢弃，不回包；空指针被拒绝。 */
-    DominoEngineMessage message = {.type = DOMINO_ENGINE_MSG_NONE};
-    CHECK(dominoEnginePushMsg(&message) == CODE_OK && message.id != 0U);
-    CHECK(dominoEnginePushMsg(nullptr) == ERR_NULL_POINTER);
+    DominoEngineMessage message = {.type = DOMINO_ENGINE_MESSAGE_NONE};
+    CHECK(dominoEngineSendMessage(&message) == CODE_OK && message.id != 0U);
+    CHECK(dominoEngineSendMessage(nullptr) == ERR_NULL_POINTER);
     sleepMs(2000U);
     /* 冻结期间客户端消息仍可入队，主循环保留到解冻后处理；冻结时长不计入业务时间。 */
     const uint32_t before_freeze_ms = nowMs();
-    const uint64_t wall_begin_ns = dominoMonotonicTimeNs();
+    const uint64_t wall_begin_ns = dominoGetMonotonicTimeNs();
     dominoEngineFreezeTime();
-    message = (DominoEngineMessage){.type = DOMINO_ENGINE_MSG_NONE};
-    CHECK(dominoEnginePushMsg(&message) == CODE_OK);
+    message = (DominoEngineMessage){.type = DOMINO_ENGINE_MESSAGE_NONE};
+    CHECK(dominoEngineSendMessage(&message) == CODE_OK);
     sleepMs(800U);
     dominoEngineThawTime();
     const uint32_t after_thaw_ms = nowMs();
-    const uint64_t wall_elapsed_ms = (dominoMonotonicTimeNs() - wall_begin_ns) / 1000000U;
+    const uint64_t wall_elapsed_ms = (dominoGetMonotonicTimeNs() - wall_begin_ns) / 1000000U;
     CHECK(after_thaw_ms >= before_freeze_ms && (uint64_t)(after_thaw_ms - before_freeze_ms) + 600U <= wall_elapsed_ms);
     sleepMs(500U);
     DominoEngineMessage reply;
-    CHECK(dominoEnginePopMsg(&reply, false) == ERR_QUEUE_EMPTY);
+    CHECK(dominoEngineReceiveMessage(&reply, false) == ERR_QUEUE_EMPTY);
     dominoEngineStop();
     /* Stop 结算到停钟时刻：任务仍在执行，行为进度和人物游标均已推进。 */
-    const DominoHuman* human_ptr = dominoGetHumanByID(1U);
-    const DominoTask* task_ptr = dominoGetTaskByID(task_id);
-    const DominoBehavior* behavior_ptr = dominoGetBehaviorByID(behavior_id);
+    const DominoHuman* human_ptr = dominoGetHumanById(1U);
+    const DominoTask* task_ptr = dominoGetTaskById(task_id);
+    const DominoBehavior* behavior_ptr = dominoGetBehaviorById(behavior_id);
     CHECK(task_ptr != nullptr && task_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && behavior_ptr != nullptr);
     CHECK(human_ptr->data->active_task_id == task_id);
     const domino_runtime_ms_t saved_progress_ms = behavior_ptr ? behavior_ptr->effective_progress_ms : 0U;
@@ -1967,11 +1973,11 @@ static void testEndToEndSleep(const char* sandbox_dir, const char* save_dir) {
     DOMINO_PRINT_MESSAGE("e2e session 2 progress_ms=%u settled_ms=%u", saved_progress_ms, saved_settled_ms);
     dominoHumanSetNextAiConfig(&config);
     dominoEngineInit(launch);
-    human_ptr = dominoGetHumanByID(1U);
-    behavior_ptr = dominoGetBehaviorByID(behavior_id);
+    human_ptr = dominoGetHumanById(1U);
+    behavior_ptr = dominoGetBehaviorById(behavior_id);
     CHECK(behavior_ptr != nullptr && behavior_ptr->effective_progress_ms == saved_progress_ms && human_ptr->data->settled_at_ms == saved_settled_ms);
     CHECK(behavior_ptr != nullptr && behavior_ptr->step_seq == 1U && behavior_ptr->channel_index == DOMINO_BEHAVIOR_CHANNEL_MAIN);
-    CHECK(human_ptr->data->active_task_id == task_id && dominoGetTaskByID(task_id)->current_behavior_id_list[0] == behavior_id);
+    CHECK(human_ptr->data->active_task_id == task_id && dominoGetTaskById(task_id)->current_behavior_id_list[0] == behavior_id);
     /* 读档后不沿用会话前的规划状态：有有效动机的人物动机、任务各规划一次，由规划器重新给出时刻；存档中没有动机规划重试字段。 */
     CHECK(dominoHumanRuntimeOf(human_ptr)->pending_mask == DOMINO_HUMAN_PLAN_MASK_ALL && dominoHumanRuntimeOf(human_ptr)->next_plan_mask == 0U);
     CHECK(!saveFileContains(save_dir, "human_0.json", "motivation_retry") && !saveFileContains(save_dir, "human_motivation_0.json", "retry_at_ms") &&
@@ -1979,16 +1985,16 @@ static void testEndToEndSleep(const char* sandbox_dir, const char* save_dir) {
     dominoEngineStart(nullptr);
     CHECK(pollNpc(1U, successCountReached, 1U, 30000U, &overview));
     dominoEngineStop();
-    const DominoMotivation* motivation_ptr = dominoHumanFindActiveMotivation(dominoGetHumanByID(1U)->data, DOMINO_MOTIVATION_TYPE_RESTORE_ENERGY);
+    const DominoMotivation* motivation_ptr = dominoHumanFindActiveMotivation(dominoGetHumanById(1U)->data, DOMINO_MOTIVATION_TYPE_RESTORE_ENERGY);
     CHECK(motivation_ptr->success_count == 1U && dominoHumanMotivationHistoryAt(motivation_ptr, 0U).task_id == task_id);
     dominoEngineDestroy();
 
     /* 仅 Init 的生命周期：不推进游标、不结算。 */
     dominoHumanSetNextAiConfig(&config);
     dominoEngineInit(launch);
-    const domino_runtime_ms_t idle_settled_ms = dominoGetHumanByID(1U)->data->settled_at_ms;
+    const domino_runtime_ms_t idle_settled_ms = dominoGetHumanById(1U)->data->settled_at_ms;
     dominoEngineStop();
-    CHECK(dominoGetHumanByID(1U)->data->settled_at_ms == idle_settled_ms);
+    CHECK(dominoGetHumanById(1U)->data->settled_at_ms == idle_settled_ms);
     dominoEngineDestroy();
 
     /* 会话 3：新需求开启第二轮；睡眠条件失效时取消主行为，恢复后由行为规划器修复，替代行为取得新 ID。 */
@@ -2012,7 +2018,7 @@ static void testEndToEndSleep(const char* sandbox_dir, const char* save_dir) {
     CHECK(overview.active_task_id == round2_task_id && overview.channel_list[0].behavior_id > round2_behavior_id);
     CHECK(pollNpc(1U, successCountReached, 2U, 40000U, &overview));
     dominoEngineStop();
-    const DominoHumanExecutorStats executor_stats = dominoHumanExecutionGetStats();
+    const DominoHumanExecutorStats executor_stats = dominoHumanExecutorGetStats();
     CHECK(executor_stats.accepted_candidate_count >= 3U && executor_stats.batch_count > 0U);
     for (uint8_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
         const DominoHumanPlannerStats planner_stats = dominoHumanPlannerGetStats(kind);
@@ -2062,23 +2068,23 @@ static void testEndToEndStimulus(const char* sandbox_dir, const char* save_dir) 
     CHECK(phone_task_id != sleep_task_id && overview.motivation_count == 2U);
     dominoEngineStop();
     /* Stop 结算到停钟时刻：睡眠让位排在队首，回应任务运行中，伴随依赖仍待来源结束。 */
-    const DominoHumanData* data_ptr = dominoGetHumanByID(1U)->data;
-    const DominoTask* phone_ptr = dominoGetTaskByID(phone_task_id);
-    const DominoTask* sleep_ptr = dominoGetTaskByID(sleep_task_id);
+    const DominoHumanData* data_ptr = dominoGetHumanById(1U)->data;
+    const DominoTask* phone_ptr = dominoGetTaskById(phone_task_id);
+    const DominoTask* sleep_ptr = dominoGetTaskById(sleep_task_id);
     CHECK(data_ptr->active_task_id == phone_task_id && data_ptr->task_queue_count == 1U && data_ptr->task_queue_list[0] == sleep_task_id);
     CHECK(data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE && data_ptr->stimulus_round == 1U);
     CHECK(sleep_ptr != nullptr && sleep_ptr->exec_status == DOMINO_TASK_EXEC_STATUS_OPEN && sleep_ptr->main_cancelled_count == 1U);
     CHECK(phone_ptr != nullptr && phone_ptr->work_source_kind == DOMINO_TASK_SOURCE_STIMULUS && phone_ptr->current_behavior_id_list[1] != 0U);
     const domino_behavior_id_t record_behavior_id = phone_ptr->current_behavior_id_list[1];
-    const uint32_t call_step_seq = dominoGetBehaviorByID(phone_ptr->current_behavior_id_list[0])->step_seq;
+    const uint32_t call_step_seq = dominoGetBehaviorById(phone_ptr->current_behavior_id_list[0])->step_seq;
     const domino_runtime_ms_t sleep_started_ms = sleep_ptr->started_at_ms;
     dominoEngineDestroy();
 
     /* 读档：运行任务、待执行队列、伴随依赖和外部信息轮次原样恢复；启动后通话结束，伴随记录随之取消，睡眠恢复。 */
     dominoHumanSetNextAiConfig(&config);
     dominoEngineInit(launch);
-    data_ptr = dominoGetHumanByID(1U)->data;
-    const DominoBehavior* record_ptr = dominoGetBehaviorByID(record_behavior_id);
+    data_ptr = dominoGetHumanById(1U)->data;
+    const DominoBehavior* record_ptr = dominoGetBehaviorById(record_behavior_id);
     CHECK(data_ptr->active_task_id == phone_task_id && data_ptr->task_queue_count == 1U && data_ptr->task_queue_list[0] == sleep_task_id);
     CHECK(data_ptr->stimulus_round == 1U && data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE);
     CHECK(record_ptr != nullptr && record_ptr->dependency_list[0].kind == DOMINO_BEHAVIOR_DEPENDENCY_WHILE &&
@@ -2087,9 +2093,9 @@ static void testEndToEndStimulus(const char* sandbox_dir, const char* save_dir) 
     CHECK(pollNpc(1U, sleepResumed, sleep_task_id, 15000U, &overview));
     CHECK(overview.channel_list[DOMINO_BEHAVIOR_CHANNEL_MAIN].behavior_id > first_sleep_behavior_id);
     dominoEngineStop();
-    const DominoMotivation* contact_ptr = dominoHumanFindActiveMotivation(dominoGetHumanByID(1U)->data, DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT);
+    const DominoMotivation* contact_ptr = dominoHumanFindActiveMotivation(dominoGetHumanById(1U)->data, DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT);
     CHECK(contact_ptr != nullptr && contact_ptr->success_count == 1U && dominoHumanMotivationHistoryAt(contact_ptr, 0U).task_id == phone_task_id);
-    CHECK(dominoGetTaskByID(phone_task_id) == nullptr && dominoGetTaskByID(sleep_task_id)->started_at_ms == sleep_started_ms);
+    CHECK(dominoGetTaskById(phone_task_id) == nullptr && dominoGetTaskById(sleep_task_id)->started_at_ms == sleep_started_ms);
     dominoEngineDestroy();
     setContactPlanners(false);
     g_contact_call_ms = 3000U;

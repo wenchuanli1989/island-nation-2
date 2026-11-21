@@ -7,10 +7,11 @@
       "request": "launch",
       "program": "${workspaceFolder}/build-debug/bin/domino-playground",
       "osx": {
-        "program": "${workspaceFolder}/build-macos-debug/bin/domino-playground"
+        "program": "${workspaceFolder}/build-macos-debug/bin/domino-playground",
+        "cwd": "${workspaceFolder}/build-macos-debug"
       },
       "args": [],
-      "cwd": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}/build-debug",
       "stopOnEntry": false,
       "preLaunchTask": "Playground (Debug Build)",
       "initCommands": [

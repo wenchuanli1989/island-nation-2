@@ -4,23 +4,16 @@
 #include "domino_shared_common.h"
 #include "domino_shared_queue.h"
 
-/**
- * @brief 等待一次队列通知，并在等待前后更新等待者人数。
- * @pre 调用方已持有队列锁；等待期间会释放锁，返回前会重新取得锁。
- * @note 返回后，调用方仍须检查队列状态，不能把被唤醒当作条件已满足。
- *       等待失败直接打印 stderr 并 exit(EXIT_FAILURE)。
- */
-static inline void dominoThreadQueueWaitLocked(DominoThreadQueue* queue_ptr, cnd_t* condition_ptr, const char* what_str) {
+/** @brief 持锁条件等待一次并维护等待者计数；返回后调用方须重新检查条件。 */
+static inline void waitLocked(DominoThreadQueue* queue_ptr, cnd_t* condition_ptr, const char* what_str) {
     queue_ptr->waiter_count++;
     const int result_code = cnd_wait(condition_ptr, &queue_ptr->mutex);
     queue_ptr->waiter_count--;
     DOMINO_REQUIRE_THREAD_SUCCESS(result_code, ERR_CONDITION_WAIT, what_str);
 }
 
-/** @brief 调用方持锁；只在满队列且尚未达到最大容量时调用。
- * @pre Init 已校验 max_capacity * item_size 的范围；扩容不改变 item_size。
- */
-static void dominoThreadQueueGrow(DominoThreadQueue* queue_ptr) {
+/** @brief 持锁把满队列扩容到两倍（不超过上限）；Init 已保证 max_capacity * item_size 不溢出。 */
+static void growQueue(DominoThreadQueue* queue_ptr) {
     uint32_t new_capacity = queue_ptr->max_capacity;
     if (queue_ptr->capacity <= queue_ptr->max_capacity / 2U) {
         new_capacity = queue_ptr->capacity * 2U;
@@ -31,7 +24,7 @@ static void dominoThreadQueueGrow(DominoThreadQueue* queue_ptr) {
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_ALLOC, "queue growth allocation failed");
     }
 
-    /* 按 head 两侧的连续区间恢复 FIFO 顺序。 */
+    // head 之后的区间在前，回绕到开头的区间在后，恢复 FIFO 顺序。
     const size_t first_size = (size_t)(queue_ptr->capacity - queue_ptr->head) * queue_ptr->item_size;
     memcpy(new_items_ptr, (uint8_t*)queue_ptr->items_ptr + ((size_t)queue_ptr->head * queue_ptr->item_size), first_size);
     memcpy((uint8_t*)new_items_ptr + first_size, queue_ptr->items_ptr, (size_t)queue_ptr->head * queue_ptr->item_size);
@@ -57,7 +50,6 @@ void dominoThreadQueueInit(DominoThreadQueue* queue_ptr, size_t item_size, uint3
         DOMINO_EXIT_WITH_ERROR(ERR_MEMORY_OVERFLOW, "queue capacity multiplication overflows size_t");
     }
 
-    /* 首次对象或上一轮 Destroy 已提供全零状态。 */
     queue_ptr->item_size = item_size;
     queue_ptr->capacity = initial_capacity;
     queue_ptr->max_capacity = max_capacity;
@@ -103,7 +95,7 @@ DOMINO_CODE dominoThreadQueueWait(DominoThreadQueue* queue_ptr, uint64_t observe
         if (queue_ptr->wake_epoch != observed_epoch) {
             break;
         }
-        dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_empty, "wait:cnd_wait(not_empty)");
+        waitLocked(queue_ptr, &queue_ptr->not_empty, "wait:cnd_wait(not_empty)");
     }
     DOMINO_REQUIRE_THREAD_SUCCESS(mtx_unlock(&queue_ptr->mutex), ERR_MUTEX_UNLOCK, "wait:mtx_unlock");
     return result_code;
@@ -174,14 +166,14 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* que
             result_code = ERR_QUEUE_FLUSHING;
             goto unlock;
         }
-        if (queue_ptr->next_id == UINT64_MAX) {
+        if (queue_ptr->last_id == UINT64_MAX) {
             DOMINO_EXIT_WITH_ERROR(ERR_ID_EXHAUSTED, "queue message IDs are exhausted");
         }
         if (queue_ptr->count < queue_ptr->capacity) {
             break;
         }
         if (queue_ptr->capacity < queue_ptr->max_capacity) {
-            dominoThreadQueueGrow(queue_ptr);
+            growQueue(queue_ptr);
             break;
         }
         if (!blocking) {
@@ -189,11 +181,11 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* que
             goto unlock;
         }
         queue_ptr->producer_waiter_count++;
-        dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_full, "produce:cnd_wait(not_full)");
+        waitLocked(queue_ptr, &queue_ptr->not_full, "produce:cnd_wait(not_full)");
         queue_ptr->producer_waiter_count--;
     }
 
-    uint64_t item_id = ++queue_ptr->next_id;
+    uint64_t item_id = ++queue_ptr->last_id;
     memcpy(item_ptr, &item_id, sizeof(item_id));
     memcpy((uint8_t*)queue_ptr->items_ptr + ((size_t)queue_ptr->tail * queue_ptr->item_size), item_ptr, queue_ptr->item_size);
     if (++queue_ptr->tail == queue_ptr->capacity) {
@@ -202,7 +194,7 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueProduce(DominoThreadQueue* que
     queue_ptr->count++;
     queue_ptr->wake_epoch++;
     if (queue_ptr->waiter_count > queue_ptr->producer_waiter_count) {
-        // 版本等待者与阻塞消费者共用条件变量，统一广播以便所有等待者重新检查条件。
+        // Wait 等待者与阻塞消费者共用 not_empty，须广播。
         DOMINO_REQUIRE_THREAD_SUCCESS(cnd_broadcast(&queue_ptr->not_empty), ERR_CONDITION_BROADCAST, "produce:cnd_broadcast(not_empty)");
     }
 
@@ -212,7 +204,6 @@ unlock:
 }
 
 __attribute__((hot)) DOMINO_CODE dominoThreadQueueConsume(DominoThreadQueue* queue_ptr, void* item_out_ptr, bool blocking) {
-    /* 单条消费直接复用批量入口的一次公共校验与出队操作。 */
     uint32_t consumed_count;
     return dominoThreadQueueConsumeBatch(queue_ptr, item_out_ptr, 1U, &consumed_count, blocking);
 }
@@ -247,7 +238,7 @@ __attribute__((hot)) DOMINO_CODE dominoThreadQueueConsumeBatch(DominoThreadQueue
             result_code = ERR_QUEUE_EMPTY;
             goto unlock;
         }
-        dominoThreadQueueWaitLocked(queue_ptr, &queue_ptr->not_empty, "consume:cnd_wait(not_empty)");
+        waitLocked(queue_ptr, &queue_ptr->not_empty, "consume:cnd_wait(not_empty)");
     }
 
     const uint32_t consumed_count = queue_ptr->count < max_count ? queue_ptr->count : max_count;

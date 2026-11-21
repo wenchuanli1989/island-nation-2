@@ -16,7 +16,7 @@ void dominoGameTimerModuleInit(void) {
 }
 
 void dominoGameTimerModuleStart(void) {
-    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_domino_game_timer.thread, dominoGameTimerThread, nullptr), ERR_THREAD_CREATE, "thrd_create");
+    DOMINO_REQUIRE_THREAD_SUCCESS(thrd_create(&g_domino_game_timer.thread, dominoGameTimerThreadMain, nullptr), ERR_THREAD_CREATE, "thrd_create");
 }
 
 void dominoGameTimerModuleStop(void) {
@@ -24,7 +24,7 @@ void dominoGameTimerModuleStop(void) {
 }
 
 void dominoGameTimerModuleDestroy(void) {
-    /* 仅丢弃运行态登记；已运行实例在 Stop 完成结算，仅 Init 的实例保留加载事实，下次 InitAfter 均据此重建截止点和投递目标。 */
+    // 登记只属于本会话：业务方下次加载后按持久化事实重新登记。
     dominoThreadQueueDestroy(&g_domino_game_timer.command_queue);
     dominoGameTimerHeapDestroy(&g_domino_game_timer.heap);
     cnd_destroy(&g_domino_game_timer.wake_condition);
@@ -37,7 +37,7 @@ void dominoGameTimerNotifyTimeChanged(void) {
 }
 
 __attribute__((hot)) DOMINO_CODE dominoGameTimerScheduleAt(DominoThreadQueue* event_queue_ptr, domino_runtime_ms_t due_ms, uint8_t event_type,
-                                                           uint64_t data_id, domino_game_timer_id_t* game_timer_id_out_ptr) {
+                                                           uint64_t target_id, domino_game_timer_id_t* game_timer_id_out_ptr) {
     if (game_timer_id_out_ptr == nullptr) {
         return ERR_NULL_POINTER;
     }
@@ -45,23 +45,23 @@ __attribute__((hot)) DOMINO_CODE dominoGameTimerScheduleAt(DominoThreadQueue* ev
     if (event_queue_ptr == nullptr) {
         return ERR_NULL_POINTER;
     }
-    if (event_queue_ptr->item_size != sizeof(DominoHumanExecutionMessage)) {
+    if (event_queue_ptr->item_size != sizeof(DominoHumanInboxMessage)) {
         return ERR_INVALID_PARAM;
     }
-    // 即使截止点已由业务确定，仍检查当前累计业务时间，不能在越界时继续登记。
+    // 截止点由业务给定，但仍校验当前业务时间未越出 32 位范围。
     domino_runtime_ms_t now_ms;
     dominoTimeGetRuntimeMs(&now_ms);
-    DominoGameTimerRequestMessage game_timer = {
+    DominoGameTimerRequestMessage request = {
         .event_queue_ptr = event_queue_ptr,
-        .data_id = data_id,
+        .target_id = target_id,
         .due_ms = due_ms,
         .event_type = event_type,
     };
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_game_timer.command_queue, &game_timer, false);
+    const DOMINO_CODE code = dominoThreadQueueProduce(&g_domino_game_timer.command_queue, &request, false);
     if (code != CODE_OK) {
         DOMINO_EXIT_WITH_ERROR(code, "提交计时器登记命令失败");
     }
-    *game_timer_id_out_ptr = game_timer.game_timer_id;
+    *game_timer_id_out_ptr = request.game_timer_id;
     notifyGameTimerThread();
     return CODE_OK;
 }

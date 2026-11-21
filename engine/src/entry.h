@@ -1,38 +1,34 @@
 #ifndef DOMINO_ENGINE_ENTRY_H
 #define DOMINO_ENGINE_ENTRY_H
 
-enum { DOMINO_STORAGE_ACCOUNT_ID_MAX = 128, DOMINO_STORAGE_RUN_MODE_MAX = 32 };
+enum { DOMINO_ACCOUNT_ID_SIZE = 128, DOMINO_RUN_MODE_SIZE = 32 };
 
 #include <stdbool.h>
 
 #include "domino_engine.h"
 
-/** @brief 存档 meta.info.account_id 的运行时缓存。 */
-extern char g_domino_storage_account_id[DOMINO_STORAGE_ACCOUNT_ID_MAX];
+/** @file entry.h
+ * @brief 引擎实例状态的内部入口：启动配置、存档账户信息、生命周期查询和向客户端发消息。
+ */
 
-/** @brief 存档 meta.runtime_option.run_mode 的运行时缓存，默认值为 "local"。 */
-extern char g_domino_storage_run_mode[DOMINO_STORAGE_RUN_MODE_MAX];
+/** @brief 存档 meta.info.account_id，由 storage 加载和保存。 */
+extern char g_domino_account_id[DOMINO_ACCOUNT_ID_SIZE];
 
-/** @brief 初始化时保存的启动配置；storage_path 指向引擎持有的路径副本。 */
+/** @brief 存档 meta.runtime_option.run_mode，默认 "local"。 */
+extern char g_domino_run_mode[DOMINO_RUN_MODE_SIZE];
+
+/** @brief Init 保存的启动配置；storage_path 指向引擎持有的已校验副本。 */
 extern DominoEngineLaunchConfig g_domino_engine_launch_config;
 
-/** @brief 判断当前线程是否为 Init 登记的客户端线程。
- * @pre 调用方已校验接口允许的生命周期状态，确保本次 Init 已成功且尚未完成 Destroy。
- */
+/** @brief 当前线程是否为 Init 登记的客户端线程。 */
 extern bool dominoEngineIsClientThread(void);
 
-/** @brief 查询生命周期是否处于 STOPPING；业务线程仅在批次边界观察，当前批次仍可向存活队列投递。
- * @note 运行过的实例在业务线程 join、人物结算和日志排空后进入 STOPPED；仅 Init 的实例跳过所有 join 和结算，logger 关闭入队并刷新。
- * 资源留到 Destroy 释放；其他生命周期状态均返回 false。
- */
+/** @brief 引擎是否处于 STOPPING；业务线程在批次边界据此退出，退出前的末批仍可向队列投递。 */
 extern bool dominoEngineIsStopping(void);
 
-/**
- * @brief 引擎工作线程向客户端发送消息；当前尚未定义会产生回包的业务场景，没有调用方。
- * @pre 引擎已准备客户端收件队列，并在全部投递线程 join 前保持队列有效；本接口不重复校验生命周期。
- * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
- * @note 队列满等传输故障直接打印致命错误并退出进程，不等待空位。
+/** @brief 引擎线程向客户端收件队列发送消息，成功后回写消息 ID；当前没有调用方。
+ * @note 队列满等传输故障致命退出，不等待空位。
  */
-extern void dominoLoopProduceToMain(DominoEngineMessage* message_ptr);
+extern void dominoEngineSendToClient(DominoEngineMessage* message_ptr);
 
 #endif

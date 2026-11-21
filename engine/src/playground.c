@@ -93,13 +93,13 @@ static int runNavPlayground(void) {
         goto cleanup;
     }
 
-    FloydPathPlanningResult path_planning_result = {0};
-    result = dominoNavPathPlanning(0, 0, &path_planning_result);
+    DominoNavFloydStats floyd_stats = {0};
+    result = dominoNavBuildPathCache(0, 0, &floyd_stats);
     if (result != CODE_OK) {
-        DOMINO_PRINT_MESSAGE("navPathPlanning failed: %s (code=%d)", dominoErrorCodeToString(result), (int)result);
+        DOMINO_PRINT_MESSAGE("build path cache failed: %s (code=%d)", dominoErrorCodeToString(result), (int)result);
         goto cleanup;
     }
-    DOMINO_PRINT_MESSAGE("path_planning_result: %ld", path_planning_result.total_tick);
+    DOMINO_PRINT_MESSAGE("floyd relax checks: %ld", floyd_stats.relax_check_count);
 
     DominoRoadLine road_line = {0};
     road_line.current_location = (DominoLocationXY){.x = INT32_MIN, .y = INT32_MIN};
@@ -107,9 +107,9 @@ static int runNavPlayground(void) {
     road_line.type = 0;
     road_line.start_location = (DominoLocationXY){.x = -10, .y = -10};
     road_line.target_location = (DominoLocationXY){.x = 180, .y = -90};
-    result = dominoNavigation(&road_line);
+    result = dominoNavRouteRoadLine(&road_line);
     if (result != CODE_OK) {
-        DOMINO_PRINT_MESSAGE("navigation failed: %s (code=%d)", dominoErrorCodeToString(result), (int)result);
+        DOMINO_PRINT_MESSAGE("route road line failed: %s (code=%d)", dominoErrorCodeToString(result), (int)result);
         goto cleanup;
     }
     for (int i = 0; i < road_line.fork_road_count; i++) {
@@ -128,7 +128,6 @@ cleanup:
     return result == CODE_OK ? 0 : 1;
 }
 
-/** @brief Playground 入口：`npc_ai <sandbox_dir> <work_dir>` 运行 NPC AI 验证，其余参数运行导航演示。 */
 int dominoEnginePlayground(int argc, char* argv[]) {
     if (argc >= 4 && strcmp(argv[1], "npc_ai") == 0) {
         return dominoHumanPlayground(argv[2], argv[3]) == 0 ? 0 : 1;

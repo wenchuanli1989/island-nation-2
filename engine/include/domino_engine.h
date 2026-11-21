@@ -9,121 +9,75 @@
 #include "domino_shared_error_codes.h"
 
 /** @file domino_engine.h
- * @brief 引擎对外接口；客户端不得直接提交任务请求、规划请求或规划结果，引擎也不提供通用的内部数据读写。
- * @note 任务由引擎内部自主决策和规划，不为测试增加对外任务提交接口。客户端与引擎的交互按业务场景单独定义消息类型，
- * 参数和返回数据结构针对该场景设计；收发消息结构及消息类型定义在 domino_engine_protocol.h，本文件声明生命周期、冻结及消息收发接口。
+ * @brief 引擎对外接口：生命周期、冻结／解冻和客户端消息收发。消息结构定义在 domino_engine_protocol.h。
+ * @note 生命周期只允许 Init → Start → Stop → Destroy 或 Init → Stop → Destroy，Destroy 后可重新 Init。
+ * 全部接口由 Init 登记的客户端线程串行调用；错序、重复调用、错误线程及不可恢复错误直接致命退出（stderr）。
+ * 生命周期和冻结操作的非致命诊断直接输出 stdout，运行期业务日志进入日志模块。
+ * 引擎不接受客户端提交的任务或规划，也不提供通用的内部数据读写（宪法第十章）。
  */
 
 typedef struct DominoEngineLaunchConfig {
-    /**
-     * @brief 必填存档目录；初始化时复制路径并移除末尾 '/'，不接受根目录或末级目录名为 .、.. 的路径。
-     * 仅根 meta.json 不存在时创建空世界；无法加载有效世界时打印致命错误并退出进程。
+    /** @brief 存档目录（必填）。Init 复制路径并去掉末尾 '/'，不接受根目录及末级为 . 或 .. 的路径。
+     * 只有根 meta.json 不存在时以新世界启动；其他读取失败致命退出。
      */
     const char* storage_path;
 
-    /**
-     * @brief 下次保存是否记录分片和模块 meta 的 CRC32C/size；关闭时摘要写 0。
-     * 加载始终使用存档自身声明的校验策略。
-     */
-    bool storage_integrity_verify;
+    /** @brief 下次保存是否记录分片和模块 meta 的 CRC32C/size；加载按存档自身声明校验。 */
+    bool storage_integrity_check;
 } DominoEngineLaunchConfig;
 
-/**
- * @brief 准备固定运行资源并加载存档，保持时钟冻结，不创建线程；成功调用的线程登记为客户端线程。
- * @note 日志文件、主循环及 human/game_timer 队列、映射表和同步对象在本阶段初始化；业务容器仍按数据量增长。
- * 世界加载及引用绑定后，完成 Nav 邻接和 human 首次唤醒的重建；返回时运行所需的初始数据已就绪，不推进任务。
- * @note 首次使用依赖静态初值，再次使用须先完成 Destroy；Init 不重复清空已复位的模块状态。
- * @note 生命周期调用须串行，不能与其他引擎操作并发；非法生命周期调用及不可恢复错误直接打印 stderr 并 exit(EXIT_FAILURE)。
- * Init 仅接受未初始化，Start 仅接受已初始化，Stop 接受已初始化或运行中，Destroy 仅接受已停止；重复或错序不作无操作处理。
- * 运行阶段的非致命错误与正常日志进入日志模块，按配置写文件或 stdout；初始化、启动、停止、销毁及冻结／解冻操作的非致命诊断直接输出 stdout。
- * 标准 exit 会执行已注册退出处理；致命错误可能发生在持锁期间，退出处理不可重新调用引擎接口。
+/** @brief 准备固定资源并加载世界，保持时钟冻结、不创建线程；调用线程登记为客户端线程。
+ * @note 返回时运行所需的初始数据已就绪（Nav 邻接、human 首次调度准备），但不推进任何业务。
  */
 extern void dominoEngineInit(DominoEngineLaunchConfig launch_config);
 
 typedef struct DominoEngineClientData {
-    uint64_t game_date_time_ns;  ///< Start 写入的累计未冻结现实纳秒基准，不会持续更新；业务计时使用 32 位现实毫秒。
-    /* 以下日历字段尚未由引擎计算或写入。 */
-    uint32_t game_date_time_sec;
-    uint32_t game_time;
-    uint32_t game_year;
-    uint32_t game_month;
-
-    uint8_t reserved[4072];  ///< 预留字段，填充至 4096 字节。
+    uint64_t runtime_base_ns;  ///< Start 时的累计未冻结现实纳秒，之后不更新。
+    uint8_t reserved[4088];    ///< 填充至 4096 字节。
 } DominoEngineClientData;
 static_assert(sizeof(DominoEngineClientData) == 4096U, "client data must be 4096 bytes");
 
-/**
- * @brief 客户端使用已初始化的资源，在冻结状态下依次启动 logger、human 执行器、动机／任务／行为三个规划线程、game_timer 和主循环。
- * @note 所有线程创建完成后进入 RUNNING，解冻并唤醒业务线程；本阶段不再创建固定队列、映射表或同步对象。
- * @param client_data_out_ptr 可为 nullptr；非空时仅写入 game_date_time_ns。
- * @note 调度已由 Init 准备；返回只表示线程启动完成，不表示业务规划或任务已执行；启动失败直接打印致命错误并退出进程。
+/** @brief 在冻结状态下依次启动 logger、human 执行器与三个规划线程、game_timer 和主循环，全部就绪后进入 RUNNING 并解冻。
+ * @param client_data_out_ptr 可为空；非空时只写入 runtime_base_ns。
+ * @note 返回只表示线程已启动，不表示规划或任务已执行。
  */
 extern void dominoEngineStart(DominoEngineClientData* client_data_out_ptr);
 
-/**
- * @brief 客户端进入 STOPPING，停止已启动的线程并排空日志，保留资源供 Destroy 保存和释放。
- * @pre 引擎处于 INITIALIZED 或 RUNNING，且由 Init 登记的客户端线程串行调用；已冻结的运行实例同样可以停止。
- * @note 运行过的实例先停钟并唤醒业务线程，依次 join 主循环、human 执行器、动机／任务／行为三个规划线程及 game_timer，
- * 通过 human 模块入口把全部人物的共同结算游标推进到停钟时刻，完成行为终态归并、任务决策及动机计次，再排空日志并 join writer。仅 Init、未 Start
- * 时跳过业务线程 join 和模块结算，logger 关闭入队并刷新输出； 保持已加载及配置的事实。
- * 任务业务失败记录终态并继续其他结算；停止或结算中的基础设施及不可恢复错误直接终止进程，不保存。
- * 成功后进入 STOPPED，世界、队列、同步对象和日志文件均保留，全部线程已退出，尚未保存；随后显式调用 Destroy，不支持直接 Start 或 Thaw。
+/** @brief 进入 STOPPING，回收全部业务线程并把人物统一结算到停钟时刻，最后排空日志；成功后进入 STOPPED。
+ * @pre 引擎处于 INITIALIZED 或 RUNNING（含冻结中）。仅 Init 的实例不 join、不结算，只停止日志。
+ * @note 世界、队列和同步对象保留到 Destroy；尚未保存。STOPPED 后只能 Destroy。
  */
 extern void dominoEngineStop(void);
 
-/**
- * @brief 释放已停止的 game_timer 和主循环队列，保存世界，再释放 human 等世界模块和日志，完成后回到未初始化状态。
- * @pre 引擎处于 STOPPED，且由 Init 登记的客户端线程串行调用；无论是否 Start，都必须先由外部完成 Stop。
- * @note 不停钟、不停止或 join 任何线程；未完成 Stop 直接调用属于生命周期错误，打印 stderr 并 exit(EXIT_FAILURE)。
- * Nav 的 DestroyBefore 只规整存档布局，不再推进或结算业务。内部队列不落盘，本阶段保存的 human 事实供下次 Init 重建工作。
- * 日志资源最后销毁；保存及销毁阶段的非致命诊断通过 DOMINO_PRINT_MESSAGE 直接输出 stdout，不调用日志记录接口。
- * 返回前容器、索引指针、game_timer 和引擎实例状态已复位；time 在保存后恢复为基准、采样起点、版本均为零的冻结快照。
- * 内存时钟清空不修改存档累计时间，下一次 Init 从存档恢复；不依赖下一次 Init 清理旧实例状态。
- * 所有阶段的致命错误均使用 DOMINO_EXIT_WITH_ERROR 直接输出 stderr 并退出。
- * 须排除其他 API 并发；保存或释放失败直接终止进程，成功后允许重新 Init。
+/** @brief 保存世界并释放全部资源，回到未初始化状态；不停止或 join 任何线程。
+ * @pre 引擎处于 STOPPED。
+ * @note 保存前由 Nav DestroyBefore 规整存档布局，不再推进业务。保存失败致命退出；内存时钟清空不影响存档中的累计时间。
  */
 extern void dominoEngineDestroy(void);
 
-/**
- * @brief 客户端冻结业务时钟，不通知或等待业务线程；重复冻结保持原时刻。
- * @note 业务线程在批次入口观察冻结后不开始新批次，消息及规划结果留队，解冻后继续消费。
- * 若冻结发生在批次检查之后，该批仍可继续出队、处理和入队；返回不表示世界已停止写入或可立即保存。
- * 队列自身不检查冻结，引擎内部当前批次的规划请求及结果仍可入队，日志线程继续写出。
- * 只允许客户端在 RUNNING 调用；非法调用或时钟故障直接打印致命错误并退出进程。
+/** @brief 冻结业务时钟；重复冻结保持原时刻。只允许在 RUNNING 时调用。
+ * @note 不通知、不等待业务线程：已开始的批次可以完成，留队消息解冻后继续处理。冻结不代表世界已停止写入，不能作为保存依据。
  */
 extern void dominoEngineFreezeTime(void);
 
-/**
- * @brief 客户端校验业务时钟范围、解冻并唤醒主循环及业务线程，不等待恢复回执或重建已有唤醒。
- * @note 只允许客户端在 RUNNING 且时钟冻结时调用；非法调用、时钟或通知故障直接打印致命错误并退出进程。
- */
+/** @brief 解冻业务时钟并唤醒主循环和业务线程。只允许在 RUNNING 且已冻结时调用。 */
 extern void dominoEngineThawTime(void);
 
-/**
- * @brief 客户端向引擎主循环发送消息。
- * @note 消息类型按业务场景单独定义；当前尚未定义业务场景，主循环把出队的消息按不支持的类型记录一次并丢弃，不回包。
- * 不提供客户端任务请求、规划请求、规划结果或通用实体字段读写消息。
- * @param message_ptr 可写消息；成功后 id 为本次入队生成的 ID。
- * @note 只允许登记的客户端线程在 RUNNING 期间发送，冻结不影响入队；主循环观察冻结后保留消息，解冻后继续处理。
- * 若冻结发生在主循环的批次检查之后，该批仍可继续出队和处理。
- * @return CODE_OK 成功；空指针返回 ERR_NULL_POINTER；满载、扩容失败、ID 耗尽等传输故障打印致命错误并退出进程，不等待空位。
- *         请求状态或线程不合法时记录非致命错误并返回；入队仍需获取队列 mutex。
+/** @brief 向主循环发送一条消息，成功后 message_ptr->id 为本次入队的 ID。只允许在 RUNNING 时调用，冻结不影响入队。
+ * @note 当前未定义任何业务场景：主循环把所有消息按不支持的类型记录一次并丢弃，不回包。
+ * @return CODE_OK 成功；空指针 ERR_NULL_POINTER；未初始化 ERR_NOT_INITIALIZED；其他状态或线程不合法 ERR_GAME_STATE_INVALID。
+ *         拒绝时记录一次非致命诊断；队列满等传输故障致命退出，不等待空位。
  */
-extern DOMINO_CODE dominoEnginePushMsg(DominoEngineMessage* message_ptr);
+extern DOMINO_CODE dominoEngineSendMessage(DominoEngineMessage* message_ptr);
 
-/**
- * @brief 客户端接收引擎消息。
- * @note 当前尚未定义会产生回包的业务场景，客户端收件队列保持为空。
- * @pre 只允许登记的客户端线程在 RUNNING 期间接收。
- * @param blocking 正常状态下无消息时，true 等待消息，false 返回 `ERR_QUEUE_EMPTY`；两种模式均需获取队列 mutex。
- * @note 冻结不影响取出已有消息；暂停时空队列的阻塞调用仍等待生产者，需继续控制游戏时使用非阻塞模式。
- *       系统或同步故障直接打印致命错误并退出进程。
- * @return `CODE_OK` 成功；访问资格合法时空指针返回 `ERR_NULL_POINTER`；引擎未初始化返回 `ERR_NOT_INITIALIZED`；
- *         其他生命周期或线程不合法时返回 `ERR_GAME_STATE_INVALID`，以上拒绝均记录一次非致命诊断。
+/** @brief 接收一条引擎消息。只允许在 RUNNING 时调用；当前没有会产生回包的场景，收件队列保持为空。
+ * @param blocking 无消息时 true 等待，false 返回 ERR_QUEUE_EMPTY；冻结期间需要继续操作时应使用非阻塞模式。
+ * @return 拒绝条件和诊断同 dominoEngineSendMessage。
  */
-extern DOMINO_CODE dominoEnginePopMsg(DominoEngineMessage* message_out_ptr, bool blocking);
+extern DOMINO_CODE dominoEngineReceiveMessage(DominoEngineMessage* message_out_ptr, bool blocking);
 
 #ifdef DOMINO_PLAYGROUND_MODE
+/** @brief 模块内部夹具入口：`npc_ai <sandbox_dir> <work_dir>` 运行 NPC AI 验证，其余参数运行导航演示。 */
 extern int dominoEnginePlayground(int argc, char* argv[]);
 #endif
 #endif
