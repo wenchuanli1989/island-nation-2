@@ -1150,7 +1150,7 @@ time 在 storage 加载前 Init，在世界保存和清理完成后 Destroy。�
 
 `dominoHumanSettle()` 供运行期和 Stop 共用；按第 7.6 节使用人物共同游标和区间，分开效果结算、行为结果提交及任务决策，行为终态立即归并任务事实，整个边界处理完才前移游标。继续保留共同结算、依赖收尾和单项失败不截断其他人物／通道的要求，不另建通用执行框架。
 
-第一阶段实现位于 `engine/src/human/`，存档版本为 31，样例存档已同步；Stop 统一结算全部人物。验证入口为 `playground/npc_ai/main.c`，运行方式及覆盖范围见 README 的 NPC AI 验证说明。
+第一阶段实现位于 `engine/src/human/`，存档版本为 31，样例存档已同步；Stop 统一结算全部人物。验证入口为 `playground/npc_ai/main.c`，运行方式及覆盖范围见 AGENTS.md 的「测试与验证」。
 
 ### 12.4 验收清单
 

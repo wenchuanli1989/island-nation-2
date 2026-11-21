@@ -16,20 +16,21 @@
 Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单机离线和在线多人两种模式。它是 CPU 计算密集型模拟引擎，重点关注代码执行速度和内存访问延迟。当前进展集中在本地引擎、公共数据结构、日志、导航、NPC AI 和 JSON 存档；engine-remote 与 client-hub 只有骨架，尚未接入网络通信。
 
 - 暂不执行 sanitize（ASan／UBSan／LSan）、TSan（`tsan`）和 clang-tidy 验证，用户另行通知时再执行；其他构建与验证照常进行。
+- **仓库资料：** `doc/ai.zip` 是随仓保存的 AI 研究资料，有意保留，不提议删除、移出或为缩小体积改写 git 历史；被取代的文档直接删除，不建归档目录。`doc/claude-code-guide.html` 是 Claude Code 使用教程，以 Artifact 片段形式保存（没有 doctype），不属于项目规范，不补全其 HTML 骨架。
 
 ## 环境与构建
 
 ### 环境要求
 
 - Linux（目标环境 Ubuntu 26.04 LTS）、CMake 4.2.1+、Clang 22（C23）、glibc 2.43+（时间采样依赖 `timespec_get` 的 `TIME_UTC` 和 `TIME_MONOTONIC`）。
-- **独立 glibc：** 系统 glibc 版本较低时，设置 `DOMINO_GLIBC_ROOT` 指向 `scripts/setup-glibc.sh` 安装的 glibc 2.43；未设置或为空时使用系统 glibc，脚本不探测安装目录。运行产物时须保留该目录。改变或取消该变量时，`build.sh` 会自动清理对应产物并重建 CMake 缓存。
-- **Codex Cloud：** 每个新 shell 先 `source /workspace/.local/domino/env.sh`（启用 PATH 并设置 `DOMINO_GLIBC_ROOT`），再使用 `scripts/build.sh`。
+- **独立 glibc：** 系统 glibc 版本较低时，设置 `DOMINO_GLIBC_ROOT` 指向 `scripts/setup-glibc.sh` 安装的 glibc 2.43，`build.sh` 随之加载工具链文件 `scripts/linux_x86_64_glibc.cmake`；未设置或为空时使用系统 glibc，脚本不探测安装目录。运行产物时须保留该目录。改变或取消该变量时，`build.sh` 会自动清理对应产物并重建 CMake 缓存。安装脚本和工具链只支持 Linux x86_64，其他架构须使用 2.43+ 的系统 glibc。
+- **Codex Cloud：** `scripts/setup-codex-cloud.sh` 只支持 Debian 13 x86_64。每个新 shell 先 `source /workspace/.local/domino/env.sh`（启用 PATH 并设置 `DOMINO_GLIBC_ROOT`；安装时设置了 `DOMINO_CLOUD_ROOT` 则为该目录下的 `env.sh`），再使用 `scripts/build.sh`。默认执行沙箱的 ptrace 限制会挡住 LeakSanitizer：恢复 sanitize 验证后，须放宽沙箱再以同一普通用户运行，这类失败不代表代码缺陷。
 - **平台：** 目标为 Windows、macOS、Linux、Android、iOS；当前只要求 Linux 编译通过，暂不要求 API 跨平台适配。macOS 只保留 `./scripts/build.sh macos-debug`：在 Intel Mac 上以 Debug 和 `DOMINO_PLAYGROUND_MODE=ON` 构建默认 Playground，产物在 `build-macos-debug/`；SDK 须支持 `timespec_get(TIME_MONOTONIC)`，缺失的 `<threads.h>` 由 `lib/tinycthread` 提供。
 - 安装脚本（`scripts/` 下的 `setup-codex-cloud.sh`、`setup-dev.sh`、`setup-glibc.sh`）、Docker（`docker/`）及 VS Code 配置见 README 的「独立 glibc」和「开发环境」。
 
 ### 构建命令
 
-所有构建通过 `scripts/build.sh` 执行，可执行文件输出到 `build-<preset>/bin/`，静态库输出到 `build-<preset>/static-lib/`。
+所有构建通过 `scripts/build.sh` 执行，可执行文件输出到 `build-<preset>/bin/`，静态库输出到 `build-<preset>/static-lib/`。并行数默认为 `nproc`，可用 `CMAKE_BUILD_PARALLEL_LEVEL` 覆盖。
 
 ```bash
 ./scripts/build.sh debug [target]        # 调试模式
@@ -53,10 +54,12 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 - **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/npc_ai`；脚本拒绝不带目标的调用。`lib/` 由 `lib/.clang-format` 关闭格式化；目标覆盖 `playground/算法/` 时（如 `format playground`）会改写其中的第三方 `khash.h`，格式化后用 `git status --short -- playground/算法/` 确认它未变。
 - **默认 Playground：** 入口为 `playground/src/main.c`。在构建目录下运行 `./bin/domino-playground`，完成一次引擎生命周期后退出；存档写在 `build-<preset>/runtime/sandbox/`，再次运行会加载该存档。
 - **实验与模块夹具：** `playground-build`／`playground-run` 以 `DOMINO_PLAYGROUND_MODE=ON` 构建，`PLAYGROUND_SOURCE_DIR` 指向 `playground/` 下含 `main.c` 的实验目录。模块内部夹具经 `engine/src/playground.c` 的 `dominoEnginePlayground()` 分派：参数为 `npc_ai <sandbox_dir> <work_dir>` 时运行 `engine/src/human/playground.c`，其余参数运行同文件内的导航演示；`playground/npc_ai/main.c` 是 NPC AI 的调用示例。
+- **共用构建目录：** `playground-build`／`playground-run` 复用同名预设的 `build-<preset>/`，`bin/domino-playground` 是最近一次配置的入口；普通构建（如 `debug`）恢复默认入口并关闭 Playground 模式。切换模式会改变全部项目目标的编译定义，等于全量重编。clangd 读取 `build-debug`（macOS 为 `build-macos-debug`）的编译数据库，IDE 诊断也随最近一次配置变化。
+- **源文件与夹具：** 除 engine-remote/server 显式列出源文件外，各模块从 `src/` 自动收集 `.c`（`GLOB_RECURSE … CONFIGURE_DEPENDS`），增删源文件无需修改 CMake。名为 `playground.c` 的文件是模块内部夹具，正式构建由顶层 `CMakeLists.txt` 的 `domino_exclude_playground_sources()` 排除；其他文件中的测试代码用 `DOMINO_PLAYGROUND_MODE` 宏条件编译。
 
 ## 架构
 
-长期设计目标（模拟流水线阶段、账号与国家交互等）见 [blueprint.md](doc/blueprint.md)。
+长期设计目标（模拟流水线阶段、账号与国家交互等）见 [blueprint.md](doc/blueprint.md)；待办与待研究事项见 [todo.md](doc/todo.md)，其中 NPC AI 的阶段执行与延后结构变更仍在评估，未经确认不实现。
 
 ### 模块依赖链
 
@@ -208,6 +211,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 - **验证入口：** `./scripts/build.sh playground-run playground/npc_ai/main.c debug`（也支持 `release`、`sanitize`、`tsan`）。
   - 先运行模块内部夹具 `engine/src/human/playground.c`（仅在 `DOMINO_PLAYGROUND_MODE` 下编译），覆盖结算分段与预测一致、请求身份与不设期限、候选提交与容量、信息差与轮次锚点、行为依赖、截止点、应激插入与让位、测试输入、规划触发与下次规划时刻、行为规划询问范围等。
   - 再在真实线程下用样例存档副本运行端到端场景：自主睡眠、客户端通道骨架、冻结、停止后读档延续、第二轮需求、条件失效与恢复、仅 Init 生命周期，以及受控规划器下睡眠被通话完全让位、停止保存读档后继续、通话结束后睡眠恢复。测试线程持 human 读锁直接观察，不经客户端通道。端到端存档写在 `build-<preset>/runtime/`。
+- **验收清单：** [npc_ai.md 第 12.4 节](doc/npc_ai.md#124-验收清单)列出逐项验收要求和任务完成边界场景；改动 NPC AI 时据此补充或调整夹具与端到端场景。
 
 ## 存档
 
@@ -248,6 +252,8 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 **语言规则：**
 
 - C23 标准，使用 Clang 编译；线程与原子操作 API 见宪法总则。
+- **编译警告：** 项目目标经 `domino_options` 启用 `-Wall`、`-Wextra`、`-Wpedantic`、`-Wconversion`、`-Wsign-conversion` 等警告，构建保持零警告，改动不得引入新警告。缺少原型或声明按错误处理，并启用 `-fno-common`：非 `static` 函数须先在头文件声明，头文件只能用 `extern` 声明全局变量。
+- **配置差异：** Debug 使用 `-O0` 和 `-ftrapv`（有符号整数溢出时陷入）；Release 使用 `-O3`、ThinLTO 和 `-DNDEBUG`，`assert()` 不生效。
 - 使用固定宽度整数类型（`uint32_t`、`int16_t` 等）。
 - 使用 Doxygen 风格注释（`@brief`、`@param`、`@return`）；注释说明“为什么”，不复述代码在做什么。
 

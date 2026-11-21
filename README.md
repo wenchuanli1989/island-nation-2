@@ -27,18 +27,17 @@ domino/
 ├── lib/                 # 第三方库：yyjson、klib、tinycthread
 ├── playground/          # 算法实验和子系统原型验证
 ├── doc/                 # 项目宪法、NPC AI 设计、蓝图、待办等文档
-├── scripts/             # 构建脚本与环境安装脚本
-├── cmake/               # 独立 glibc 工具链文件
+├── scripts/             # 构建脚本、环境安装脚本与独立 glibc 工具链文件
 └── docker/              # 开发环境镜像
 ```
 
 ## 当前状态
 
-- **引擎生命周期：** 对外只允许 `Init → Start → Stop → Destroy`；只调用过 Init 的实例也须先 Stop 再 Destroy。销毁后可在同一进程重新 Init 并切换存档。接口返回 `void`，非法顺序或错误线程调用直接报错退出。详见宪法第一章和 AGENTS.md 的「生命周期实现」。
+- **引擎生命周期：** 对外只允许 `Init → Start → Stop → Destroy`；只调用过 Init 的实例也须先 Stop 再 Destroy。销毁后可在同一进程重新 Init 并切换存档。非法顺序或错误线程调用直接报错退出。详见宪法第一章和 AGENTS.md 的「生命周期实现」。
 - **骨架模块：** client-hub、engine-remote/local 目前只管理各自的日志资源，提供四阶段入口（如 `dominoClientHubInit()`），尚未代管引擎。
 - **客户端通道：** `dominoEnginePushMsg()`／`dominoEnginePopMsg()` 只有通道骨架，尚未定义任何业务场景，主循环会丢弃收到的消息。
 - **NPC AI：** 第一阶段只实现恢复精力动机与自主睡眠。
-- **存档：** JSON 格式，版本 31，不兼容旧格式。保存时先写 staging 目录再 rename 提交；同一存档目录不允许多个进程同时使用。样例存档位于 `playground/sandbox/domino`。
+- **存档：** JSON 格式，不兼容旧格式；同一存档目录不允许多个进程同时使用。样例存档位于 `playground/sandbox/domino`。
 
 ## 环境要求
 
@@ -54,7 +53,7 @@ domino/
 ```bash
 ./scripts/build.sh debug                 # 调试模式
 ./scripts/build.sh debug engine          # 只构建单个目标：shared, engine, engine-remote-local, engine-remote-server, client-hub, playground
-./scripts/build.sh release               # 发布模式（-O3, LTO）
+./scripts/build.sh release               # 发布模式（-O3、ThinLTO）
 ./scripts/build.sh release-native        # 发布模式加 -march=native，产物仅限本机运行
 ./scripts/build.sh profile               # gprof 性能分析
 ./scripts/build.sh sanitize              # ASan + UBSan + LSan
@@ -90,12 +89,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ./scripts/build.sh playground-run playground/npc_ai/main.c debug      # 也支持 release、sanitize、tsan
 ```
 
-验证分两步：
-
-1. 运行模块内部夹具 `engine/src/human/playground.c`，覆盖结算一致性、规划请求与结果复核、候选提交与容量、行为依赖、应激让位与插入，以及规划触发等。
-2. 在真实线程下，用样例存档的副本运行端到端场景：自主睡眠、冻结、停止后读档继续、条件失效与恢复、仅 Init 的生命周期，以及睡眠被通话打断后恢复。
-
-端到端存档写在构建目录的 `runtime/` 下。验收清单见 [npc_ai.md](doc/npc_ai.md) 第 12.4 节。
+验证过程中的存档写在构建目录的 `runtime/` 下。覆盖范围见 AGENTS.md 的「测试与验证」，验收清单见 [npc_ai.md](doc/npc_ai.md) 第 12.4 节。
 
 ## 代码质量
 
@@ -106,7 +100,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ./scripts/build.sh scan-build                    # Clang Static Analyzer
 ```
 
-`format` 必须指定目标，不带目标时脚本直接报错；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。`lib/` 下的第三方代码由 `lib/.clang-format` 关闭格式化；`playground/算法/` 中的第三方 `khash.h` 没有这层保护，格式化覆盖该目录后须确认它未被改动。
+`format` 必须指定目标，不带目标时脚本直接报错；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。目标覆盖 `playground/算法/` 时会改写其中的第三方 `khash.h`，格式化后须确认它未被改动。
 
 ## 开发环境
 
@@ -120,7 +114,6 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 
 - **产物：** 位于 `build-macos-debug/`，与 Linux 的 `build-debug/` 分开。
 - **线程库：** macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供。
-- **调试：** VS Code 中选择「调试Playground」按 `F5`，会先构建再调试固定入口 `playground/src/main.c`。
 
 ### Codex Cloud
 
@@ -133,18 +126,10 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 | Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可改为其他可写绝对路径，不含空白、双引号或反斜杠） |
 | Public internet access | 启用 Package managers，允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
 
-- **安装内容：** 隔离 APT 配置，校验 LLVM 密钥和软件源签名后，解包 Debian `trixie-backports` 的 CMake、Clang 22、调试分析工具和 Sanitizer 运行库，并通过 `scripts/setup-glibc.sh` 安装独立 glibc 2.43。
+- **安装内容：** 校验软件源签名后解包 CMake、Clang 22、调试分析工具和 Sanitizer 运行库，并通过 `scripts/setup-glibc.sh` 安装独立 glibc 2.43。
 - **不改动系统：** 不调用 `sudo`，不修改系统软件源、密钥或 dpkg 数据库，也不执行软件包维护脚本。
 - **使用前提：** 脚本须连同仓库使用，可重复执行以刷新安装；基础镜像须已有 APT、curl、GnuPG、dpkg-deb、GCC、Make、Git、Perl 和 Python 3.13。
-
-```bash
-bash scripts/setup-codex-cloud.sh
-source /workspace/.local/domino/env.sh
-./scripts/build.sh debug
-(cd build-debug && ./bin/domino-playground)
-```
-
-2026-10-30 已在真实 Codex Cloud（Debian 13.6，无 sudo 的普通用户）完成验证：首次与重复安装，`debug`、`release`、`sanitize` 构建，以及 Playground 的保存和重载都通过。默认执行沙箱的 ptrace 限制会挡住 LeakSanitizer，需要放宽沙箱后再以同一普通用户运行。
+- **LeakSanitizer：** 默认执行沙箱的 ptrace 限制会挡住 LSan，运行 sanitize 构建的程序前须放宽沙箱，再以同一普通用户运行。
 
 ### Ubuntu 26.04 服务器
 
@@ -176,14 +161,14 @@ command -v clang clangd clang-format clang-tidy lldb scan-build
 - **Playground**：对当前 C 文件执行构建或构建并运行（默认）
 - **Playground (Debug Build)**：只构建当前 Playground 文件
 - **清理构建**、**运行clang-format**、**运行clang-tidy**
-- **调试**：设置断点后按 `F5`，选择「调试Playground」，会先执行 Playground 构建任务
+- **调试**：设置断点后按 `F5`，选择「调试Playground」，会先执行「Playground (Debug Build)」：Linux 上对当前打开的文件执行 `playground-build`，文件须位于 `playground/` 下，否则构建失败；macOS 上固定构建并调试 `playground/src/main.c`
 
 ## 第三方库
 
 | 库 | 位置 | 说明 |
 | --- | --- | --- |
 | yyjson | `lib/yyjson/` | JSON 解析 |
-| klib | `lib/klib/` | 只保留 `kvec.h`、`khashl.h`；随仓维护版，基于官方 commit `97a0fcb7`，已带分配溢出检查、resize 失败返回值等本地补丁 |
+| klib | `lib/klib/` | 只保留 `kvec.h`、`khashl.h`；基于官方 commit `97a0fcb7` 的随仓维护版，带本地补丁 |
 | TinyCThread | `lib/tinycthread/` | 为 macOS 提供 `<threads.h>` |
 
-第三方代码保持原样，不做修改；本地补丁的具体内容见 AGENTS.md 的「第三方库」。
+第三方代码（含 klib 已有的本地补丁）按宪法 1.2 节保持原样，不再修改；补丁内容见 AGENTS.md 的「第三方库」。

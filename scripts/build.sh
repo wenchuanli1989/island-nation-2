@@ -20,7 +20,7 @@ configure_project() {
     [[ "${1:-}" != -B ]] || build_dir="$2"
     if [[ -n "$glibc_root" ]]; then
         glibc_root="$(realpath "$glibc_root")"
-        set -- --toolchain "$WORKSPACE_DIR/cmake/linux_x86_64_glibc.cmake" "-DDOMINO_GLIBC_ROOT=$glibc_root" "$@"
+        set -- --toolchain "$SCRIPT_DIR/linux_x86_64_glibc.cmake" "-DDOMINO_GLIBC_ROOT=$glibc_root" "$@"
     fi
     if [[ -f "$build_dir/CMakeCache.txt" &&
           "$glibc_root" != "$(sed -n 's/^DOMINO_GLIBC_ROOT:PATH=//p' "$build_dir/CMakeCache.txt")" ]]; then
