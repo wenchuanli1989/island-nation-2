@@ -8,6 +8,7 @@
 
 - 研究c语言调试和分析工具
 - 研究-ftrapv是否在cmake中生效
+- [ ] 升级 Clang 时检查 TSan 运行库（`libclang_rt.tsan`）是否已拦截 C11 线程函数（`thrd_*`／`mtx_*`／`cnd_*`）；支持后删除 `DOMINO_USE_TINYCTHREAD`，`tsan` 预设改回 glibc 的 `<threads.h>`，并同步 AGENTS.md、README 与 `lib/tinycthread/README.md`。
 
 ### 持续集成
 
