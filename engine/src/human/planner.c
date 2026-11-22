@@ -30,10 +30,6 @@ typedef struct HumanPlannerContext {
 static HumanPlannerContext g_planner_list[DOMINO_HUMAN_PLANNER_COUNT];
 static DominoThreadQueue* g_executor_inbox_ptr;
 
-#ifdef DOMINO_PLAYGROUND_MODE
-static DominoHumanPlanComputeFn g_compute_override_list[DOMINO_HUMAN_PLANNER_COUNT];
-#endif
-
 // 十二条规划队列满载时的槽位内存上限。
 static_assert((sizeof(DominoHumanPlanRequestMessage) + sizeof(DominoHumanPlanResultMessage)) * DOMINO_HUMAN_PLANNER_COUNT *
                       DOMINO_HUMAN_PLAN_PRIORITY_COUNT * (uint64_t)DOMINO_THREAD_QUEUE_MAX_CAPACITY <=
@@ -153,11 +149,6 @@ void dominoHumanPlannerInit(DominoThreadQueue* executor_inbox_ptr) {
         context_ptr->kind = kind;
         context_ptr->config = g_domino_human_ai_config.planner_list[kind];
         context_ptr->compute_fn = g_default_compute_list[kind];
-#ifdef DOMINO_PLAYGROUND_MODE
-        if (g_compute_override_list[kind] != nullptr) {
-            context_ptr->compute_fn = g_compute_override_list[kind];
-        }
-#endif
         for (uint8_t priority = 0U; priority < DOMINO_HUMAN_PLAN_PRIORITY_COUNT; priority++) {
             dominoThreadQueueInit(&context_ptr->request_queue_list[priority], sizeof(DominoHumanPlanRequestMessage),
                                   DOMINO_THREAD_QUEUE_DEFAULT_CAPACITY, DOMINO_THREAD_QUEUE_MAX_CAPACITY);
@@ -228,9 +219,3 @@ DominoThreadQueue* dominoHumanPlannerGetResultQueue(uint8_t planner_kind, uint8_
 DominoHumanPlannerStats dominoHumanPlannerGetStats(uint8_t planner_kind) {
     return g_planner_list[planner_kind].stats;
 }
-
-#ifdef DOMINO_PLAYGROUND_MODE
-void dominoHumanPlannerSetComputeOverride(uint8_t planner_kind, DominoHumanPlanComputeFn compute_fn) {
-    g_compute_override_list[planner_kind] = compute_fn;
-}
-#endif

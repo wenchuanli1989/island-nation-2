@@ -55,7 +55,7 @@ static bool processHeapBatch(void) {
         // 取消检查、出堆和投递都在请求锁内完成，Cancel 不会插在中间。
         DominoGameTimerRequestMessage request = *request_ptr;
         dominoGameTimerHeapPop(&g_domino_game_timer.heap);
-        DominoHumanInboxMessage message = {.type = DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER, .payload.game_timer = request};
+        DominoHumanInboxMessage message = {.game_timer = request};
         const DOMINO_CODE code = dominoThreadQueueProduce(request.event_queue_ptr, &message, false);
         if (code != CODE_OK) {
             DOMINO_EXIT_WITH_ERROR(code, "投递计时器到期事件失败");

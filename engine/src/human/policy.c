@@ -55,7 +55,7 @@ uint8_t dominoHumanPlanMotivations(const DominoHuman* human_ptr, const DominoHum
 uint8_t dominoHumanPlanTasks(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms, uint32_t compute_budget,
                              DominoHumanPlanOutput* output_ptr) {
     (void)slot_ptr;
-    /* 第一阶段生产策略只为恢复精力安排睡眠；回应外部信息的任务由受控规划场景产生。 */
+    /* 第一阶段生产策略只为恢复精力安排睡眠，不产生回应外部信息的任务。 */
     const DominoMotivation* motivation_ptr = dominoHumanFindActiveMotivation(human_ptr->data, DOMINO_MOTIVATION_TYPE_RESTORE_ENERGY);
     if (motivation_ptr == nullptr || motivation_ptr->round_task_id != 0U || motivation_ptr->need_round == UINT32_MAX) {
         /* 没有恢复精力动机、本轮睡眠工作尚未结束或轮次已耗尽：无需调整。动机集合变化和任务结束都会置任务待规划标志。 */
@@ -100,7 +100,7 @@ uint8_t dominoHumanPlanBehaviors(const DominoHuman* human_ptr, const DominoHuman
         return DOMINO_HUMAN_PLAN_OUTCOME_NO_CHANGE;
     }
     if (task_ptr->type != DOMINO_TASK_TYPE_SLEEP) {
-        /* 第一阶段生产策略只为睡眠安排行为；其他类型及插入的辅助行为由受控规划场景产生。 */
+        /* 第一阶段生产策略只为睡眠安排行为，不安排其他类型及插入的辅助行为。 */
         return DOMINO_HUMAN_PLAN_OUTCOME_NO_PLAN;
     }
     DominoHumanNeedValues needs;

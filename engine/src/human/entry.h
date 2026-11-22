@@ -55,24 +55,4 @@ DominoTask* dominoGetTaskById(domino_task_id_t task_id);
 /** @brief 按 ID 查询行为记录；访问约定同 dominoGetHumanById。 */
 DominoBehavior* dominoGetBehaviorById(domino_behavior_id_t behavior_id);
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/* 测试验收专用：睡眠条件、精力、外部信息三个人物输入入口，只在 playground 编译，清理测试代码时一并删除。
- * 每个入口向执行器投递一条独立消息；执行器先按旧值结算到当前时刻，再写入变化并在同一边界统一决策，人物不存在时忽略。
- */
-
-/** @brief 测试验收专用：提交睡眠条件的新值。 */
-void dominoHumanSubmitSleepConditionForTest(domino_human_id_t human_id, bool forbidden_flag);
-
-/** @brief 测试验收专用：提交精力的新值。
- * @return CODE_OK 已投递；energy 超过 DOMINO_HUMAN_NEED_MAX 返回 ERR_INVALID_PARAM。
- */
-DOMINO_CODE dominoHumanSubmitEnergyForTest(domino_human_id_t human_id, uint8_t energy);
-
-/** @brief 测试验收专用：登记一条外部信息（类别和来源同时写入），或以 NONE 撤回尚未承接的外部信息。
- * @param source_id 外部信息来源，例如来电人物 ID。
- * @return CODE_OK 已投递；类别不合法返回 ERR_INVALID_PARAM。
- */
-DOMINO_CODE dominoHumanSubmitStimulusForTest(domino_human_id_t human_id, uint8_t stimulus_kind, uint32_t source_id);
-#endif
-
 #endif

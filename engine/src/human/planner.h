@@ -71,9 +71,4 @@ uint8_t dominoHumanPlanTasks(const DominoHuman* human_ptr, const DominoHumanPlan
 uint8_t dominoHumanPlanBehaviors(const DominoHuman* human_ptr, const DominoHumanPlanSlot* slot_ptr, domino_runtime_ms_t now_ms,
                                  uint32_t compute_budget, DominoHumanPlanOutput* output_ptr);
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/** @brief 仅 playground：为某类规划器换用受控的计算函数（空指针恢复默认），须在 human Init 之前设置。 */
-void dominoHumanPlannerSetComputeOverride(uint8_t planner_kind, DominoHumanPlanComputeFn compute_fn);
-#endif
-
 #endif

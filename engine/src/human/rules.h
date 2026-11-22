@@ -62,18 +62,10 @@ enum {
 /** @brief 本会话配置；human Init 写入，之后只读。 */
 extern DominoHumanAiConfig g_domino_human_ai_config;
 
-/** @brief 内置默认配置。 */
-DominoHumanAiConfig dominoHumanDefaultAiConfig(void);
-
-/** @brief 校验并固定本会话配置（默认配置，或 playground 指定的下一轮配置）；不合法致命退出。 */
+/** @brief 校验并固定本会话配置（内置默认配置）；不合法致命退出。 */
 void dominoHumanAiConfigInit(void);
 
 /** @brief 清零本会话配置。 */
 void dominoHumanAiConfigDestroy(void);
-
-#ifdef DOMINO_PLAYGROUND_MODE
-/** @brief 仅 playground：指定之后 human Init 使用的配置，空指针恢复默认；进程级设置，不随 Destroy 清空。 */
-void dominoHumanSetNextAiConfig(const DominoHumanAiConfig* config_ptr);
-#endif
 
 #endif

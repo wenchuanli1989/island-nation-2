@@ -45,19 +45,7 @@ void dominoHumanExecutorStop(void);
 /** @brief 释放规划队列（含留队候选）、收件箱、运行数组和待办队列并复位。 */
 void dominoHumanExecutorDestroy(void);
 
-/** @brief 非阻塞投递一条收件消息，失败致命退出；目前只有测试验收专用的人物输入经此投递，计时通知由 GameTimer 直接投递。 */
-void dominoHumanExecutorSubmit(DominoHumanInboxMessage* message_ptr);
-
 /** @brief 执行器统计；须在执行线程 join 之后读取。 */
 DominoHumanExecutorStats dominoHumanExecutorGetStats(void);
-
-#ifdef DOMINO_PLAYGROUND_MODE
-/** @brief 仅 playground：串行处理一条规划结果，复用运行期的复核与提交路径。 */
-void dominoHumanExecutorProcessResultForTest(uint8_t planner_kind, uint8_t priority, DominoHumanPlanResultMessage* result_ptr);
-/** @brief 仅 playground：串行把人物推进到当前时刻并完成后续调度。 */
-void dominoHumanExecutorAdvanceForTest(domino_human_id_t human_id);
-/** @brief 仅 playground，测试验收专用：串行处理一条人物输入，复用运行期的结算、判定与收尾。 */
-void dominoHumanExecutorProcessMessageForTest(const DominoHumanInboxMessage* message_ptr);
-#endif
 
 #endif

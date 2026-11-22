@@ -15,16 +15,6 @@
  * 真实结算与只读预测共用同一套分段和计算（宪法 9.3）。写入接口须持写权限，预测接口只读。
  */
 
-/** @brief 待处理外部信息对规划的需要。 */
-typedef enum {
-    DOMINO_HUMAN_STIMULUS_NEED_NONE = 0,  ///< 没有待处理外部信息。
-    DOMINO_HUMAN_STIMULUS_NEED_INSERT,    ///< 运行任务接受插入：需要为它规划插入的辅助步骤。
-    DOMINO_HUMAN_STIMULUS_NEED_TASK,      ///< 没有运行任务或运行任务选择完全让位：需要回应任务。
-} DOMINO_HUMAN_STIMULUS_NEED;
-
-/** @brief 人物的运行任务，没有返回空指针。 */
-DominoTask* dominoHumanGetActiveTask(const DominoHumanData* data_ptr);
-
 /** @brief 把人物结算到 target_ms，每个边界处理完才前移游标。
  * @pre target_ms 不早于 settled_at_ms，否则致命退出。
  */
@@ -42,9 +32,6 @@ DominoTaskDecisionInput dominoHumanBuildDecisionInput(const DominoHuman* human_p
  * @return 是否实际改变了任务或行为。
  */
 bool dominoHumanApplyTaskDecision(DominoHuman* human_ptr, DominoTask* task_ptr, DominoTaskDecision decision, domino_runtime_ms_t now_ms);
-
-/** @brief 待处理外部信息需要哪种规划（DOMINO_HUMAN_STIMULUS_NEED）：由运行任务的应激规则决定接受插入还是让位。 */
-uint8_t dominoHumanGetStimulusNeed(const DominoHuman* human_ptr);
 
 /** @brief 只读预测下一次需要检查人物的时刻：行为结束、任务决策变化或截止点。
  * @note 需求降到阈值的时机不在此预测，由任务规划给出的下次规划时刻提供。

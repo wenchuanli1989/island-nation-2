@@ -39,42 +39,6 @@ DominoHuman* dominoGetHumanById(domino_human_id_t human_id) {
     return nullptr;
 }
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/* 测试验收专用：人物输入入口；清理测试代码时一并删除。 */
-
-void dominoHumanSubmitSleepConditionForTest(domino_human_id_t human_id, bool forbidden_flag) {
-    DominoHumanInboxMessage message = {
-        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION,
-        .payload.test_sleep_condition = {.human_id = human_id, .forbidden_flag = forbidden_flag},
-    };
-    dominoHumanExecutorSubmit(&message);
-}
-
-DOMINO_CODE dominoHumanSubmitEnergyForTest(domino_human_id_t human_id, uint8_t energy) {
-    if (energy > DOMINO_HUMAN_NEED_MAX) {
-        return ERR_INVALID_PARAM;
-    }
-    DominoHumanInboxMessage message = {
-        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY,
-        .payload.test_energy = {.human_id = human_id, .energy = energy},
-    };
-    dominoHumanExecutorSubmit(&message);
-    return CODE_OK;
-}
-
-DOMINO_CODE dominoHumanSubmitStimulusForTest(domino_human_id_t human_id, uint8_t stimulus_kind, uint32_t source_id) {
-    if (stimulus_kind >= DOMINO_HUMAN_STIMULUS_COUNT) {
-        return ERR_INVALID_PARAM;
-    }
-    DominoHumanInboxMessage message = {
-        .type = DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS,
-        .payload.test_stimulus = {.human_id = human_id, .source_id = source_id, .stimulus_kind = stimulus_kind},
-    };
-    dominoHumanExecutorSubmit(&message);
-    return CODE_OK;
-}
-#endif
-
 /** @brief 释放人物容器和映射表并复位为空。 */
 static void releaseHumanEntities(void) {
     dominoHumanIdMap_destroy(g_domino_human_id_map);

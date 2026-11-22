@@ -13,7 +13,6 @@
  * 从仓库根目录或 VS Code 任务运行时也不会写进源码树。
  */
 int main(int argc, char* argv[]) {
-    // dominoEnginePlayground(argc, argv);
     if (argc < 1 || argv[0] == NULL) {
         DOMINO_EXIT_WITH_ERROR(ERR_INVALID_PARAM, "缺少可执行文件路径");
     }

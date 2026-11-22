@@ -31,8 +31,8 @@ static bool cancelDeliveredEvent(DominoThreadQueue* event_queue_ptr, domino_game
     uint32_t index = event_queue_ptr->head;
     for (uint32_t i = 0U; i < event_queue_ptr->count; ++i) {
         DominoHumanInboxMessage* message_ptr = &items_ptr[index];
-        if (message_ptr->type == DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER && message_ptr->payload.game_timer.game_timer_id == game_timer_id) {
-            message_ptr->payload.game_timer.cancelled_flag = true;
+        if (message_ptr->game_timer.game_timer_id == game_timer_id) {
+            message_ptr->game_timer.cancelled_flag = true;
             found_flag = true;
             break;
         }

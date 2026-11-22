@@ -12,12 +12,8 @@ static_assert(DOMINO_HUMAN_NEED_MINUTE_MS / DOMINO_HUMAN_SLEEP_ENERGY_POINT_MS >
 
 DominoHumanAiConfig g_domino_human_ai_config;
 
-#ifdef DOMINO_PLAYGROUND_MODE
-static DominoHumanAiConfig g_next_config;
-static bool g_next_config_flag;
-#endif
-
-DominoHumanAiConfig dominoHumanDefaultAiConfig(void) {
+/** @brief 内置默认配置。 */
+static DominoHumanAiConfig defaultAiConfig(void) {
     DominoHumanAiConfig config = {
         .retry_delay_ms = 3000U,
         .result_quota = 8U,
@@ -34,12 +30,7 @@ DominoHumanAiConfig dominoHumanDefaultAiConfig(void) {
 }
 
 void dominoHumanAiConfigInit(void) {
-    DominoHumanAiConfig config = dominoHumanDefaultAiConfig();
-#ifdef DOMINO_PLAYGROUND_MODE
-    if (g_next_config_flag) {
-        config = g_next_config;
-    }
-#endif
+    const DominoHumanAiConfig config = defaultAiConfig();
     for (uint32_t kind = 0U; kind < DOMINO_HUMAN_PLANNER_COUNT; kind++) {
         const DominoHumanPlannerConfig* planner_ptr = &config.planner_list[kind];
         // high_quota 受每批临时存储上限约束，保证每批工作有限。
@@ -61,17 +52,5 @@ void dominoHumanAiConfigInit(void) {
 }
 
 void dominoHumanAiConfigDestroy(void) {
-    // playground 指定的配置是进程级设置，不在这里清除。
     memset(&g_domino_human_ai_config, 0, sizeof(g_domino_human_ai_config));
 }
-
-#ifdef DOMINO_PLAYGROUND_MODE
-void dominoHumanSetNextAiConfig(const DominoHumanAiConfig* config_ptr) {
-    if (config_ptr == nullptr) {
-        g_next_config_flag = false;
-        return;
-    }
-    g_next_config = *config_ptr;
-    g_next_config_flag = true;
-}
-#endif

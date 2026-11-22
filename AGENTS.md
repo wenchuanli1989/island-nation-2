@@ -51,9 +51,10 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 ```
 
 - **构建目标：** 各构建模式都可追加 `target`：`shared`、`engine`、`engine-remote-local`、`engine-remote-server`、`client-hub`、`playground`，脚本拼成 CMake 目标 `domino-<target>`；省略时构建全部。
-- **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/npc_ai`；脚本拒绝不带目标的调用。`lib/` 由 `lib/.clang-format` 关闭格式化；目标覆盖 `playground/算法/` 时（如 `format playground`）会改写其中的第三方 `khash.h`，格式化后用 `git status --short -- playground/算法/` 确认它未变。
+- **格式化：** `.clang-format` 基于 Google 风格：4 空格缩进、150 列、大括号不换行、指针星号靠左、头文件自动排序。提交前只格式化改动所在的模块或目录，例如 `format engine`、`format shared`、`format playground/src`；脚本拒绝不带目标的调用。`lib/` 由 `lib/.clang-format` 关闭格式化；目标覆盖 `playground/算法/` 时（如 `format playground`）会改写其中的第三方 `khash.h`，格式化后用 `git status --short -- playground/算法/` 确认它未变。
 - **默认 Playground：** 入口为 `playground/src/main.c`。运行 `build-<preset>/bin/domino-playground`，完成一次引擎生命周期后退出；存档按可执行文件位置写在其构建目录的 `runtime/sandbox/`，与工作目录无关，再次运行会加载该存档。
-- **实验与模块夹具：** `playground-build`／`playground-run` 以 `DOMINO_PLAYGROUND_MODE=ON` 构建，`PLAYGROUND_SOURCE_DIR` 指向 `playground/` 下含 `main.c` 的实验目录。模块内部夹具经 `engine/src/playground.c` 的 `dominoEnginePlayground()` 分派：参数为 `npc_ai <sandbox_dir> <work_dir>` 时运行 `engine/src/human/playground.c`，其余参数运行同文件内的导航演示；`playground/npc_ai/main.c` 是 NPC AI 的调用示例。
+- **实验：** `playground-build`／`playground-run` 以 `DOMINO_PLAYGROUND_MODE=ON` 构建，`PLAYGROUND_SOURCE_DIR` 指向 `playground/` 下含 `main.c` 的实验目录。
+- **测试代码：** 当前仓库没有测试代码和模块内部夹具，提交范围见宪法第十一章。不提交的非核心测试代码和临时代码放在根目录 `temp/` 或 `playground/temp/`（后者可用 `playground-build` 构建），由 `.gitignore` 的 `temp/` 规则忽略；不要放进各模块的 `src/`，那里的 `.c` 会被自动收集进正式构建。
 - **共用构建目录：** `playground-build`／`playground-run` 复用同名预设的 `build-<preset>/`，`bin/domino-playground` 是最近一次配置的入口；普通构建（如 `debug`）恢复默认入口并关闭 Playground 模式。切换模式会改变全部项目目标的编译定义，等于全量重编。clangd 读取 `build-debug`（macOS 为 `build-macos-debug`）的编译数据库，IDE 诊断也随最近一次配置变化。
 - **源文件与夹具：** 除 engine-remote/server 显式列出源文件外，各模块从 `src/` 自动收集 `.c`（`GLOB_RECURSE … CONFIGURE_DEPENDS`），增删源文件无需修改 CMake。名为 `playground.c` 的文件是模块内部夹具，正式构建由顶层 `CMakeLists.txt` 的 `domino_exclude_playground_sources()` 排除；其他文件中的测试代码用 `DOMINO_PLAYGROUND_MODE` 宏条件编译。
 
@@ -154,9 +155,9 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 ## NPC AI 实现
 
-架构为 动机 → 任务 → 行为 → 动画，设计边界见 [`npc_ai.md`](doc/npc_ai.md)。第一阶段的生产策略只实现恢复精力动机与自主睡眠。通用计时任务／行为（通话、消息、工作）、回应外部信息的动机／任务和插入行为，只用于在受控规划场景中验证主辅行为、行为依赖和应激。
+架构为 动机 → 任务 → 行为 → 动画，设计边界见 [`npc_ai.md`](doc/npc_ai.md)。第一阶段的生产策略只实现恢复精力动机与自主睡眠。通用计时任务／行为（通话、消息、工作）、回应外部信息的动机／任务和插入行为已有执行规则，但第一阶段生产策略不产生它们，外部信息也没有登记入口，目前不会在运行中出现。
 
-信息差和执行器复核遵循宪法第六章。下文的配置字段和容量常量以代码为准，默认值见 `engine/src/human/rules.c` 的 `dominoHumanDefaultAiConfig()`。
+信息差和执行器复核遵循宪法第六章。下文的配置字段和容量常量以代码为准，默认值见 `engine/src/human/rules.c` 的 `defaultAiConfig()`。
 
 ### 规划线程与请求
 
@@ -173,7 +174,8 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 - **任务范围：** 任务规划以人物为范围（`DOMINO_HUMAN_PLAN_SCOPE_HUMAN`），规划器自行决定为哪些动机建任务；每个任务只归属一个有效动机。
 - **触发标志：** 动机和任务规划由人物运行态的待规划标志触发。标志只在本会话有效，投递请求时清除，结果不改变标志。
   - 动机待评估标志的置位来源：加载、登记外部信息、任务进入执行终态或被撤销、动机下次规划时刻到达。
-  - 任务待规划标志的置位来源：加载（仅有有效动机的人物）、动机结果实际新建或终结了动机、任务进入执行终态或被撤销、登记外部信息、测试验收专用的精力或睡眠条件输入实际发生改变、任务下次规划时刻到达。
+  - 任务待规划标志的置位来源：加载（仅有有效动机的人物）、动机结果实际新建或终结了动机、任务进入执行终态或被撤销、登记外部信息、睡眠条件或精力输入实际发生改变、任务下次规划时刻到达。
+  - 外部信息、睡眠条件和精力目前都没有输入入口，相应的置位来源暂不会出现。
   - 运行任务启动、让位，以及“没有有效动机”本身，都不置位。
 - **下次规划时刻：** 动机和任务规划器随每种结果给出下次规划时刻或“无”（行为恒为无效）。执行器覆盖保存该时刻并并入人物唤醒；整份候选被拒时设为处理时刻 + `retry_delay_ms`。动机和任务没有规划重试，三类规划器都不登记计时器。
 
@@ -195,7 +197,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 ### 外部信息与应激
 
-外部信息登记为人物事实（类别、来源、轮次，持久化）；当前只能通过测试验收专用入口 `dominoHumanSubmitStimulusForTest()` 登记。每种任务类型实现自己的应激规则：
+外部信息登记为人物事实（类别、来源、轮次，持久化），当前没有登记入口；以后新增的入口须先按旧值结算到登记时刻，再写入并置动机与任务待规划标志。每种任务类型实现自己的应激规则：
 
 - **接受插入：** 行为规划器为运行任务插入辅助步骤。插入步骤只用辅助通道、没有依赖，不计入成功证明和进度。第一阶段的通用计时任务接受插入。
 - **完全让位：** 回应任务的工作身份为外部信息来源 + 轮次，放在队首并带让位请求。回应任务的首批步骤可以启动时，运行任务才取消全部当前行为、清空未来步骤，保持 OPEN 状态回到队首；回应任务结束后，原任务按原身份恢复。第一阶段的睡眠完全让位。
@@ -207,11 +209,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 ### 测试与验证
 
-- **测试验收专用输入：** 睡眠条件、精力和外部信息各有独立的执行器收件消息，入口为 `dominoHumanSubmitSleepConditionForTest()`、`dominoHumanSubmitEnergyForTest()`、`dominoHumanSubmitStimulusForTest()`，编译与清理规则见宪法第十章。执行器先按旧值结算到本次时刻，再写入实际变化，并在同一边界统一决策；人物不存在时忽略。
-- **验证入口：** `./scripts/build.sh playground-run playground/npc_ai/main.c debug`（也支持 `release`、`sanitize`、`tsan`）。
-  - 先运行模块内部夹具 `engine/src/human/playground.c`（仅在 `DOMINO_PLAYGROUND_MODE` 下编译），覆盖结算分段与预测一致、请求身份与不设期限、候选提交与容量、信息差与轮次锚点、行为依赖、截止点、应激插入与让位、测试输入、规划触发与下次规划时刻、行为规划询问范围等。
-  - 再在真实线程下用样例存档副本运行端到端场景：自主睡眠、客户端通道骨架、冻结、停止后读档延续、第二轮需求、条件失效与恢复、仅 Init 生命周期，以及受控规划器下睡眠被通话完全让位、停止保存读档后继续、通话结束后睡眠恢复。测试线程持 human 读锁直接观察，不经客户端通道。端到端存档写在 `build-<preset>/runtime/`。
-- **验收清单：** [npc_ai.md 第 12.4 节](doc/npc_ai.md#124-验收清单)列出逐项验收要求和任务完成边界场景；改动 NPC AI 时据此补充或调整夹具与端到端场景。
+当前没有 NPC AI 的测试代码和夹具。[npc_ai.md 第 12.4 节](doc/npc_ai.md#124-验收清单)列出逐项验收要求和任务完成边界场景，改动 NPC AI 时据此验证；测试代码的提交范围见宪法第十一章，测试注入的业务输入见宪法第十章。
 
 ## 存档
 
@@ -227,11 +225,6 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
   - `human_motivation`：身份、类型、生命周期（终态记在 `status` 中，已回收的动机不再保存）、需求轮次与承接任务、累计实施次数、最近失败原因，以及按时间顺序的最近成功明细。
   - `human_task`：工作身份、动机引用、回应的外部信息类别、完成指标、截止点、最后已分配的步骤序号、未来行为计划值（步骤序号、通道、插入标志、行为依赖）、行为规划重试依据、让位请求、“完成条件已成立”标志，以及可选的执行部分（实际时刻、各通道当前行为、最近行为、主行为成功／失败／取消计数、归并进度和结束原因）。
   - `human_behavior`：步骤序号、通道、插入标志、行为依赖、类型、状态、实际时刻、目标有效时长、有效进度和结束原因。
-- **样例存档** `playground/sandbox/domino`（版本 32）：
-  - 人物及其 data 的 `human_id=1`，`data.energy=20`，`data.wealth=100`。
-  - 动机、任务清单和待执行队列为空，运行任务为 0，没有待处理外部信息，显示称呼为空。
-  - `data.current_building_id=1` 引用名为“样例住宅”的建筑，但其类型、产权和睡眠资格规则尚未定义，不能据此证明它提供睡眠服务。
-  - `data.sleep_fork_road_id` 为 0。这是导航路口 ID，不能填写建筑 ID。
 
 ## 时间语义
 
@@ -246,7 +239,7 @@ Init 记录客户端线程，其余入口在操作资源前检查状态和调用
 
 - **计时命令队列：** `DominoGameTimerRequestMessage`
 - **三类规划器：** 六条请求队列使用 `DominoHumanPlanRequestMessage`，六条结果队列使用 `DominoHumanPlanResultMessage`。候选扁平块布局（公共头及动机／任务／行为条目）同样定义在 `engine/src/queue/message.h`。
-- **human 执行器混合收件箱：** `DominoHumanInboxMessage`，承载计时通知；playground 下另有测试验收专用的睡眠条件、精力、外部信息输入。
+- **human 执行器收件箱：** `DominoHumanInboxMessage`，只承载 GameTimer 到期通知（队列 ID + 按值保存的计时记录）。
 - **客户端收发队列：** `DominoEngineMessage`，见[客户端边界](#客户端边界)。
 
 ## 编码规范

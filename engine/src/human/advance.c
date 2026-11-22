@@ -12,6 +12,13 @@
 #include "state.h"
 #include "store.h"
 
+/** @brief 待处理外部信息对规划的需要。 */
+typedef enum {
+    DOMINO_HUMAN_STIMULUS_NEED_NONE = 0,  ///< 没有待处理外部信息。
+    DOMINO_HUMAN_STIMULUS_NEED_INSERT,    ///< 运行任务接受插入：需要为它规划插入的辅助步骤。
+    DOMINO_HUMAN_STIMULUS_NEED_TASK,      ///< 没有运行任务或运行任务选择完全让位：需要回应任务。
+} DOMINO_HUMAN_STIMULUS_NEED;
+
 /** @brief 一段共同区间的结算视图：需求局部值和运行任务各通道当前行为（真实记录或局部副本）。
  * @note 真实结算与只读预测共用同一视图、同一分段选择和同一基础计算，只是写入目标不同。
  */
@@ -35,7 +42,8 @@ static bool hasLiveTask(const DominoHumanData* data_ptr) {
     return false;
 }
 
-DominoTask* dominoHumanGetActiveTask(const DominoHumanData* data_ptr) {
+/** @brief 人物的运行任务，没有返回空指针。 */
+static DominoTask* getActiveTask(const DominoHumanData* data_ptr) {
     return data_ptr->active_task_id != 0U ? dominoGetTaskById(data_ptr->active_task_id) : nullptr;
 }
 
@@ -43,7 +51,7 @@ DominoTask* dominoHumanGetActiveTask(const DominoHumanData* data_ptr) {
 static void loadSegmentView(HumanSegmentView* view_ptr, const DominoHumanData* data_ptr, DominoBehavior* local_list) {
     view_ptr->needs = dominoHumanReadNeeds(data_ptr);
     view_ptr->condition = conditionOf(data_ptr);
-    const DominoTask* active_ptr = dominoHumanGetActiveTask(data_ptr);
+    const DominoTask* active_ptr = getActiveTask(data_ptr);
     bool behavior_flag = false;
     for (uint8_t channel = 0U; channel < DOMINO_BEHAVIOR_CHANNEL_COUNT; channel++) {
         const domino_behavior_id_t behavior_id = active_ptr != nullptr ? active_ptr->current_behavior_id_list[channel] : 0U;
@@ -371,7 +379,7 @@ static void resolveBoundaryAt(DominoHuman* human_ptr, domino_runtime_ms_t now_ms
     const uint32_t pass_max = (2U * (uint32_t)data_ptr->task_count) + (2U * DOMINO_BEHAVIOR_CHANNEL_COUNT) + 2U;
     for (uint32_t pass = 0U; pass <= pass_max; pass++) {
         bool changed_flag = false;
-        DominoTask* active_ptr = dominoHumanGetActiveTask(data_ptr);
+        DominoTask* active_ptr = getActiveTask(data_ptr);
         if (active_ptr != nullptr) {
             changed_flag = resolveTaskBehaviors(active_ptr, now_ms);
         }
@@ -416,12 +424,13 @@ void dominoHumanSettleAll(domino_runtime_ms_t now_ms) {
     }
 }
 
-uint8_t dominoHumanGetStimulusNeed(const DominoHuman* human_ptr) {
+/** @brief 待处理外部信息需要哪种规划（DOMINO_HUMAN_STIMULUS_NEED）：由运行任务的应激规则决定接受插入还是让位。 */
+static uint8_t getStimulusNeed(const DominoHuman* human_ptr) {
     const DominoHumanData* data_ptr = human_ptr->data;
     if (data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE) {
         return DOMINO_HUMAN_STIMULUS_NEED_NONE;
     }
-    const DominoTask* active_ptr = dominoHumanGetActiveTask(data_ptr);
+    const DominoTask* active_ptr = getActiveTask(data_ptr);
     if (active_ptr == nullptr) {
         return DOMINO_HUMAN_STIMULUS_NEED_TASK;
     }
@@ -775,7 +784,7 @@ static void yieldActiveTask(DominoHuman* human_ptr, DominoTask* active_ptr, domi
 
 bool dominoHumanStartReadyWork(DominoHuman* human_ptr, domino_runtime_ms_t now_ms) {
     DominoHumanData* data_ptr = human_ptr->data;
-    DominoTask* active_ptr = dominoHumanGetActiveTask(data_ptr);
+    DominoTask* active_ptr = getActiveTask(data_ptr);
     if (data_ptr->task_queue_count != 0U) {
         const DominoTask* head_ptr = dominoGetTaskById(data_ptr->task_queue_list[0]);
         const bool head_ready = head_ptr->plan_item_count != 0U && taskHasStartableStep(human_ptr, head_ptr);
@@ -829,7 +838,7 @@ void dominoHumanReclaimEnded(DominoHuman* human_ptr) {
 }
 
 uint8_t dominoHumanComputeState(const DominoHuman* human_ptr) {
-    const DominoTask* active_ptr = dominoHumanGetActiveTask(human_ptr->data);
+    const DominoTask* active_ptr = getActiveTask(human_ptr->data);
     for (uint8_t channel = 0U; active_ptr != nullptr && channel < DOMINO_BEHAVIOR_CHANNEL_COUNT; channel++) {
         if (active_ptr->current_behavior_id_list[channel] != 0U) {
             return DOMINO_HUMAN_STATE_NORMAL;
@@ -842,7 +851,7 @@ bool dominoHumanTaskNeedsBehaviorPlan(const DominoHuman* human_ptr, const Domino
     if (!dominoTaskIsLive(task_ptr)) {
         return false;
     }
-    if (task_ptr->task_id == human_ptr->data->active_task_id && dominoHumanGetStimulusNeed(human_ptr) == DOMINO_HUMAN_STIMULUS_NEED_INSERT) {
+    if (task_ptr->task_id == human_ptr->data->active_task_id && getStimulusNeed(human_ptr) == DOMINO_HUMAN_STIMULUS_NEED_INSERT) {
         return true;
     }
     if ((task_ptr->flags & DOMINO_TASK_FLAG_COMPLETION_REACHED) != 0U) {

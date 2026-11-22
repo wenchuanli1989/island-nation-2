@@ -92,8 +92,7 @@
         "shared",
         "client-hub",
         "engine-remote",
-        "playground/src",
-        "playground/npc_ai"
+        "playground/src"
       ],
       "default": "engine"
     },

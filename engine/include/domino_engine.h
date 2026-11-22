@@ -76,8 +76,4 @@ extern DOMINO_CODE dominoEngineSendMessage(DominoEngineMessage* message_ptr);
  */
 extern DOMINO_CODE dominoEngineReceiveMessage(DominoEngineMessage* message_out_ptr, bool blocking);
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/** @brief 模块内部夹具入口：`npc_ai <sandbox_dir> <work_dir>` 运行 NPC AI 验证，其余参数运行导航演示。 */
-extern int dominoEnginePlayground(int argc, char* argv[]);
-#endif
 #endif

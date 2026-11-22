@@ -34,7 +34,7 @@ void dominoGameTimerNotifyTimeChanged(void);
  * @param event_type、target_id 业务自定义的事件类型和目标 ID，原样随通知送回。
  * @param game_timer_id_out_ptr 输出本次 Init 内唯一的非零登记 ID，可凭它取消；失败时为 0。
  * @return CODE_OK；空指针 ERR_NULL_POINTER；队列元素大小不符 ERR_INVALID_PARAM。
- * @note 到期通知为 type = DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER 的收件消息，payload.game_timer 按值保存原登记记录。
+ * @note 到期通知为收件消息，game_timer 按值保存原登记记录。
  * 登记时会读取一次业务时间做范围校验。冻结期间和退出末批仍可登记。
  */
 DOMINO_CODE dominoGameTimerScheduleAt(DominoThreadQueue* event_queue_ptr, domino_runtime_ms_t due_ms, uint8_t event_type, uint64_t target_id,

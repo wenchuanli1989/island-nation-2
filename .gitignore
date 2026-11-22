@@ -4,6 +4,7 @@ build-*/
 # 静态分析报告
 scan-build-reports/
 
+# 非核心测试代码与临时代码（宪法第十一章）：匹配任意层级的 temp/，如根目录 temp/、playground/temp/
 temp/
 
 # 实验输出

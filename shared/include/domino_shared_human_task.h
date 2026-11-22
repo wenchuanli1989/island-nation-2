@@ -32,7 +32,7 @@ enum {
 typedef enum {
     DOMINO_MOTIVATION_TYPE_NONE = 0,
     DOMINO_MOTIVATION_TYPE_RESTORE_ENERGY,   ///< 维持型：恢复并维持精力，可长期驱动多轮睡眠任务。
-    DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT,  ///< 维持型：回应来电、消息等联系；第一阶段仅供受控规划场景使用。
+    DOMINO_MOTIVATION_TYPE_RESPOND_CONTACT,  ///< 维持型：回应来电、消息等联系；第一阶段生产策略不产生。
     DOMINO_MOTIVATION_TYPE_COUNT,
 } DOMINO_MOTIVATION_TYPE;
 
@@ -60,8 +60,8 @@ typedef enum {
     DOMINO_TASK_TYPE_TRAVEL,
     DOMINO_TASK_TYPE_PARADE,
     DOMINO_TASK_TYPE_SLEEP,       ///< 睡眠：精力达到完成条件，且至少一个所属睡眠行为成功结束。
-    DOMINO_TASK_TYPE_PHONE_CALL,  ///< 通话：通用计时任务规则，第一阶段仅由受控规划场景产生。
-    DOMINO_TASK_TYPE_MESSAGE,     ///< 消息处理：通用计时任务规则，第一阶段仅由受控规划场景产生。
+    DOMINO_TASK_TYPE_PHONE_CALL,  ///< 通话：通用计时任务规则，第一阶段生产策略不产生。
+    DOMINO_TASK_TYPE_MESSAGE,     ///< 消息处理：通用计时任务规则，第一阶段生产策略不产生。
     DOMINO_TASK_TYPE_COUNT,
 } DOMINO_TASK_TYPE;
 
@@ -133,7 +133,7 @@ typedef enum {
     DOMINO_TASK_SOURCE_COUNT,
 } DOMINO_TASK_SOURCE;
 
-/** @brief 人物待处理外部信息的类别；由外部信息输入登记（当前只有测试验收专用入口），由运行任务的应激规则选择完全让位或接受插入。 */
+/** @brief 人物待处理外部信息的类别；由外部信息输入登记（当前没有登记入口），由运行任务的应激规则选择完全让位或接受插入。 */
 typedef enum {
     DOMINO_HUMAN_STIMULUS_NONE = 0,
     DOMINO_HUMAN_STIMULUS_CONTACT,  ///< 联系：来电、搭讪等需要回应的外部信息。

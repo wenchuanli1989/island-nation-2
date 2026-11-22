@@ -198,59 +198,15 @@ typedef struct DominoBehaviorCandidateEntry {
 } DominoBehaviorCandidateEntry;
 
 /* ---------------------------------------------------------------------------------------------------------------- */
-/* 人物执行器混合收件箱                                                                                               */
+/* 人物执行器收件箱                                                                                                   */
 /* ---------------------------------------------------------------------------------------------------------------- */
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/* 测试验收专用：睡眠条件、精力、外部信息三类人物输入，只在 playground 编译；清理测试代码时与
- * human/entry.h、human/entry.c、human/executor.c 中同样标注的部分一并删除。
- */
-
-/** @brief 测试验收专用：睡眠条件输入。 */
-typedef struct DominoHumanTestSleepConditionInput {
-    domino_human_id_t human_id;
-    bool forbidden_flag;  ///< 睡眠执行条件当前不成立为 true。
-} DominoHumanTestSleepConditionInput;
-
-/** @brief 测试验收专用：精力输入。 */
-typedef struct DominoHumanTestEnergyInput {
-    domino_human_id_t human_id;
-    uint8_t energy;  ///< 新精力，0..DOMINO_HUMAN_NEED_MAX，入队前已校验。
-} DominoHumanTestEnergyInput;
-
-/** @brief 测试验收专用：外部信息输入；来源与类别同次写入。 */
-typedef struct DominoHumanTestStimulusInput {
-    domino_human_id_t human_id;
-    uint32_t source_id;     ///< 外部信息来源，例如来电人物 ID。
-    uint8_t stimulus_kind;  ///< DOMINO_HUMAN_STIMULUS_KIND，入队前已校验；NONE 表示撤回尚未承接的外部信息。
-} DominoHumanTestStimulusInput;
-#endif
-
-/** @brief 人物执行器收件消息的类型。 */
-typedef enum DOMINO_HUMAN_INBOX_MESSAGE_TYPE {
-    DOMINO_HUMAN_INBOX_MESSAGE_NONE = 0,
-    DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER,
-#ifdef DOMINO_PLAYGROUND_MODE
-    DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION,  ///< 测试验收专用：payload.test_sleep_condition。
-    DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY,           ///< 测试验收专用：payload.test_energy。
-    DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS,         ///< 测试验收专用：payload.test_stimulus。
-#endif
-} DOMINO_HUMAN_INBOX_MESSAGE_TYPE;
-
-/** @brief 人物执行器收件消息：计时通知，playground 另有测试验收专用的人物输入；规划结果走独立的结果队列。
- * @note 载荷全部按值保存，无需释放。
+/** @brief 人物执行器收件消息：唯一类型是 GameTimer 到期通知；规划结果走独立的结果队列。
+ * @note 不直接复用 DominoGameTimerRequestMessage：收件队列回写首字段，会覆盖计时器身份。载荷按值保存，无需释放。
  */
 typedef struct DominoHumanInboxMessage {
-    uint64_t id;  ///< 收件队列回写的消息 ID，与载荷中的业务 ID 无关。
-    union {
-        DominoGameTimerRequestMessage game_timer;
-#ifdef DOMINO_PLAYGROUND_MODE
-        DominoHumanTestSleepConditionInput test_sleep_condition;  ///< 测试验收专用。
-        DominoHumanTestEnergyInput test_energy;                   ///< 测试验收专用。
-        DominoHumanTestStimulusInput test_stimulus;               ///< 测试验收专用。
-#endif
-    } payload;
-    DOMINO_HUMAN_INBOX_MESSAGE_TYPE type;
+    uint64_t id;                               ///< 收件队列回写的消息 ID，与计时记录中的业务 ID 无关。
+    DominoGameTimerRequestMessage game_timer;  ///< 按值保存的原登记记录。
 } DominoHumanInboxMessage;
 
 static_assert(offsetof(DominoHumanInboxMessage, id) == 0, "DominoHumanInboxMessage id must be first for queue ID writeback");

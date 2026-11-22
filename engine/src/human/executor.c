@@ -937,114 +937,6 @@ static void processResult(uint8_t planner_kind, uint8_t priority, DominoHumanPla
     followUpHuman(human_ptr, now_ms);
 }
 
-#ifdef DOMINO_PLAYGROUND_MODE
-/* ---------------------------------------------------------------------------------------------------------------- */
-/* 测试验收专用：人物输入（清理测试代码时一并删除）                                                                    */
-/* ---------------------------------------------------------------------------------------------------------------- */
-
-/** @brief 测试验收专用：睡眠条件只修改标志，失效后的处置由随后的统一决策完成。
- * @return 是否实际变化。
- */
-static bool applyTestSleepCondition(DominoHumanData* data_ptr, bool forbidden_flag) {
-    if (((data_ptr->ai_flags & DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN) != 0U) == forbidden_flag) {
-        return false;
-    }
-    if (forbidden_flag) {
-        data_ptr->ai_flags |= DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN;
-    } else {
-        data_ptr->ai_flags = (uint8_t)(data_ptr->ai_flags & ~DOMINO_HUMAN_AI_FLAG_SLEEP_FORBIDDEN);
-    }
-    return true;
-}
-
-/** @brief 测试验收专用：写入新精力后交给仍承担责任的任务记录输入事实。
- * @return 是否实际变化。
- */
-static bool applyTestEnergy(DominoHumanData* data_ptr, uint8_t energy) {
-    if (data_ptr->energy == energy) {
-        return false;
-    }
-    data_ptr->energy = energy;
-    for (uint8_t index = 0U; index < data_ptr->task_count; index++) {
-        DominoTask* task_ptr = dominoGetTaskById(data_ptr->task_id_list[index]);
-        if (dominoTaskIsLive(task_ptr)) {
-            dominoHumanGetTaskRules(task_ptr->type)->on_energy_input(task_ptr, energy);
-        }
-    }
-    return true;
-}
-
-/** @brief 测试验收专用：来源与类别同次写入；类别由 NONE 变为非 NONE 时开启新一轮外部信息，回应由运行任务的应激规则
- * 在随后的统一调度中选择。
- * @note 最小实现只保存一条待处理外部信息；同类信息未被承接时再次到达不重复开轮，只更新来源。
- * @return 是否实际变化。
- */
-static bool applyTestStimulus(DominoHuman* human_ptr, const DominoHumanTestStimulusInput* input_ptr) {
-    DominoHumanData* data_ptr = human_ptr->data;
-    if (data_ptr->stimulus_source_id == input_ptr->source_id && data_ptr->stimulus_kind == input_ptr->stimulus_kind) {
-        return false;
-    }
-    data_ptr->stimulus_source_id = input_ptr->source_id;
-    if (input_ptr->stimulus_kind != DOMINO_HUMAN_STIMULUS_NONE && data_ptr->stimulus_kind == DOMINO_HUMAN_STIMULUS_NONE) {
-        if (data_ptr->stimulus_round == UINT32_MAX) {
-            DOMINO_EXIT_WITH_ERROR(ERR_ID_EXHAUSTED, "human=%" PRIu32 " stimulus round exhausted", human_ptr->human_id);
-        }
-        data_ptr->stimulus_round++;
-    }
-    data_ptr->stimulus_kind = input_ptr->stimulus_kind;
-    return true;
-}
-
-/** @brief 测试验收专用：人物输入先按旧值结算到本次时刻，再写入实际变化、置相应待规划标志，并在同一边界判定和收尾；人物不存在时忽略。
- * @pre 执行器持写锁，或 playground 串行直访。
- */
-static void processTestInput(const DominoHumanInboxMessage* message_ptr) {
-    domino_human_id_t human_id;
-    switch (message_ptr->type) {
-        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
-            human_id = message_ptr->payload.test_sleep_condition.human_id;
-            break;
-        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
-            human_id = message_ptr->payload.test_energy.human_id;
-            break;
-        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS:
-            human_id = message_ptr->payload.test_stimulus.human_id;
-            break;
-        default:
-            DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human test input type=%d", (int)message_ptr->type);
-    }
-    DominoHuman* human_ptr = dominoGetHumanById(human_id);
-    if (!human_ptr) {
-        return;
-    }
-    domino_runtime_ms_t now_ms;
-    dominoTimeGetRuntimeMs(&now_ms);
-    dominoHumanSettle(human_ptr, now_ms);
-    bool changed_flag;
-    uint8_t plan_mask;
-    switch (message_ptr->type) {
-        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
-            changed_flag = applyTestSleepCondition(human_ptr->data, message_ptr->payload.test_sleep_condition.forbidden_flag);
-            plan_mask = DOMINO_HUMAN_PLAN_MASK_TASK;
-            break;
-        case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
-            changed_flag = applyTestEnergy(human_ptr->data, message_ptr->payload.test_energy.energy);
-            plan_mask = DOMINO_HUMAN_PLAN_MASK_TASK;
-            break;
-        default:
-            /* 登记或撤回外部信息：动机和任务规划器都需要看到新的外部信息。 */
-            changed_flag = applyTestStimulus(human_ptr, &message_ptr->payload.test_stimulus);
-            plan_mask = DOMINO_HUMAN_PLAN_MASK_ALL;
-            break;
-    }
-    if (changed_flag) {
-        dominoHumanMarkPlanPending(human_ptr, plan_mask);
-        dominoHumanResolveBoundary(human_ptr);
-    }
-    followUpHuman(human_ptr, now_ms);
-}
-#endif
-
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* 执行线程                                                                                                           */
 /* ---------------------------------------------------------------------------------------------------------------- */
@@ -1102,24 +994,9 @@ static bool processInbox(DominoHumanInboxMessage* batch_list) {
     }
     const uint64_t locked_at_ns = lockForWrite();
     for (uint32_t index = 0U; index < count; index++) {
-        DominoHumanInboxMessage* message_ptr = &batch_list[index];
-        switch (message_ptr->type) {
-            case DOMINO_HUMAN_INBOX_MESSAGE_GAME_TIMER: {
-                DominoHuman* human_ptr = consumeWakeup(&message_ptr->payload.game_timer);
-                if (human_ptr) {
-                    advanceHumanToNow(human_ptr);
-                }
-                break;
-            }
-#ifdef DOMINO_PLAYGROUND_MODE
-            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_SLEEP_CONDITION:
-            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_ENERGY:
-            case DOMINO_HUMAN_INBOX_MESSAGE_TEST_STIMULUS:
-                processTestInput(message_ptr);
-                break;
-#endif
-            default:
-                DOMINO_EXIT_WITH_ERROR(ERR_INVALID_MESSAGE, "invalid human executor message type=%d", (int)message_ptr->type);
+        DominoHuman* human_ptr = consumeWakeup(&batch_list[index].game_timer);
+        if (human_ptr) {
+            advanceHumanToNow(human_ptr);
         }
     }
     unlockForWrite(locked_at_ns);
@@ -1258,30 +1135,6 @@ void dominoHumanExecutorDestroy(void) {
     memset(&g_executor, 0, sizeof(g_executor));
 }
 
-void dominoHumanExecutorSubmit(DominoHumanInboxMessage* message_ptr) {
-    const DOMINO_CODE code = dominoThreadQueueProduce(&g_executor.inbox, message_ptr, false);
-    if (code != CODE_OK) {
-        DOMINO_EXIT_WITH_ERROR(code, "cannot submit human executor message type=%d", (int)message_ptr->type);
-    }
-}
-
 DominoHumanExecutorStats dominoHumanExecutorGetStats(void) {
     return g_executor.stats;
 }
-
-#ifdef DOMINO_PLAYGROUND_MODE
-void dominoHumanExecutorProcessResultForTest(uint8_t planner_kind, uint8_t priority, DominoHumanPlanResultMessage* result_ptr) {
-    g_executor.batch_seq++;
-    processResult(planner_kind, priority, result_ptr);
-}
-
-void dominoHumanExecutorAdvanceForTest(domino_human_id_t human_id) {
-    g_executor.batch_seq++;
-    advanceHumanToNow(dominoGetHumanById(human_id));
-}
-
-void dominoHumanExecutorProcessMessageForTest(const DominoHumanInboxMessage* message_ptr) {
-    g_executor.batch_seq++;
-    processTestInput(message_ptr);
-}
-#endif

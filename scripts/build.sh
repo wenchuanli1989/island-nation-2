@@ -59,7 +59,7 @@ clang-tidy 选项:
 示例:
   $0 debug
   $0 format engine
-  $0 format playground/npc_ai
+  $0 format playground/src
   $0 clang-tidy
   $0 clang-tidy --strict
   $0 clang-tidy shared
@@ -293,7 +293,7 @@ main() {
         format)
             echo "格式化代码..."
             # 必须指定模块或目录：整库格式化会改写 playground/算法/ 中的第三方代码，并带来与任务无关的改动。
-            [[ -z "${1:-}" ]] && { echo "错误: format 须指定模块或目录，例如 engine、shared、playground/npc_ai" >&2; exit 1; }
+            [[ -z "${1:-}" ]] && { echo "错误: format 须指定模块或目录，例如 engine、shared、playground/src" >&2; exit 1; }
             local target_dir="$1"
             [[ ! -d "$target_dir" ]] && { echo "错误: '$target_dir' 不是一个目录" >&2; exit 1; }
 

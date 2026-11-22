@@ -37,7 +37,7 @@ domino/
 - **骨架模块：** client-hub、engine-remote/local 目前只管理各自的日志资源，提供四阶段入口（如 `dominoClientHubInit()`），尚未代管引擎。
 - **客户端通道：** `dominoEngineSendMessage()`／`dominoEngineReceiveMessage()` 只有通道骨架，尚未定义任何业务场景，主循环会丢弃收到的消息。
 - **NPC AI：** 第一阶段只实现恢复精力动机与自主睡眠。
-- **存档：** JSON 格式，不兼容旧格式；同一存档目录不允许多个进程同时使用。样例存档位于 `playground/sandbox/domino`。
+- **存档：** JSON 格式，不兼容旧格式；同一存档目录不允许多个进程同时使用。
 
 ## 环境要求
 
@@ -83,13 +83,9 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 
 默认 Playground 会完成一次引擎生命周期后退出，例如 `./build-debug/bin/domino-playground`。存档写在可执行文件所在构建目录的 `runtime/sandbox/`（如 `build-debug/runtime/sandbox/`），与工作目录无关，再次运行会加载该存档。
 
-### NPC AI 验证
+### 测试代码
 
-```bash
-./scripts/build.sh playground-run playground/npc_ai/main.c debug      # 也支持 release、sanitize、tsan
-```
-
-验证过程中的存档写在构建目录的 `runtime/` 下。覆盖范围见 AGENTS.md 的「测试与验证」，验收清单见 [npc_ai.md](doc/npc_ai.md) 第 12.4 节。
+仓库目前没有测试代码和夹具。按[项目宪法](doc/项目宪法.md)第十一章，只提交核心测试代码；非核心测试代码和临时代码放在根目录 `temp/` 或 `playground/temp/`，由 `.gitignore` 忽略。NPC AI 的验收清单见 [npc_ai.md](doc/npc_ai.md) 第 12.4 节。
 
 ## 代码质量
 
@@ -100,7 +96,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ./scripts/build.sh scan-build                    # Clang Static Analyzer
 ```
 
-`format` 必须指定目标，不带目标时脚本直接报错；只格式化本次改动的模块，例如 `format shared`、`format playground/npc_ai`。目标覆盖 `playground/算法/` 时会改写其中的第三方 `khash.h`，格式化后须确认它未被改动。
+`format` 必须指定目标，不带目标时脚本直接报错；只格式化本次改动的模块，例如 `format shared`、`format playground/src`。目标覆盖 `playground/算法/` 时会改写其中的第三方 `khash.h`，格式化后须确认它未被改动。
 
 ## 开发环境
 
