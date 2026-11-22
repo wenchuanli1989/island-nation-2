@@ -15,7 +15,7 @@
 
 Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单机离线和在线多人两种模式。它是 CPU 计算密集型模拟引擎，重点关注代码执行速度和内存访问延迟。当前进展集中在本地引擎、公共数据结构、日志、导航、NPC AI 和 JSON 存档；engine-remote 与 client-hub 只有骨架，尚未接入网络通信。
 
-- 暂不执行 clang-tidy 验证，用户另行通知时再执行；其他构建与验证（含 sanitize、TSan）照常进行。
+- **验证范围：** 默认只做编译；sanitize、tsan、profile（含 `playground-build`／`playground-run` 的对应模式）只在用户允许时执行。clang-tidy 暂不执行，用户另行通知时再执行。
 - **仓库资料：** `doc/ai.zip` 是随仓保存的 AI 研究资料，有意保留，不提议删除、移出或为缩小体积改写 git 历史；被取代的文档直接删除，不建归档目录。`doc/claude-code-guide.html` 是 Claude Code 使用教程，以 Artifact 片段形式保存（没有 doctype），不属于项目规范，不补全其 HTML 骨架。
 
 ## 环境与构建
@@ -38,14 +38,14 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 ./scripts/build.sh debug [target]        # 调试模式
 ./scripts/build.sh release [target]      # 发布模式（-O3、ThinLTO）
 ./scripts/build.sh release-native        # 发布模式加 -march=native，仅限本机运行
-./scripts/build.sh profile               # gprof 性能分析
+./scripts/build.sh profile               # gprof 性能分析，须用户允许
 ./scripts/build.sh clean                 # 清理所有 build-* 目录
 
 ./scripts/build.sh format engine         # clang-format，必须指定模块或目录
 ./scripts/build.sh scan-build            # Clang Static Analyzer
 ./scripts/build.sh clang-tidy [--strict] [target]   # 暂不执行
-./scripts/build.sh sanitize              # ASan + UBSan + LSan
-./scripts/build.sh tsan                  # ThreadSanitizer（Linux 改用 lib/tinycthread 提供 <threads.h>）
+./scripts/build.sh sanitize              # ASan + UBSan + LSan，须用户允许
+./scripts/build.sh tsan                  # ThreadSanitizer（Linux 改用 lib/tinycthread 提供 <threads.h>），须用户允许
 
 # Playground（算法实验、子系统原型验证）
 ./scripts/build.sh playground-run playground/算法/路径规划/弗洛伊德/main.c
