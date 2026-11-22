@@ -57,7 +57,7 @@ domino/
 ./scripts/build.sh release-native        # 发布模式加 -march=native，产物仅限本机运行
 ./scripts/build.sh profile               # gprof 性能分析
 ./scripts/build.sh sanitize              # ASan + UBSan + LSan
-./scripts/build.sh tsan                  # ThreadSanitizer
+./scripts/build.sh tsan                  # ThreadSanitizer（Linux 改用 TinyCThread 提供 <threads.h>）
 ./scripts/build.sh clean                 # 清理所有 build-* 目录
 ```
 
@@ -109,7 +109,7 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ```
 
 - **产物：** 位于 `build-macos-debug/`，与 Linux 的 `build-debug/` 分开。
-- **线程库：** macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供。
+- **线程库：** macOS 缺失的 `<threads.h>` 由 [TinyCThread](lib/tinycthread/README.md) 提供。Linux 的 `tsan` 预设设置 `DOMINO_USE_TINYCTHREAD=ON` 同样改用它：glibc 的 `thrd_*`／`mtx_*`／`cnd_*` 在 libc 内部直接调用 pthread 实现，ThreadSanitizer 拦截不到，线程启动即崩溃，同步也无法识别。
 
 ### Codex Cloud
 
@@ -181,6 +181,6 @@ command -v clang clangd clang-format clang-tidy lldb scan-build
 | --- | --- | --- |
 | yyjson | `lib/yyjson/` | JSON 解析 |
 | klib | `lib/klib/` | 只保留 `kvec.h`、`khashl.h`；基于官方 commit `97a0fcb7` 的随仓维护版，带本地补丁 |
-| TinyCThread | `lib/tinycthread/` | 为 macOS 提供 `<threads.h>` |
+| TinyCThread | `lib/tinycthread/` | 为 macOS 及 Linux 的 tsan 构建提供 `<threads.h>` |
 
 第三方代码（含 klib 已有的本地补丁）按宪法 1.2 节保持原样，不再修改；补丁内容见 AGENTS.md 的「第三方库」。

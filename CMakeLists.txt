@@ -29,6 +29,9 @@ option(DOMINO_ENABLE_NATIVE_ARCH
 # Playground 模式运行，用于测试模块内部实现逻辑（由 build.sh playground-build 传入 -D，见 playground/CMakeLists.txt）
 option(DOMINO_PLAYGROUND_MODE "Playground 模式运行，用于测试模块内部实现逻辑（playground-build 时启用）" OFF)
 
+# 非 macOS 平台也改用 lib/tinycthread 提供 <threads.h>（tsan 预设启用，见 lib/CMakeLists.txt）
+option(DOMINO_USE_TINYCTHREAD "非 macOS 平台也使用 TinyCThread 提供 <threads.h>（ThreadSanitizer 构建用）" OFF)
+
 # 当 DOMINO_PLAYGROUND_MODE=OFF 时，从源码列表中排除各级 playground.c（模块内部验证夹具）
 # 各模块在 GLOB 后调用：domino_exclude_playground_sources(SOURCES_VAR)
 macro(domino_exclude_playground_sources var_name)
@@ -117,7 +120,7 @@ target_link_options(domino_options INTERFACE
 # 3. 可以灵活组合不同的 Build Type 和特殊选项
 # ============================================================================
 
-# lib/ 中的 TinyCThread（仅 macOS）与 shared 共用线程库
+# lib/ 中的 TinyCThread（macOS 或 DOMINO_USE_TINYCTHREAD）与 shared 共用线程库
 find_package(Threads REQUIRED)
 
 # 按依赖顺序添加子目录：第三方库 → shared → engine → 上层模块
