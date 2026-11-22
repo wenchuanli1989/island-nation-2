@@ -14,6 +14,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/static-lib)
 
+# Release 的 -flto=thin 产出 bitcode 目标文件，静态库须由与编译器同版本的 llvm-ar／llvm-ranlib 打包。
+# CMAKE_AR 可能选中 PATH 中其他版本的 llvm-ar（如镜像自带的旧版），改用 CMake 按编译器版本探测的工具。
+if(CMAKE_C_COMPILER_AR AND CMAKE_C_COMPILER_RANLIB)
+    set(CMAKE_AR "${CMAKE_C_COMPILER_AR}")
+    set(CMAKE_RANLIB "${CMAKE_C_COMPILER_RANLIB}")
+endif()
+
 # ============================================================================
 # 编译选项控制
 # ============================================================================
