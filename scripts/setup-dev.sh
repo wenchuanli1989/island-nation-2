@@ -30,7 +30,8 @@ apt-get install -y --no-install-recommends build-essential cmake git pahole \
     "clang-tidy-$LLVM_VERSION" "lldb-$LLVM_VERSION" "llvm-$LLVM_VERSION" "llvm-$LLVM_VERSION-linker-tools" \
     "libclang-rt-$LLVM_VERSION-dev"
 
-for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build llvm-symbolizer; do
+# llvm-ar／llvm-ranlib 须与 clang 同版本：ThinLTO 的 .o 是 bitcode，旧版读不了新版产物。
+for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build llvm-symbolizer llvm-ar llvm-ranlib; do
     update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/$tool-$LLVM_VERSION" "$LLVM_VERSION"
     update-alternatives --set "$tool" "/usr/bin/$tool-$LLVM_VERSION"
 done
