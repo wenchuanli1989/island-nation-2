@@ -1,59 +1,45 @@
 #!/usr/bin/env bash
-# Ubuntu 26.04 远程开发环境：sudo bash scripts/setup-dev.sh
+# 标准 Ubuntu 26.04／24.04 的项目安装脚本：sudo bash scripts/setup-dev.sh
+# 其他环境由各自的脚本调用本脚本，只处理自身差异（setup-docker.sh、setup-claude-cloud.sh）。
 set -euo pipefail
 
 [[ $# -eq 0 ]] || { echo "用法: sudo bash $0（LLVM_VERSION 默认 22）" >&2; exit 1; }
-
 # shellcheck source=/dev/null
 source /etc/os-release
-[[ "${ID:-}:${VERSION_ID:-}" == ubuntu:26.04 ]] || { echo "错误: 仅支持 Ubuntu 26.04" >&2; exit 1; }
+[[ "${ID:-}:${VERSION_ID:-}" =~ ^ubuntu:2[46]\.04$ ]] || { echo "错误: 仅支持 Ubuntu 26.04 和 24.04" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "请使用 sudo bash $0 运行" >&2; exit 1; }
 LLVM_VERSION="${LLVM_VERSION:-22}"
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 umask 022
 
-apt-get update
-apt-get install -y ca-certificates gpg wget
-
-# CMake 和 LLVM 官方软件源。
-wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc \
-    | gpg --batch --yes --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
-wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-    | gpg --batch --yes --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${VERSION_CODENAME} main" \
-    > /etc/apt/sources.list.d/kitware.list
-echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" \
-    > /etc/apt/sources.list.d/llvm.list
-chmod 644 /usr/share/keyrings/{kitware,llvm}-archive-keyring.gpg
+# 参数：名称、签名密钥地址、软件源地址与发行代号。
+add_source() {
+    curl -fsSL "$2" -o "/etc/apt/keyrings/$1.asc"
+    echo "deb [signed-by=/etc/apt/keyrings/$1.asc] $3 main" > "/etc/apt/sources.list.d/$1.list"
+}
 
 apt-get update
-apt-get install -y \
-    build-essential cmake git curl vim openssh-server sudo pahole \
-    "clang-${LLVM_VERSION}" "clang-tools-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
-    "clang-format-${LLVM_VERSION}" "clang-tidy-${LLVM_VERSION}" "lldb-${LLVM_VERSION}" \
-    "libclang-rt-${LLVM_VERSION}-dev" "llvm-${LLVM_VERSION}-linker-tools"
-rm -rf /var/lib/apt/lists/*
+apt-get install -y --no-install-recommends ca-certificates curl
+add_source kitware https://apt.kitware.com/keys/kitware-archive-latest.asc "https://apt.kitware.com/ubuntu/ $VERSION_CODENAME"
+add_source llvm https://apt.llvm.org/llvm-snapshot.gpg.key \
+    "https://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-$LLVM_VERSION"
 
-for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build; do
-    update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-${LLVM_VERSION}" "$LLVM_VERSION"
-    update-alternatives --set "$tool" "/usr/bin/${tool}-${LLVM_VERSION}"
+apt-get update
+apt-get install -y --no-install-recommends build-essential cmake git pahole \
+    "clang-$LLVM_VERSION" "clang-tools-$LLVM_VERSION" "clangd-$LLVM_VERSION" "clang-format-$LLVM_VERSION" \
+    "clang-tidy-$LLVM_VERSION" "lldb-$LLVM_VERSION" "llvm-$LLVM_VERSION" "llvm-$LLVM_VERSION-linker-tools" \
+    "libclang-rt-$LLVM_VERSION-dev"
+
+for tool in clang clang++ clangd clang-format clang-tidy lldb scan-build llvm-symbolizer; do
+    update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/$tool-$LLVM_VERSION" "$LLVM_VERSION"
+    update-alternatives --set "$tool" "/usr/bin/$tool-$LLVM_VERSION"
 done
 
-# 沿用原 Dockerfile 的开发用 Git 和 SSH 配置。
-git config --global user.name domino
-git config --global user.email domino@domino.com
-install -d -m 700 /root/.ssh
-if [[ ! -f /root/.ssh/id_ed25519 ]]; then
-    ssh-keygen -t ed25519 -C domino@domino.com -f /root/.ssh/id_ed25519 -N ""
-fi
-if ! ssh-keygen -F github.com -f /root/.ssh/known_hosts >/dev/null 2>&1; then
-    ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts
-fi
-chmod 600 /root/.ssh/known_hosts
-echo 'root:123456' | chpasswd
-install -d -m 755 /run/sshd /etc/ssh/sshd_config.d
-printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/00-domino-dev.conf
-ssh-keygen -A
-/usr/sbin/sshd -t
-
 echo "开发环境安装完成。"
+
+# Ubuntu 24.04 的系统 glibc 低于 2.43，另装独立 glibc。
+if [[ "$VERSION_ID" == 24.04 ]]; then
+    export DOMINO_GLIBC_ROOT="${DOMINO_GLIBC_ROOT:-/opt/glibc-2.43}"
+    bash "$(dirname "${BASH_SOURCE[0]}")/setup-glibc.sh"
+    echo "构建前须设置环境变量 DOMINO_GLIBC_ROOT=$DOMINO_GLIBC_ROOT"
+fi

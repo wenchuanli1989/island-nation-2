@@ -23,10 +23,12 @@ Domino 是基于 C23 的开放世界游戏内核（版本 0.0.1），支持单�
 ### 环境要求
 
 - Linux（目标环境 Ubuntu 26.04 LTS）、CMake 4.2.1+、Clang 22（C23）、glibc 2.43+（时间采样依赖 `timespec_get` 的 `TIME_UTC` 和 `TIME_MONOTONIC`）。
+- **安装脚本：** `scripts/setup-dev.sh` 只负责标准 Ubuntu 26.04／24.04 的项目安装，不含其他环境的配置；其他环境使用单独脚本并尽量复用它，如 `setup-docker.sh`（Docker 开发镜像）、`setup-claude-cloud.sh`。
 - **独立 glibc：** 系统 glibc 版本较低时，设置 `DOMINO_GLIBC_ROOT` 指向 `scripts/setup-glibc.sh` 安装的 glibc 2.43，`build.sh` 随之加载工具链文件 `scripts/linux_x86_64_glibc.cmake`；未设置或为空时使用系统 glibc，脚本不探测安装目录。运行产物时须保留该目录。改变或取消该变量时，`build.sh` 会自动清理对应产物并重建 CMake 缓存。安装脚本和工具链只支持 Linux x86_64，其他架构须使用 2.43+ 的系统 glibc。
 - **Codex Cloud：** `scripts/setup-codex-cloud.sh` 只支持 Debian 13 x86_64。每个新 shell 先 `source /workspace/.local/domino/env.sh`（启用 PATH 并设置 `DOMINO_GLIBC_ROOT`；安装时设置了 `DOMINO_CLOUD_ROOT` 则为该目录下的 `env.sh`），再使用 `scripts/build.sh`。默认执行沙箱的 ptrace 限制会挡住 LeakSanitizer：恢复 sanitize 验证后，须放宽沙箱再以同一普通用户运行，这类失败不代表代码缺陷。
+- **Claude Code 云端：** `scripts/setup-claude-cloud.sh` 只支持 Ubuntu 24.04 x86_64，由环境的 Setup script 以 root 运行，复用 `setup-dev.sh`；glibc 装在 `/opt/glibc-2.43`，`DOMINO_GLIBC_ROOT` 由环境变量配置提供。环境配置和缓存规则见 README 的「Claude Code 云端」。
 - **平台：** 目标为 Windows、macOS、Linux、Android、iOS；当前只要求 Linux 编译通过，暂不要求 API 跨平台适配。macOS 只保留 `./scripts/build.sh macos-debug`：在 Intel Mac 上以 Debug 和 `DOMINO_PLAYGROUND_MODE=ON` 构建默认 Playground，产物在 `build-macos-debug/`；SDK 须支持 `timespec_get(TIME_MONOTONIC)`，缺失的 `<threads.h>` 由 `lib/tinycthread` 提供。
-- 安装脚本（`scripts/` 下的 `setup-codex-cloud.sh`、`setup-dev.sh`、`setup-glibc.sh`）、Docker（`docker/`）及 VS Code 配置见 README 的「独立 glibc」和「开发环境」。
+- 安装脚本（`scripts/` 下的 `setup-*.sh`）、Docker（`docker/`）及 VS Code 配置见 README 的「独立 glibc」和「开发环境」。
 
 ### 构建命令
 

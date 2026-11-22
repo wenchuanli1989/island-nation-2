@@ -4,7 +4,7 @@ name: domino
 services:
   dev-env:
     build:
-      # 镜像只需要 setup-dev.sh，构建上下文限定为 scripts/，不打包源码和构建产物
+      # 镜像只需要安装脚本，构建上下文限定为 scripts/，不打包源码和构建产物
       context: ../scripts
       dockerfile: ../docker/Dockerfile
     container_name: domino-dev

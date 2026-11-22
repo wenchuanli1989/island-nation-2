@@ -70,7 +70,7 @@ DOMINO_GLIBC_ROOT="$HOME/.local/opt/glibc-2.43" ./scripts/build.sh debug
 env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 ```
 
-- **安装：** `scripts/setup-glibc.sh` 安装 Ubuntu 官方 `2.43-2ubuntu2.4` 软件包，并按 `scripts/glibc-2.43-amd64.sha256` 校验。它不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。
+- **安装：** `scripts/setup-glibc.sh` 从 Ubuntu 官方快照 `snapshot.ubuntu.com` 安装 `2.43-2ubuntu2.4` 软件包，并按 `scripts/glibc-2.43-amd64.sha256` 校验。它不替换系统 glibc，也不设置全局 `LD_LIBRARY_PATH`。
 - **构建与运行：** 工具链会同时设置 sysroot、ELF 加载器和运行期库路径，生成的程序可以直接运行，但运行时必须保留该安装目录。
 - **切换：** 改变或取消该变量时，构建脚本会自动清理对应产物并重建 CMake 缓存。
 
@@ -120,26 +120,42 @@ env -u DOMINO_GLIBC_ROOT ./scripts/build.sh debug    # 改用系统 glibc
 | Install script | `bash scripts/setup-codex-cloud.sh` |
 | Start instructions | 每个新 shell 先 `source /workspace/.local/domino/env.sh` |
 | Environment variables（可选） | `DOMINO_CLOUD_ROOT=/workspace/.local/domino`（默认值；可改为其他可写绝对路径，不含空白、双引号或反斜杠） |
-| Public internet access | 启用 Package managers，允许 `deb.debian.org`、`apt.llvm.org`、`archive.ubuntu.com` |
+| Public internet access | 启用 Package managers，允许 `deb.debian.org`、`apt.llvm.org`、`snapshot.ubuntu.com` |
 
 - **安装内容：** 校验软件源签名后解包 CMake、Clang 22、调试分析工具和 Sanitizer 运行库，并通过 `scripts/setup-glibc.sh` 安装独立 glibc 2.43。
 - **不改动系统：** 不调用 `sudo`，不修改系统软件源、密钥或 dpkg 数据库，也不执行软件包维护脚本。
 - **使用前提：** 脚本须连同仓库使用，可重复执行以刷新安装；基础镜像须已有 APT、curl、GnuPG、dpkg-deb、GCC、Make、Git、Perl 和 Python 3.13。
 - **LeakSanitizer：** 默认执行沙箱的 ptrace 限制会挡住 LSan，运行 sanitize 构建的程序前须放宽沙箱，再以同一普通用户运行。
 
-### Ubuntu 26.04 服务器
+### Claude Code 云端
+
+`scripts/setup-claude-cloud.sh` 面向 Claude Code 官方云端环境（Ubuntu 24.04 x86_64），以 root 运行，须连同仓库使用。在 [claude.ai/code](https://claude.ai/code) 输入框下方的环境选择器中新建环境：
+
+| 配置 | 内容 |
+| --- | --- |
+| Network access | Limited，保持勾选 Allow package managers；Allowed domains 添加 `apt.llvm.org` 和 `apt.kitware.com`（每行一个） |
+| Environment variables | `DOMINO_GLIBC_ROOT=/opt/glibc-2.43` |
+| Setup script | `bash "$(find / -maxdepth 6 -path '*/scripts/setup-claude-cloud.sh' -print -quit 2>/dev/null)"` |
+
+- **安装内容：** 复用 `scripts/setup-dev.sh` 安装工具链和独立 glibc 2.43，并处理云端差异：检查上述域名，第三方软件源刷新失败时停用这些源，移除镜像自带旧版 LLVM 的 bfd 插件链接（否则 release 的 ThinLTO 静态库无法链接），最后核验 PATH 中生效的版本。
+- **使用前提：** 云端克隆的是 GitHub 上所选的分支，该分支须已推送并包含本脚本，否则 setup 失败、会话无法正常启动。
+- **环境缓存：** setup 在约 5 分钟内完成才会被缓存，之后的会话直接复用。只有环境里的 Setup script 或网络白名单改变、或约 7 天后才会重跑；只改仓库中的安装脚本不会触发，须同时改动 Setup script 的内容（例如加一行注释）。
+- **验证：** 在新会话中执行 `./scripts/build.sh debug`。
+
+### Ubuntu 26.04／24.04
 
 ```bash
 sudo bash scripts/setup-dev.sh
 sudo LLVM_VERSION=22 bash scripts/setup-dev.sh    # 指定 LLVM 主版本
 ```
 
-- **使用方式：** 脚本可以单独复制到服务器运行，不需要 Docker 或整个仓库；只支持 Ubuntu 26.04，使用系统 glibc，通过 APT 安装 CMake、LLVM、调试和分析工具。
-- **注意：** 脚本会把 root 的 Git 身份设为 `domino <domino@domino.com>`、创建 SSH 密钥，并开启 root 密码登录（密码 `123456`），只适合开发环境。
+- **安装内容：** 通过 APT 安装 CMake、LLVM、调试和分析工具，并把 LLVM 工具设为系统默认版本。
+- **Ubuntu 24.04：** 系统 glibc 低于 2.43，脚本会接着调用 `scripts/setup-glibc.sh`，默认装到 `/opt/glibc-2.43`（可用 `DOMINO_GLIBC_ROOT` 指定），须连同仓库使用；构建前须设置 `DOMINO_GLIBC_ROOT` 指向该目录。
+- **Ubuntu 26.04：** 使用系统 glibc，脚本可以单独复制到服务器运行。
 
 ### Docker + VS Code Remote
 
-镜像定义在 `docker/`，基于 Ubuntu 26.04 LTS，构建时直接调用 `scripts/setup-dev.sh`。
+镜像定义在 `docker/`，基于 Ubuntu 26.04 LTS，构建时调用 `scripts/setup-docker.sh`：复用 `scripts/setup-dev.sh` 安装工具链，再配置 SSH 远程开发。它会把 root 的 Git 身份设为 `domino <domino@domino.com>`、创建 SSH 密钥，并开启 root 密码登录（密码 `123456`），只适合开发容器，不要在服务器上运行。
 
 1. 启动：`docker compose -f docker/compose.yaml up -d --build`（更新 Dockerfile 或安装脚本后重新执行）
 2. VS Code 执行「Remote-SSH: Connect to Host」，连接 `root@localhost -p 10022`，密码 `123456`

@@ -8,11 +8,13 @@ GLIBC_ROOT="$(realpath -m "${DOMINO_GLIBC_ROOT:?请设置 DOMINO_GLIBC_ROOT 为�
 [[ "$GLIBC_ROOT" != / ]] || { echo "错误: 独立 glibc 不能安装到系统根目录" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_CHECKSUMS="$SCRIPT_DIR/glibc-2.43-amd64.sha256"
+# 使用官方快照：固定版本被后续更新取代后会从 archive.ubuntu.com 下架。
+PACKAGE_URL="https://snapshot.ubuntu.com/ubuntu/20261030T000000Z/pool/main/g/glibc"
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/domino-glibc.XXXXXX")"
 trap 'rm -rf -- "$DOWNLOAD_DIR"' EXIT
 
 while read -r _checksum package_file; do
-    curl -fsSL "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/$package_file" -o "$DOWNLOAD_DIR/$package_file"
+    curl -fsSL "$PACKAGE_URL/$package_file" -o "$DOWNLOAD_DIR/$package_file"
 done < "$PACKAGE_CHECKSUMS"
 (
     cd "$DOWNLOAD_DIR"
