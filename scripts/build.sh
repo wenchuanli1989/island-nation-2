@@ -159,34 +159,31 @@ run_clang_tidy() {
 # 运行 scan-build
 run_scan_build() {
     local project_name="$1"
-    configure_project debug
-
+    local build_dir="$WORKSPACE_DIR/build-scan-build"
     local output_dir="$WORKSPACE_DIR/scan-build-reports"
-    mkdir -p "$output_dir"
     local jobs="$(get_build_jobs)"
 
-    local analyzer="$(command -v clang 2>/dev/null || true)"
-    [[ -z "$analyzer" ]] && { echo "错误: 未找到 clang，scan-build 无法运行。"; exit 1; }
+    local scan_build="$(command -v scan-build || true)" clang="$(command -v clang || true)"
+    [[ -n "$scan_build" && -n "$clang" ]] || { echo "错误: 未找到 scan-build 或 clang" >&2; exit 1; }
+    local ccc_analyzer="$(dirname "$(realpath "$scan_build")")/../libexec/ccc-analyzer"
+    [[ -x "$ccc_analyzer" ]] || { echo "错误: 未找到 $ccc_analyzer" >&2; exit 1; }
+
+    # 分析由 ccc-analyzer 在编译时触发：预设固定 CMAKE_C_COMPILER=clang，必须改为 ccc-analyzer，否则不会分析任何文件。
+    # 已有的目标文件不会重新编译，也就不会被分析，所以用独立目录并每次从头构建。
+    rm -rf "$build_dir"
+    CCC_CC="$clang" CLANG="$clang" configure_project debug -B "$build_dir" -DCMAKE_C_COMPILER="$ccc_analyzer"
 
     local build_cmd=(
-        cmake --build "$WORKSPACE_DIR/build-debug"
+        cmake --build "$build_dir"
         -j "$jobs"
     )
     if [[ -n "$project_name" ]]; then
         build_cmd+=(--target "domino-${project_name}")
     fi
 
-    scan-build -o "$output_dir" --use-analyzer "$analyzer" "${build_cmd[@]}" || true
-
-    # 查找并显示报告（无 bug 时 scan-build 会删除报告目录，故可能找不到）
-    local latest_report="$(find "$output_dir" -mindepth 1 -maxdepth 1 -type d -name "20*" 2>/dev/null | sort | tail -1)"
-    if [[ -n "$latest_report" ]]; then
-        echo ""
-        echo "分析完成！报告位置: $latest_report/index.html"
-    else
-        echo ""
-        echo "分析完成，未发现 bug（scan-build 未保留报告目录）。"
-    fi
+    # 编译失败时 scan-build 返回构建的退出码；发现 bug 不影响退出码，结果和报告位置由 scan-build 输出。
+    mkdir -p "$output_dir"
+    "$scan_build" -o "$output_dir" --use-analyzer "$clang" --use-cc "$clang" "${build_cmd[@]}"
 }
 
 
